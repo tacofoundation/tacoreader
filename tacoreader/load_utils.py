@@ -81,26 +81,29 @@ def snippet2files(
         files = file
     else:
         # Does the file finish with: *.tortilla?
-        if re.match(r".*\*\.tortilla$", str(file)):
+        if re.match(r".*\*\.(tortilla|taco)$", str(file)):
 
             # Split in name and path
             name, path = split_name_and_path(file)
 
             # Get the filename without the snippet (i.e., *.tortilla)
-            filename: str = re.sub(r"\*\.tortilla$", "", name)
+            filename: str = re.sub(r"\*\.(tortilla|taco)$", "", name)
 
+            # get suffix
+            path_suffix: str = pathlib.Path(file).suffix
+            
             # check if file is a url
             if is_valid_url(path):
                 # It is expected that the file is a multi-part file in the same url path
-                dumbfile: str = f"{path}/{filename}.0000.part.tortilla"
-                headers = {"Range": "bytes=42-50"}
+                dumbfile: str = f"{path}/{filename}.0000.part{path_suffix}"
+                headers = {"Range": "bytes=18-25"}
                 response: requests.Response = requests.get(dumbfile, headers=headers)
                 npartitions: int = int.from_bytes(response.content, "little")
 
                 # Check if all parts are there
                 files = []
                 for d in range(npartitions):
-                    partial_file = f"{path}/{filename}.{str(d).zfill(4)}.part.tortilla"
+                    partial_file = f"{path}/{filename}.{str(d).zfill(4)}.part{path_suffix}"
                     files.append(partial_file)
             else:
                 # Get all files in the directory
@@ -109,19 +112,19 @@ def snippet2files(
 
                 # It is expected that the file is a multi-part file in the same directory
                 dumbfile: pathlib.Path = file.resolve().parent / (
-                    filename.stem + ".0000.part.tortilla"
+                    filename.stem + f".0000.part{path_suffix}"
                 )
 
                 # check how many parts are there
                 with open(dumbfile, "rb") as f:
-                    f.seek(42)
+                    f.seek(18)
                     npartitions: int = int.from_bytes(f.read(8), "little")
 
                 # Check if all parts are there
                 files = []
                 for d in range(npartitions):
                     partial_file = filename.with_suffix(
-                        f".{str(d).zfill(4)}.part.tortilla"
+                        f".{str(d).zfill(4)}.part.{path_suffix}"
                     )
                     if partial_file.exists():
                         files.append(partial_file)  # Add the file to the list

@@ -18,37 +18,26 @@ def local_file2dataframe(file: Union[str, pathlib.Path]):
         pd.DataFrame: The dataframe of the tortilla file.
     """
     with open(file, "rb") as f:
-        static_bytes = f.read(50)
+        static_bytes = f.read(18)
 
-        # SPLIT the static bytes
-        MB: bytes = static_bytes[:2]
-        FO: bytes = static_bytes[2:10]
-        FL: bytes = static_bytes[10:18]
-        DF: str = static_bytes[18:42].strip().decode()
-        # DP: str = static_bytes[42:50]
+        # Extract metadata
+        MB, FO, FL = static_bytes[:2], static_bytes[2:10], static_bytes[10:18]
+        if MB not in {b"#y", b"WX"}:
+            raise ValueError("Invalid file type: must be either a Tortilla 🫓 or a TACO 🌮")
 
-        if MB != b"#y":
-            raise ValueError("You are not a tortilla 🫓 or a TACO 🌮")
+        footer_offset = int.from_bytes(FO, "little")
+        footer_length = int.from_bytes(FL, "little")
 
-        # Read the NEXT 8 bytes of the file
-        footer_offset: int = int.from_bytes(FO, "little")
-
-        # Seek to the FOOTER offset
+        # Read the footer
         f.seek(footer_offset)
-
-        # Select the FOOTER length
-        # Read the FOOTER
-        footer_length: int = int.from_bytes(FL, "little")
         dataframe = pq.read_table(pa.BufferReader(f.read(footer_length))).to_pandas()
 
-        # Convert dataset to DataFrame
-        dataframe["internal:file_format"] = DF
-        dataframe["internal:mode"] = "local"
-        dataframe["internal:subfile"] = dataframe.apply(
-            lambda row: f"/vsisubfile/{row['tortilla:offset']}_{row['tortilla:length']},{file}",
-            axis=1,
-        )
-
+    # Add auxiliary columns
+    dataframe["internal:mode"] = "local"
+    dataframe["internal:subfile"] = dataframe.apply(
+        lambda row: f"/vsisubfile/{row['tortilla:offset']}_{row['tortilla:length']},{file}",
+        axis=1,
+    )
     return dataframe
 
 
@@ -62,46 +51,7 @@ def local_files2dataframe(files: Union[List[str], List[pathlib.Path]]):
     Returns:
         pd.DataFrame: The dataframe of the tortilla file.
     """
-
-    # Merge the dataframe of the files
-    container = []
-    for file in files:
-        with open(file, "rb") as f:
-            static_bytes = f.read(50)
-
-            # SPLIT the static bytes
-            MB: bytes = static_bytes[:2]
-            FO: bytes = static_bytes[2:10]
-            FL: bytes = static_bytes[10:18]
-            DF: str = static_bytes[18:42].strip().decode()
-            # DP: str = static_bytes[42:50]
-
-            if MB != b"#y":
-                raise ValueError("You are not a tortilla 🫓 or a TACO 🌮")
-
-            # Read the NEXT 8 bytes of the file
-            footer_offset: int = int.from_bytes(FO, "little")
-
-            # Seek to the FOOTER offset
-            f.seek(footer_offset)
-
-            # Select the FOOTER length
-            # Read the FOOTER
-            footer_length: int = int.from_bytes(FL, "little")
-            dataframe = pq.read_table(
-                pa.BufferReader(f.read(footer_length))
-            ).to_pandas()
-
-            # Convert dataset to DataFrame
-            dataframe["internal:file_format"] = DF
-            dataframe["internal:mode"] = "local"
-            dataframe["internal:subfile"] = dataframe.apply(
-                lambda row: f"/vsisubfile/{row['tortilla:offset']}_{row['tortilla:length']},{file}",
-                axis=1,
-            )
-            container.append(dataframe)
-
-    return pd.concat(container, ignore_index=True)
+    return pd.concat([local_file2dataframe(file) for file in files], ignore_index=True)
 
 
 def local_lazyfile2dataframe(
@@ -123,17 +73,18 @@ def local_lazyfile2dataframe(
         # Seek to the OFFSET
         f.seek(offset)
 
-        static_bytes = f.read(50)
+        static_bytes = f.read(18)
 
         # SPLIT the static bytes
         MB: bytes = static_bytes[:2]
         FO: bytes = static_bytes[2:10]
         FL: bytes = static_bytes[10:18]
-        DF: str = static_bytes[18:42].strip().decode()
         # DP: str = static_bytes[42:50]
 
-        if MB != b"#y":
-            raise ValueError("You are not a tortilla 🫓 or a TACO 🌮")
+        if MB not in {b"#y", b"WX"}:
+            raise ValueError(
+                "Invalid file type: must be either a Tortilla 🫓 or a TACO 🌮"
+            )
 
         # Read the NEXT 8 bytes of the file
         footer_offset: int = int.from_bytes(FO, "little") + offset
@@ -150,7 +101,6 @@ def local_lazyfile2dataframe(
         dataframe["tortilla:offset"] = dataframe["tortilla:offset"] + offset
 
         # Convert dataset to DataFrame
-        dataframe["internal:file_format"] = DF
         dataframe["internal:mode"] = "local"
         dataframe["internal:subfile"] = dataframe.apply(
             lambda row: f"/vsisubfile/{row['tortilla:offset']}_{row['tortilla:length']},{file}",
@@ -171,7 +121,7 @@ def local_file2metadata(file: Union[str, pathlib.Path]) -> dict:
         dict: The metadata of the taco file.
     """
     with open(file, "rb") as f:
-        f.seek(50)
+        f.seek(26)
 
         # Read the Collection offset (CO)
         CO: int = int.from_bytes(f.read(8), "little")

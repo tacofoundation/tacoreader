@@ -6,7 +6,7 @@ import geopandas as gpd
 import pandas as pd
 import requests
 
-from tacoreader import load_local, load_remote, load_utils
+from tacoreader import load_local, load_remote, load_utils, datasets
 
 
 def load(file: Union[str, pathlib.Path, List[pathlib.Path], List[str]]) -> pd.DataFrame:
@@ -24,6 +24,10 @@ def load(file: Union[str, pathlib.Path, List[pathlib.Path], List[str]]) -> pd.Da
     Returns:
         pd.DataFrame: The dataframe of the tortilla file.
     """
+    
+    # Check if the dataset is inside the taco foundation
+    if file in datasets.datasets.keys():
+        file = datasets.datasets[file]
 
     # Transform our snippet into a list of files
     # If it is not a snippet, it will return the same file
@@ -90,7 +94,6 @@ def load_metadata(
     Returns:
         dict: The metadata of the taco file.
     """
-
     # Transform our snippet into a list of files
     # If it is not a snippet, it will return the same file
     file = load_utils.snippet2files(file=file)
@@ -130,11 +133,10 @@ class TortillaDataFrame(gpd.GeoDataFrame):
 
     def read(self, idx):
         row = self.iloc[idx]
-        if row["internal:file_format"] == "TORTILLA":
+        if row["tortilla:file_format"] == "TORTILLA":
             offset, length, path = self.get_internal_path(row)
             return lazy_load(row["tortilla:offset"], path)
-        elif row["internal:file_format"] == "BYTES":
-
+        elif row["tortilla:file_format"] == "BYTES":
             # Obtain the offset, length and internal path
             offset, length, path = self.get_internal_path(row)
 

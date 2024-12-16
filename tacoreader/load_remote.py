@@ -9,41 +9,24 @@ import requests
 
 
 def remote_file2dataframe(file: str) -> pd.DataFrame:
-    """Read the dataframe of a tortilla file given a URL. The
-        server must support HTTP Range requests.
+    """Fetch and parse the metadata of a tortilla file."""
+    headers = {"Range": "bytes=0-17"}
+    response = requests.get(file, headers=headers)
+    static_bytes = response.content
 
-    Args:
-        files (str): A URL pointing to the tortilla file.
-    Returns:
-        pd.DataFrame: The dataframe of the tortilla file.
-    """
-    # Fetch the first 8 bytes of the file
-    headers = {"Range": "bytes=0-50"}
-    response: requests.Response = requests.get(file, headers=headers)
-    static_bytes: bytes = response.content
-
-    # SPLIT the static bytes
-    MB: bytes = static_bytes[:2]
-    FO: bytes = static_bytes[2:10]
-    FL: bytes = static_bytes[10:18]
-    DF: str = static_bytes[18:42].strip().decode()
-
-    # Check if the file is a tortilla
-    if MB != b"#y":
-        raise ValueError("You are not a tortilla 🫓 or a TACO 🌮")
-
-    # Interpret the bytes as a little-endian integer
-    footer_offset: int = int.from_bytes(FO, "little")
-    footer_length: int = int.from_bytes(FL, "little")
+    # Extract metadata
+    MB, FO, FL = static_bytes[:2], static_bytes[2:10], static_bytes[10:18]
+    if MB not in {b"#y", b"WX"}:
+        raise ValueError("Invalid file type: must be either a Tortilla 🫓 or a TACO 🌮")
+    footer_offset = int.from_bytes(FO, "little")
+    footer_length = int.from_bytes(FL, "little")
 
     # Fetch the footer
     headers = {"Range": f"bytes={footer_offset}-{footer_offset + footer_length - 1}"}
-    with requests.get(file, headers=headers) as response:
-        # Interpret the response as a parquet table
-        dataframe = pq.read_table(pa.BufferReader(response.content)).to_pandas()
+    response = requests.get(file, headers=headers)
+    dataframe = pq.read_table(pa.BufferReader(response.content)).to_pandas()
 
-    # Add the file format and mode
-    dataframe["internal:file_format"] = DF
+    # Add auxiliary columns
     dataframe["internal:mode"] = "online"
     dataframe["internal:subfile"] = dataframe.apply(
         lambda row: f"/vsisubfile/{row['tortilla:offset']}_{row['tortilla:length']},/vsicurl/{file}",
@@ -53,56 +36,8 @@ def remote_file2dataframe(file: str) -> pd.DataFrame:
 
 
 def remote_files2dataframe(files: List[str]) -> pd.DataFrame:
-    """Read the dataframe of tortillas files given a set of URLs. The
-        server must support HTTP Range requests.
-
-    Args:
-        files (List[str]): A list of URLs pointing to the
-            tortilla files.
-
-    Returns:
-        pd.DataFrame: The dataframe of the tortilla file.
-    """
-
-    container = []
-    for file in files:
-
-        # Fetch the first 8 bytes of the file
-        headers = {"Range": "bytes=0-50"}
-        response: requests.Response = requests.get(file, headers=headers)
-        static_bytes: bytes = response.content
-
-        # SPLIT the static bytes
-        MB: bytes = static_bytes[:2]
-        FO: bytes = static_bytes[2:10]
-        FL: bytes = static_bytes[10:18]
-        DF: str = static_bytes[18:42].strip().decode()
-
-        # Check if the file is a tortilla
-        if MB != b"#y":
-            raise ValueError("You are not a tortilla 🫓 or a TACO 🌮")
-
-        # Interpret the bytes as a little-endian integer
-        footer_offset: int = int.from_bytes(FO, "little")
-        footer_length: int = int.from_bytes(FL, "little")
-
-        # Fetch the footer
-        headers = {"Range": f"bytes={footer_offset}-{footer_offset + footer_length}"}
-        with requests.get(file, headers=headers) as response:
-
-            # Interpret the response as a parquet table
-            dataframe = pq.read_table(pa.BufferReader(response.content)).to_pandas()
-
-        # Add the file format and mode
-        dataframe["internal:file_format"] = DF
-        dataframe["internal:mode"] = "online"
-        dataframe["internal:subfile"] = dataframe.apply(
-            lambda row: f"/vsisubfile/{row['tortilla:offset']}_{row['tortilla:length']},/vsicurl/{file}",
-            axis=1,
-        )
-        container.append(dataframe)
-
-    return pd.concat(container, ignore_index=True)
+    """Read metadata from multiple tortilla files."""
+    return pd.concat([remote_file2dataframe(file) for file in files], ignore_index=True)
 
 
 def remote_lazyfile2dataframe(
@@ -121,8 +56,8 @@ def remote_lazyfile2dataframe(
     """
 
     # Fetch the first 8 bytes of the file
-    initb, endb = offset, offset + 50
-    headers = {"Range": f"bytes={initb}-{endb}"}
+    initb, endb = offset, offset + 18
+    headers = {"Range": f"bytes={initb}-{endb - 1}"}
     response: requests.Response = requests.get(file, headers=headers)
     static_bytes: bytes = response.content
 
@@ -130,11 +65,12 @@ def remote_lazyfile2dataframe(
     MB: bytes = static_bytes[:2]
     FO: bytes = static_bytes[2:10]
     FL: bytes = static_bytes[10:18]
-    DF: str = static_bytes[18:42].strip().decode()
 
     # Check if the file is a tortilla
-    if MB != b"#y":
-        raise ValueError("You are not a tortilla 🫓 or a TACO 🌮")
+    if MB not in {b"#y", b"WX"}:
+        raise ValueError(
+            "Invalid file type: must be either a Tortilla 🫓 or a TACO 🌮"
+        )
 
     # Interpret the bytes as a little-endian integer
     footer_offset: int = int.from_bytes(FO, "little") + offset
@@ -150,7 +86,6 @@ def remote_lazyfile2dataframe(
     dataframe["tortilla:offset"] = dataframe["tortilla:offset"] + offset
 
     # Add the file format and mode
-    dataframe["internal:file_format"] = DF
     dataframe["internal:mode"] = "online"
     dataframe["internal:subfile"] = dataframe.apply(
         lambda row: f"/vsisubfile/{row['tortilla:offset']}_{row['tortilla:length']},/vsicurl/{file}",
@@ -171,21 +106,23 @@ def remote_file2metadata(file: str) -> dict:
         dict: The metadata of the taco file.
     """
     # Fetch the first 8 bytes of the file
-    headers = {"Range": "bytes=0-66"}
+    headers = {"Range": "bytes=0-41"}
     response: requests.Response = requests.get(file, headers=headers)
     static_bytes: bytes = response.content
 
     # SPLIT the static bytes
     MB: bytes = static_bytes[:2]
-    CO: int = int.from_bytes(static_bytes[50:58], "little")
-    CL: int = int.from_bytes(static_bytes[58:66], "little")
+    CO: int = int.from_bytes(static_bytes[26:34], "little")
+    CL: int = int.from_bytes(static_bytes[34:42], "little")
 
     # Check if the file is a tortilla
-    if MB != b"#y":
-        raise ValueError("You are not a tortilla 🫓 or a TACO 🌮")
+    if MB not in {b"#y", b"WX"}:
+        raise ValueError(
+            "Invalid file type: must be either a Tortilla 🫓 or a TACO 🌮"
+        )
 
     # Read the Collection (JSON UTF-8 encoded)
-    headers = {"Range": f"bytes={CO}-{CO + CL}"}
+    headers = {"Range": f"bytes={CO}-{CO + CL - 1}"}
     collection: dict = json.loads(requests.get(file, headers=headers).content.decode())
 
     return collection

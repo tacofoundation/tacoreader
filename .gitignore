@@ -167,3 +167,5 @@ cython_debug/
 #.idea/
 
 demo.py
+
+split01.csv
