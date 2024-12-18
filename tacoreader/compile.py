@@ -61,7 +61,7 @@ def compile(
     if mode == "local":
         compile_local(dataframe, output, chunk_size_iter, nworkers, quiet)
     elif mode == "online":
-        compile_online(dataframe, output, chunk_size_iter, quiet)
+        compile_online(dataframe, output, chunk_size_iter, nworkers, quiet)
     else:
         raise ValueError(f"Unknown mode: {mode}")
 
@@ -161,7 +161,7 @@ def compile_local(
 
     # Cook the tortilla 🫓
     with open(output, "r+b") as f:
-        with mmap.mmap(f.fileno(), 0) as mm:
+        with mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_WRITE) as mm:
             # Write the magic number
             mm[:2] = MB
 
@@ -214,9 +214,10 @@ def compile_local(
 
 
 def compile_online(
-    metadata: pd.DataFrame,
+    dataframe: pd.DataFrame,
     output: str,
     chunk_size_iter: int,
+    nworkers: int,
     quiet: bool,
 ) -> pathlib.Path:
     """Prepare a subset of an online Tortilla or TACO file and write it to
@@ -236,16 +237,16 @@ def compile_online(
 
     # Get the URL of the file
     url_pattern = r"(ftp|https?)://[^\s,]+"
-    url = re.search(url_pattern, metadata["internal:subfile"].iloc[0]).group(0)
+    url = re.search(url_pattern, dataframe["internal:subfile"].iloc[0]).group(0)
 
     # Calculate the new offsets
-    metadata["tortilla:new_offset"] = (
-        metadata["tortilla:length"].shift(1, fill_value=0).cumsum() + 200
+    dataframe["tortilla:new_offset"] = (
+        dataframe["tortilla:length"].shift(1, fill_value=0).cumsum() + 200
     )
 
     # Create the new FOOTER
     # Remove the columns generated on-the-fly by the load function
-    new_footer = metadata.copy()
+    new_footer = dataframe.copy()
     new_footer.drop(
         columns=[
             "geometry",
@@ -272,78 +273,92 @@ def compile_online(
         FOOTER: bytes = sink.getvalue().to_pybytes()
 
     # Calculate the total size of the data
-    total_bytes: int = (
-        metadata.iloc[-1]["tortilla:new_offset"] + metadata.iloc[-1]["tortilla:length"]
+    bytes_counter: int = (
+        dataframe.iloc[-1]["tortilla:new_offset"] + dataframe.iloc[-1]["tortilla:length"]
     )
 
     # Prepare static bytes
     MB: bytes = b"#y"
     FL: bytes = len(FOOTER).to_bytes(8, "little")
-    FO: bytes = int(total_bytes).to_bytes(8, "little")
+    FO: bytes = int(bytes_counter).to_bytes(8, "little")
     DP: bytes = int(1).to_bytes(8, "little")
 
-    # Get checksum
-    checksum: int = total_bytes + len(FOOTER)
 
-    # Merge multiple ranges into a single range header
-    headers = compile_utils.build_simplified_range_header(metadata)
-
-    # Check if the file exists and determine the download start point
-    start = 200
-    output_path = pathlib.Path(output)
-    if output_path.exists():
-        start = output_path.stat().st_size
-
-    # Check if the download is complete
-    if start == checksum:
-        return None
-
-    # Open the file once and write metadata and footer later
-    message: str = compile_utils.tortilla_message()
-    with open(output, "ab") as f:
-        # Start writing the header (first write)
-        if start == 200:
-            f.write(MB)
-            f.write(FO)
-            f.write(FL)
-            f.write(DP)
-            f.write(b"\0" * 174)  # Write the free space
-
-        # Download and write the data in chunks
+    # Define the function to write into the main file
+    def write_file_url(url, header, new_offset):
+        """read the url in chunks"""
         try:
-            with requests.get(
-                url, headers=headers, stream=True, timeout=10
-            ) as response:
+            with requests.get(url, headers=header, stream=True, timeout=10) as response:
                 response.raise_for_status()
+                # Write the downloaded data in chunks and update the progress bar
+                for chunk in response.iter_content(chunk_size=chunk_size_iter):
+                    if chunk:  # Filter out keep-alive new chunks
+                        mm[new_offset : (new_offset + len(chunk))] = chunk
+                        new_offset += len(chunk)
+        except requests.exceptions.RequestException as e:
+            print("ddd")
+            raise requests.exceptions.RequestException(
+                f"Error downloading {url} with header {header}: {e}"
+            )
+                                                                             
+    # Create the tortilla file (empty)
+    with open(output, "wb") as f:
+        f.truncate(bytes_counter + len(FOOTER))
 
-                # Resume download if needed
-                if start != 200 and not quiet:
-                    print(
-                        f"Resuming download from byte {start} ({start / (1024 ** 3):.2f} GB)"
+    # Cook the tortilla 🫓
+    with open(output, "r+b") as f:
+        with mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_WRITE) as mm:
+            # Write the magic number
+            mm[:2] = MB
+
+            # Write the FOOTER offset
+            mm[2:10] = FO
+
+            # Write the FOOTER length
+            mm[10:18] = FL
+
+            # Write the DATA PARTITIONS
+            mm[18:26] = DP
+
+            # Write the free space
+            mm[26:200] = b"\0" * 174
+
+            # Write the DATA
+            message = compile_utils.tortilla_message()
+            with concurrent.futures.ThreadPoolExecutor(
+                max_workers=nworkers
+            ) as executor:
+                futures = []
+                for _, item in dataframe.iterrows():
+                    # Get the offset, length, and URL
+                    new_offset = item["tortilla:new_offset"]
+                    url = dataframe["internal:subfile"].iloc[0].split(",")[-1].replace("/vsicurl/", "")
+                    
+                    # Create the header
+                    next_start = item["tortilla:offset"]
+                    next_end = next_start + item["tortilla:length"]
+                    header = {"Range": f"bytes={next_start}-{next_end - 1}"}
+
+                    futures.append(
+                        executor.submit(
+                            write_file_url, url, header, new_offset
+                        )
                     )
 
-                # Calculate total size for progress bar
-                total_download_size = int(total_bytes)
+                # Wait for all futures to complete
+                if not quiet:
+                    list(
+                        tqdm.tqdm(
+                            concurrent.futures.as_completed(futures),
+                            total=len(futures),
+                            desc=message,
+                            unit="file",
+                        )
+                    )
+                else:
+                    concurrent.futures.wait(futures)
 
-                # Use tqdm for progress bar if not in quiet mode
-                with tqdm.tqdm(
-                    total=total_download_size,
-                    unit="B",
-                    unit_scale=True,
-                    disable=quiet,
-                    desc=message,
-                ) as pbar:
-                    # Write the downloaded data in chunks and update the progress bar
-                    for chunk in response.iter_content(chunk_size=chunk_size_iter):
-                        if chunk:  # Filter out keep-alive new chunks
-                            f.write(chunk)
-                            pbar.update(len(chunk))  # Update progress bar
-
-        except requests.exceptions.RequestException as e:
-            print(f"Download failed: {e}")
-            return None
-
-        # Write the FOOTER once download completes
-        f.write(FOOTER)
-
-    return None
+            # Write the FOOTER
+            mm[bytes_counter : (bytes_counter + len(FOOTER))] = FOOTER
+        
+    return pathlib.Path(output)

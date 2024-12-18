@@ -3,9 +3,8 @@ from tacoreader.compile import compile
 import pandas as pd
 import geopandas as gpd
 
-
 __all__ = ["load", "compile", "load_metadata"]
-__version__ = "0.4.2"
+__version__ = "0.4.3"
 
 # TODO: I can't implement a better solution for this
 # because the TortillaDataFrame constructor enter in conflict 

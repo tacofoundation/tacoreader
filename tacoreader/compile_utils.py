@@ -67,12 +67,7 @@ def build_simplified_range_header(df: pd.DataFrame) -> Dict[str, str]:
     simplified_ranges.append((current_start, current_end))
 
     # Create the range header
-    range_header = ",".join(
-        [f"bytes={start}-{end-1}" for start, end in simplified_ranges]
-    )
-    headers = {"Range": range_header}
-
-    return headers
+    return [f"bytes={start}-{end-1}" for start, end in simplified_ranges]
 
 
 def human2bytes(size_str: str) -> int:
