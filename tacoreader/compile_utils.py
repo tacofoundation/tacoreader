@@ -74,6 +74,7 @@ def build_simplified_range_header(df: pd.DataFrame) -> Dict[str, str]:
 
     return headers
 
+
 def human2bytes(size_str: str) -> int:
     """
     Converts a human-readable size string (e.g., "100MB") into bytes.

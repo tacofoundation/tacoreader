@@ -91,7 +91,7 @@ def snippet2files(
 
             # get suffix
             path_suffix: str = pathlib.Path(file).suffix
-            
+
             # check if file is a url
             if is_valid_url(path):
                 # It is expected that the file is a multi-part file in the same url path
@@ -103,7 +103,9 @@ def snippet2files(
                 # Check if all parts are there
                 files = []
                 for d in range(npartitions):
-                    partial_file = f"{path}/{filename}.{str(d).zfill(4)}.part{path_suffix}"
+                    partial_file = (
+                        f"{path}/{filename}.{str(d).zfill(4)}.part{path_suffix}"
+                    )
                     files.append(partial_file)
             else:
                 # Get all files in the directory

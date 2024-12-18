@@ -1,5 +1,7 @@
 import json
+import os
 import pathlib
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from typing import List, Union
 
 import pandas as pd
@@ -23,7 +25,9 @@ def local_file2dataframe(file: Union[str, pathlib.Path]):
         # Extract metadata
         MB, FO, FL = static_bytes[:2], static_bytes[2:10], static_bytes[10:18]
         if MB not in {b"#y", b"WX"}:
-            raise ValueError("Invalid file type: must be either a Tortilla 🫓 or a TACO 🌮")
+            raise ValueError(
+                "Invalid file type: must be either a Tortilla 🫓 or a TACO 🌮"
+            )
 
         footer_offset = int.from_bytes(FO, "little")
         footer_length = int.from_bytes(FL, "little")
@@ -41,17 +45,25 @@ def local_file2dataframe(file: Union[str, pathlib.Path]):
     return dataframe
 
 
-def local_files2dataframe(files: Union[List[str], List[pathlib.Path]]):
+def local_files2dataframe(files: Union[List[str], List[pathlib.Path]]) -> pd.DataFrame:
     """Read the dataframe of tortilla files given local paths.
 
     Args:
-        files (Union[List[str], List[pathlib.Path]]): A list of local
+        files (Union[List[str], List[Path]]): A list of local
             paths pointing to the tortilla files.
 
     Returns:
         pd.DataFrame: The dataframe of the tortilla file.
     """
-    return pd.concat([local_file2dataframe(file) for file in files], ignore_index=True)
+    max_workers = len(files) if len(files) < os.cpu_count() else os.cpu_count()
+    with ProcessPoolExecutor(max_workers=max_workers) as executor:
+        futures = [executor.submit(local_file2dataframe, url) for url in files]
+        results = []
+        for future in as_completed(futures):
+            result = future.result()
+            if result is not None:
+                results.append(result)
+    return pd.concat(results, ignore_index=True)
 
 
 def local_lazyfile2dataframe(

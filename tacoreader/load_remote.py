@@ -1,5 +1,7 @@
 import json
+import os
 import pathlib
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from typing import List, Union
 
 import pandas as pd
@@ -17,6 +19,8 @@ def remote_file2dataframe(file: str) -> pd.DataFrame:
     # Extract metadata
     MB, FO, FL = static_bytes[:2], static_bytes[2:10], static_bytes[10:18]
     if MB not in {b"#y", b"WX"}:
+        if requests.head(file).status_code == 404:
+            raise FileNotFoundError(f"File not found: {file}")
         raise ValueError("Invalid file type: must be either a Tortilla 🫓 or a TACO 🌮")
     footer_offset = int.from_bytes(FO, "little")
     footer_length = int.from_bytes(FL, "little")
@@ -36,8 +40,16 @@ def remote_file2dataframe(file: str) -> pd.DataFrame:
 
 
 def remote_files2dataframe(files: List[str]) -> pd.DataFrame:
-    """Read metadata from multiple tortilla files."""
-    return pd.concat([remote_file2dataframe(file) for file in files], ignore_index=True)
+    """Read metadata from multiple tortilla files in parallel."""
+    max_workers = len(files) if len(files) < os.cpu_count() else os.cpu_count()
+    with ProcessPoolExecutor(max_workers=max_workers) as executor:
+        futures = [executor.submit(remote_file2dataframe, url) for url in files]
+        results = []
+        for future in as_completed(futures):
+            result = future.result()
+            if result is not None:
+                results.append(result)
+    return pd.concat(results, ignore_index=True)
 
 
 def remote_lazyfile2dataframe(
@@ -68,9 +80,9 @@ def remote_lazyfile2dataframe(
 
     # Check if the file is a tortilla
     if MB not in {b"#y", b"WX"}:
-        raise ValueError(
-            "Invalid file type: must be either a Tortilla 🫓 or a TACO 🌮"
-        )
+        if requests.head(file).status_code == 404:
+            raise FileNotFoundError(f"File not found: {file}")
+        raise ValueError("Invalid file type: must be either a Tortilla 🫓 or a TACO 🌮")
 
     # Interpret the bytes as a little-endian integer
     footer_offset: int = int.from_bytes(FO, "little") + offset
@@ -117,9 +129,9 @@ def remote_file2metadata(file: str) -> dict:
 
     # Check if the file is a tortilla
     if MB not in {b"#y", b"WX"}:
-        raise ValueError(
-            "Invalid file type: must be either a Tortilla 🫓 or a TACO 🌮"
-        )
+        if requests.head(file).status_code == 404:
+            raise FileNotFoundError(f"File not found: {file}")
+        raise ValueError("Invalid file type: must be either a Tortilla 🫓 or a TACO 🌮")
 
     # Read the Collection (JSON UTF-8 encoded)
     headers = {"Range": f"bytes={CO}-{CO + CL - 1}"}

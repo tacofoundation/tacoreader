@@ -21,7 +21,7 @@ def compile(
     overwrite: bool = True,
     quiet: bool = False,
 ) -> pathlib.Path:
-    """Select a subset of a Tortilla or TACO file and write a new "small" 
+    """Select a subset of a Tortilla or TACO file and write a new "small"
     Tortilla file. If you want to convert this new file to a TACO file,
     you can use the `tacotoolbox.tortilla2taco` function.
 
@@ -124,7 +124,8 @@ def compile_local(
 
     # Calculate the bytes of the data blob (DATA)
     bytes_counter: int = (
-        dataframe.iloc[-1]["tortilla:new_offset"] + dataframe.iloc[-1]["tortilla:length"]
+        dataframe.iloc[-1]["tortilla:new_offset"]
+        + dataframe.iloc[-1]["tortilla:length"]
     )
 
     # Prepare the static bytes
@@ -218,14 +219,14 @@ def compile_online(
     chunk_size_iter: int,
     quiet: bool,
 ) -> pathlib.Path:
-    """Prepare a subset of an online Tortilla or TACO file and write it to 
+    """Prepare a subset of an online Tortilla or TACO file and write it to
     a new local file. If you want to convert this new file to a TACO file,
     you can use the `tacotoolbox.tortilla2taco` function.
 
     Args:
         metadata (pd.DataFrame): The metadata of the Tortilla file.
         output (str): The path to the Tortilla file.
-        chunk_size_iter (int, optional): The size of the chunks to use 
+        chunk_size_iter (int, optional): The size of the chunks to use
             when writing the tortilla.
         quiet (bool): Whether to suppress the progress bar.
 
@@ -306,7 +307,7 @@ def compile_online(
             f.write(FO)
             f.write(FL)
             f.write(DP)
-            f.write(b"\0" * 174) # Write the free space
+            f.write(b"\0" * 174)  # Write the free space
 
         # Download and write the data in chunks
         try:

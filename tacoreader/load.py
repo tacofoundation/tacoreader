@@ -6,7 +6,7 @@ import geopandas as gpd
 import pandas as pd
 import requests
 
-from tacoreader import load_local, load_remote, load_utils, datasets
+from tacoreader import datasets, load_local, load_remote, load_utils
 
 
 def load(file: Union[str, pathlib.Path, List[pathlib.Path], List[str]]) -> pd.DataFrame:
@@ -24,7 +24,7 @@ def load(file: Union[str, pathlib.Path, List[pathlib.Path], List[str]]) -> pd.Da
     Returns:
         pd.DataFrame: The dataframe of the tortilla file.
     """
-    
+
     # Check if the dataset is inside the taco foundation
     if file in datasets.datasets.keys():
         file = datasets.datasets[file]
@@ -116,22 +116,36 @@ def load_metadata(
 
 
 class TortillaDataFrame(gpd.GeoDataFrame):
+
     @property
     def _constructor(self):
         return TortillaDataFrame
 
+    def __finalize__(self, other, method=None, **kwargs):
+        # Propagate custom metadata
+        if isinstance(other, TortillaDataFrame):
+            for name in self._metadata:
+                setattr(self, name, getattr(other, name, None))
+        return self
+
     @staticmethod
     def get_internal_path(row):
+        """
+        Extract offset, length, and path from a row's internal subfile information.
+        """
         pattern: re.Pattern = re.compile(r"/vsisubfile/(\d+)_(\d+),(.+)")
         offset, length, path = pattern.match(row["internal:subfile"]).groups()
 
-        # If it is a curl file, remove the first 9 characters
+        # Adjust path for curl files
         if path.startswith("/vsicurl/"):
             path = path[9:]
 
         return int(offset), int(length), path
 
     def read(self, idx):
+        """
+        Read data based on the row's tortilla:file_format.
+        """
         row = self.iloc[idx]
         if row["tortilla:file_format"] == "TORTILLA":
             offset, length, path = self.get_internal_path(row)
@@ -140,7 +154,7 @@ class TortillaDataFrame(gpd.GeoDataFrame):
             # Obtain the offset, length and internal path
             offset, length, path = self.get_internal_path(row)
 
-            # Get the bytes
+            # Fetch the bytes
             if load_utils.is_valid_url(path):
                 headers = {"Range": f"bytes={offset}-{offset + length - 1}"}
                 response: requests.Response = requests.get(path, headers=headers)
