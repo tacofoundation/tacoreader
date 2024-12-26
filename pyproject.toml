@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "tacoreader"
-version = "0.4.3"
+version = "0.5.0-alpha"
 description = "A reader for Cloud-Optimized Datasets"
 authors = ["Cesar Aybar <cesar.aybar@uv.es>"]
 repository = "https://github.com/tacofoundation/tacoreader"
@@ -18,6 +18,8 @@ shapely = ">=2.0.6"
 requests = ">=2.32.3"
 tqdm = ">=4.67.1"
 pandas = ">=2.2.2"
+fsspec = ">=2024.10.0"
+
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^7.2.0"

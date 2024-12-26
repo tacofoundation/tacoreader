@@ -1,25 +1,18 @@
-from tacoreader.load import load, load_metadata, TortillaDataFrame
+from tacoreader.loader_dataframe import load, TortillaDataFrame
+from tacoreader.loader_metadata import load_metadata
 from tacoreader.compile import compile
 import pandas as pd
 import geopandas as gpd
 
 __all__ = ["load", "compile", "load_metadata"]
-__version__ = "0.4.3"
+__version__ = "0.5.0-alpha"
 
 # TODO: I can't implement a better solution for this
 # because the TortillaDataFrame constructor enter in conflict 
-# with the geopandas constructor.
+# with the geopandas constructor. So, I'm using a monkey patch
+# If you have a better solution, please let me know. :)
 _original_concat = pd.concat
 _original_merge = pd.merge
-
-
-# Custom pd.concat to handle TortillaDataFrame
-# Custom pd.concat to handle TortillaDataFrame
-def tortilla_concat(objs, *args, **kwargs):
-    if all(isinstance(obj, TortillaDataFrame) for obj in objs):
-        result = pd.concat(objs, *args, **kwargs)
-        return result.__finalize__(objs[0])
-    return pd.concat(objs, *args, **kwargs)
 
 # Monkey patch the pd.concat function
 def custom_concat(objs, *args, **kwargs):

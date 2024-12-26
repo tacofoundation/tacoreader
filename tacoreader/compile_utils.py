@@ -1,7 +1,5 @@
 import random
-from typing import Dict
-
-import pandas as pd
+from pathlib import Path
 
 
 def tortilla_message() -> str:
@@ -29,45 +27,7 @@ def tortilla_message() -> str:
     return random_message
 
 
-def build_simplified_range_header(df: pd.DataFrame) -> Dict[str, str]:
-    """Build a simplified range header from a DataFrame of byte ranges
-    That means that consecutive byte ranges will be merged into a single range.
 
-    Args:
-        df (pd.DataFrame): A DataFrame with columns "offset" and "length"
-            that represent the byte ranges.
-
-    Returns:
-        Dict[str, str]: A dictionary with the "Range" header
-    """
-
-    # Create a list to hold the simplified byte ranges
-    simplified_ranges = []
-
-    # Get the initial offset and length
-    current_start = df.iloc[0]["tortilla:offset"]
-    current_end = current_start + df.iloc[0]["tortilla:length"]
-
-    # Iterate over the rows starting from the second row
-    for i in range(1, len(df)):
-        row = df.iloc[i]
-        next_start = row["tortilla:offset"]
-        next_end = next_start + row["tortilla:length"]
-
-        # If the current range and the next range are consecutive, merge them
-        if next_start == current_end:
-            current_end = next_end
-        else:
-            # Otherwise, add the current range to the list and start a new one
-            simplified_ranges.append((current_start, current_end))
-            current_start = next_start
-            current_end = next_end
-
-    # Append the final range
-    simplified_ranges.append((current_start, current_end))
-
-    # Create the range header
-    return [f"bytes={start}-{end-1}" for start, end in simplified_ranges]
 
 
 def human2bytes(size_str: str) -> int:
@@ -87,4 +47,38 @@ def human2bytes(size_str: str) -> int:
                 raise ValueError(f"Invalid size value in '{size_str}'.")
     raise ValueError(
         f"Unsupported unit in '{size_str}'. Supported units are: {', '.join(units.keys())}."
+    )
+
+
+
+
+def transform_from_gdal_vfs(vfs_path: str) -> str:
+    """
+    Transforms a GDAL-compatible VFS path to its original remote path.
+
+    Args:
+        vfs_path (str): The GDAL-compatible VFS path.
+
+    Returns:
+        str: The original path (e.g., gs://, s3://, http://).
+
+    """
+    vfs_mapping = {
+        "/vsis3/": "s3://",
+        "/vsigs/": "gs://",
+        "/vsicurl/http://": "http://",
+        "/vsicurl/https://": "https://",
+        "/vsicurl/ftp://": "ftp://"
+    }
+
+    for vfs, protocol in vfs_mapping.items():
+        if vfs_path.startswith(vfs):
+            return vfs_path.replace(vfs, protocol)
+
+    # If no match was found, assume it's a local path
+    if Path(vfs_path).exists():
+        return vfs_path
+
+    raise ValueError(
+        f"Unsupported GDAL VFS path: {vfs_path}. Ensure the VFS path corresponds to a known protocol."
     )
