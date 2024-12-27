@@ -1,11 +1,12 @@
 from tacoreader.loader_dataframe import load, TortillaDataFrame
 from tacoreader.loader_metadata import load_metadata
 from tacoreader.compile import compile
+from tacoreader.sanity import sanity_check
 import pandas as pd
 import geopandas as gpd
 
-__all__ = ["load", "compile", "load_metadata"]
-__version__ = "0.5.0-alpha"
+__all__ = ["load", "compile", "load_metadata", "sanity_check", "TortillaDataFrame"]
+__version__ = "0.5.0-beta1"
 
 # TODO: I can't implement a better solution for this
 # because the TortillaDataFrame constructor enter in conflict 

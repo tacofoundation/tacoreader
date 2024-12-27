@@ -160,13 +160,6 @@ class TortillaDataFrame(gpd.GeoDataFrame):
     def _constructor(self):
         return TortillaDataFrame
 
-    def __finalize__(self, other, method=None, **kwargs):
-        # Propagate custom metadata
-        if isinstance(other, TortillaDataFrame):
-            for name in self._metadata:
-                setattr(self, name, getattr(other, name, None))
-        return self
-
     @staticmethod
     def get_internal_path(row):
         """
@@ -177,22 +170,25 @@ class TortillaDataFrame(gpd.GeoDataFrame):
 
         # Adjust path for curl files
         # Remove VFS prefix from path (supporting multiple protocols)
-        if path.startswith("/vsicurl/"):
-            path = path[9:]
-        elif path.startswith("/vsis3/"):
-            path = path[7:]
-        elif path.startswith("/vsigs/"):
-            path = path[7:]
-        elif path.startswith("/vsifs/"):
-            path = path[7:]
-        elif path.startswith("/vsiaz/"):
-            path = path[7:]
-        elif path.startswith("/vsioss/"):
-            path = path[8:]
-        elif path.startswith("/vsiswift/"):
-            path = path[10:]
+        if Path(path).is_file():
+            path = path
         else:
-            raise ValueError(f"Unsupported GDAL VFS prefix: {path}")
+            if path.startswith("/vsicurl/"):
+                path = path[9:]
+            elif path.startswith("/vsis3/"):
+                path = path[7:]
+            elif path.startswith("/vsigs/"):
+                path = path[7:]
+            elif path.startswith("/vsifs/"):
+                path = path[7:]
+            elif path.startswith("/vsiaz/"):
+                path = path[7:]
+            elif path.startswith("/vsioss/"):
+                path = path[8:]
+            elif path.startswith("/vsiswift/"):
+                path = path[10:]
+            else:
+                raise ValueError(f"Unsupported GDAL VFS prefix: {path}")
 
         return int(offset), int(length), path
 
@@ -220,3 +216,5 @@ class TortillaDataFrame(gpd.GeoDataFrame):
         # Automatically apply sort_columns_add_geometry
         sorted_metadata = sort_columns_add_geometry(self)
         self.__dict__.update(sorted_metadata.__dict__)
+
+
