@@ -1,9 +1,13 @@
+import json
 from pathlib import Path
 from typing import List, Union
-import fsspec
-import json
 
-def load_metadata(file: Union[str, Path, List[Path], List[str]], **storage_options) -> dict:
+import fsspec
+
+
+def load_metadata(
+    file: Union[str, Path, List[Path], List[str]], **storage_options
+) -> dict:
     """Load the metadata of a tortilla or taco file.
 
     Args:
@@ -39,9 +43,9 @@ def file2metadata(path: Union[str, Path], **storage_options) -> dict:
     fs, fs_path = fsspec.core.url_to_fs(path, **storage_options)
 
     with fs.open(fs_path, "rb") as f:
-        # Get all the bytes from 0 to 42 
+        # Get all the bytes from 0 to 42
         header: bytes = f.read(42)
-        
+
         # Read the magic number
         magic, COb, CLb = header[:2], header[26:34], header[34:42]
         CO: int = int.from_bytes(COb, "little")
@@ -59,8 +63,9 @@ def file2metadata(path: Union[str, Path], **storage_options) -> dict:
 
     return collection
 
+
 def files2metadata(path: Union[str, Path], **storage_options) -> dict:
-    """Read the metadata of a taco file given a list of paths from the 
+    """Read the metadata of a taco file given a list of paths from the
     same dataset.
 
     Args:

@@ -3,11 +3,11 @@ import mmap
 import pathlib
 from typing import Union
 
+import fsspec
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 import tqdm
-import fsspec
 
 from tacoreader import compile_utils
 
@@ -58,8 +58,10 @@ def compile(
     dataframe.reset_index(drop=True, inplace=True)
 
     # Compile your tortilla
-    parallel_compile(dataframe, output, chunk_size_iter, nworkers, quiet, **storage_options)
-    
+    parallel_compile(
+        dataframe, output, chunk_size_iter, nworkers, quiet, **storage_options
+    )
+
     return output
 
 
@@ -135,7 +137,7 @@ def parallel_compile(
 
     # Define the function to write into the main file
     def write_file(fs, fs_file, old_offset, length, new_offset):
-        """read the file in chunks"""        
+        """read the file in chunks"""
         with fs.open(fs_file, "rb") as g:
             g.seek(old_offset)
             while True:
@@ -173,12 +175,12 @@ def parallel_compile(
             mm[26:200] = b"\0" * 174
 
             # Convert the VFS path to the original file path
-            message = compile_utils.tortilla_message()            
+            message = compile_utils.tortilla_message()
             file = compile_utils.transform_from_gdal_vfs(
-                vfs_path = dataframe["internal:subfile"].iloc[0].split(",")[-1]
+                vfs_path=dataframe["internal:subfile"].iloc[0].split(",")[-1]
             )
             fs, fs_file = fsspec.core.url_to_fs(file, **storage_options)
-            
+
             # Write the DATA
             with concurrent.futures.ThreadPoolExecutor(
                 max_workers=nworkers

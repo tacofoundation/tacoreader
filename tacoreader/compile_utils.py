@@ -27,9 +27,6 @@ def tortilla_message() -> str:
     return random_message
 
 
-
-
-
 def human2bytes(size_str: str) -> int:
     """
     Converts a human-readable size string (e.g., "100MB") into bytes.
@@ -50,8 +47,6 @@ def human2bytes(size_str: str) -> int:
     )
 
 
-
-
 def transform_from_gdal_vfs(vfs_path: str) -> str:
     """
     Transforms a GDAL-compatible VFS path to its original remote path.
@@ -68,7 +63,7 @@ def transform_from_gdal_vfs(vfs_path: str) -> str:
         "/vsigs/": "gs://",
         "/vsicurl/http://": "http://",
         "/vsicurl/https://": "https://",
-        "/vsicurl/ftp://": "ftp://"
+        "/vsicurl/ftp://": "ftp://",
     }
 
     for vfs, protocol in vfs_mapping.items():

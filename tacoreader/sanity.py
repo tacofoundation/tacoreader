@@ -1,19 +1,21 @@
 import logging
-from concurrent.futures import as_completed, ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from typing import Callable, List, Union
-from tacoreader.loader_dataframe import TortillaDataFrame
 
 import pandas as pd
+
+from tacoreader.loader_dataframe import TortillaDataFrame
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
 )
 
+
 def sanity_check(
     sample_metadata: pd.DataFrame,
     read_function: Callable[[Union[str, bytes]], None],
     batch_size: int = 400,
-    max_workers: int = 4,    
+    max_workers: int = 4,
     **kwargs,
 ) -> List[str]:
     """
@@ -33,22 +35,21 @@ def sanity_check(
     if super_name == "":
         logging.info(f"The sanity check is starting for {len(sample_metadata)} items.")
 
-
     # Split every 200 entries
     sample_metadata_batches = [
         sample_metadata.iloc[i : i + batch_size]
         for i in range(0, len(sample_metadata), batch_size)
     ]
-    
+
     failed_ids = []
     for idx in range(len(sample_metadata_batches)):
         failed_ids += sanity_check_batch(
             sample_metadata=TortillaDataFrame(sample_metadata_batches[idx]),
             read_function=read_function,
             max_workers=max_workers,
-            super_name=super_name
+            super_name=super_name,
         )
-    
+
     if failed_ids:
         logging.warning(f"Sanity check failed for {len(failed_ids)} items.")
     else:
@@ -56,6 +57,7 @@ def sanity_check(
             logging.info("All items passed the sanity check.")
 
     return failed_ids
+
 
 def sanity_check_batch(
     sample_metadata: pd.DataFrame,
