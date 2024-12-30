@@ -86,7 +86,7 @@ class TortillaDataFrame(pd.DataFrame):
         else:
             return row["internal:subfile"]
 
-    def to_geodataframe(self, **kwargs):
+    def to_geodataframe(self, inplace=False):
         """
         Convert the DataFrame to a GeoDataFrame.
         """
@@ -94,16 +94,20 @@ class TortillaDataFrame(pd.DataFrame):
             from geopandas import GeoDataFrame, points_from_xy
         except ImportError:
             raise ImportError("geopandas is required to convert to GeoDataFrame")
-
+        
+        if inplace:
+            self = GeoDataFrame(data=self, crs="EPSG:4326")
+            return self
+                
         return GeoDataFrame(
             data=self,
             geometry=points_from_xy(*parse_wkt_bulk(self["stac:centroid"])),
             crs="EPSG:4326",
         )
 
-    def plot(self, **kwargs):
+    def plot(self, *args, **kwargs):
         """Plot the GeoDataFrame."""
-        self.to_geodataframe().plot(**kwargs)
+        self.to_geodataframe(inplace=False).plot(*args, **kwargs)
 
 
 def sort_columns_add_geometry(metadata):

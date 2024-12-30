@@ -91,5 +91,7 @@ def load_files(files: list, **storage_options) -> pd.DataFrame:
             try:
                 results.append(future.result())
             except Exception as e:
-                print(f"Error processing file {futures[future]}: {e}")
-    return TortillaDataFrame(pd.concat(results, ignore_index=True))
+                print(f"Error processing file {futures[future]}: {e}")    
+    return TortillaDataFrame(
+        pd.concat(results, ignore_index=True).sort_values(by=["tortilla:id"])
+    )
