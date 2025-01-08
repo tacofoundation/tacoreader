@@ -10,8 +10,64 @@ from pyarrow.parquet import read_table
 from tacoreader.loader_utils import transform_to_gdal_vfs
 
 
-class TortillaDataFrame(pd.DataFrame):
+class TortillaDataSeries(pd.Series):
+    def __init__(self, data=None, *args, **kwargs):
+        super().__init__(data, *args, **kwargs)
 
+    @property
+    def _constructor(self):
+        return TortillaDataSeries
+
+    @staticmethod
+    def get_internal_path(row):
+        """
+        Extract offset, length, and path from a row's internal subfile information.
+        """
+        pattern: re.Pattern = re.compile(r"/vsisubfile/(\d+)_(\d+),(.+)")
+        offset, length, path = pattern.match(row["internal:subfile"]).groups()
+
+        # Adjust path for curl files
+        # Remove VFS prefix from path (supporting multiple protocols)
+        if Path(path).is_file():
+            path = path
+        else:
+            if path.startswith("/vsicurl/"):
+                path = path[9:]
+            elif path.startswith("/vsis3/"):
+                path = path[7:]
+            elif path.startswith("/vsigs/"):
+                path = path[7:]
+            elif path.startswith("/vsifs/"):
+                path = path[7:]
+            elif path.startswith("/vsiaz/"):
+                path = path[7:]
+            elif path.startswith("/vsioss/"):
+                path = path[8:]
+            elif path.startswith("/vsiswift/"):
+                path = path[10:]
+            else:
+                raise ValueError(f"Unsupported GDAL VFS prefix: {path}")
+
+        return int(offset), int(length), path
+
+    def read(self):
+        """Read data based on the row's tortilla:file_format. """
+        if self["tortilla:file_format"] == "TORTILLA":
+            offset, length, path = self.get_internal_path(self)
+            return partial_load_file(self["tortilla:offset"], path)
+        elif self["tortilla:file_format"] == "BYTES":
+            # Obtain the offset, length and internal path
+            offset, length, path = self.get_internal_path(self)
+            # Fetch the bytes
+            fs, fs_path = fsspec.core.url_to_fs(path)
+            with fs.open(fs_path, "rb") as f:
+                f.seek(int(offset))
+                return f.read(int(length))
+        else:
+            return self["internal:subfile"]
+
+
+class TortillaDataFrame(pd.DataFrame):
     def __init__(self, data=None, *args, **kwargs):
         # Apply sort_columns_add_geometry before passing
         # to the parent constructor
@@ -28,12 +84,15 @@ class TortillaDataFrame(pd.DataFrame):
                 f"Unsupported data type: {dataclass}. Only GeoDataFrame, DataFrame, "
                 "and TortillaDataFrame are supported."
             )
-
         super().__init__(data, *args, **kwargs)
 
     @property
     def _constructor(self):
         return TortillaDataFrame
+
+    @property
+    def _constructor_sliced(self):
+        return TortillaDataSeries
 
     @staticmethod
     def get_internal_path(row):
@@ -182,7 +241,7 @@ def partial_load_file(offset: int, path: str, **storage_options) -> pd.DataFrame
         lambda row: f"/vsisubfile/{row['tortilla:offset']}_{row['tortilla:length']},{vfs_path}",
         axis=1,
     )
-
+    
     return TortillaDataFrame(dataframe)
 
 

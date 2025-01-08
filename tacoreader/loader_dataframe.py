@@ -8,8 +8,7 @@ import pandas as pd
 from pyarrow import BufferReader
 from pyarrow.parquet import read_table
 
-from tacoreader.datasets import datasets
-from tacoreader.loader_utils import transform_to_gdal_vfs
+from tacoreader.loader_utils import transform_to_gdal_vfs, load_tacofoundation_datasets
 from tacoreader.TortillaDataFrame import TortillaDataFrame
 
 
@@ -25,9 +24,11 @@ def load(file: Union[str, List[str], Path, List[Path]], **storage_options):
         pd.DataFrame: A dataframe containing the parsed metadata.
     """
     if isinstance(file, (str, Path)):
-        # Check if the dataset is inside the taco foundation
-        if file in datasets.keys():
-            return load(datasets[file])
+        # Does the file start with our protocol -> tacofoundation:?
+        if file.startswith("tacofoundation:"):
+            datasets = load_tacofoundation_datasets()
+            return load_files(datasets[file[15:]])
+        
         return load_file(file, **storage_options)
     elif isinstance(file, list):
         return load_files(file, **storage_options)

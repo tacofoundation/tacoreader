@@ -1,5 +1,5 @@
 from pathlib import Path
-
+import requests
 
 def transform_to_gdal_vfs(path) -> str:
     """
@@ -38,3 +38,17 @@ def transform_to_gdal_vfs(path) -> str:
         f"File does not exist or unsupported protocol: {path}. Supported"
         " protocols: s3, gs, az, oss, swift, http, https, ftp, and hf."
     )
+
+
+def load_tacofoundation_datasets() -> dict:
+    """
+    Load a TACO file from the TACO Foundation dataset.
+
+    Returns:
+        dict: A dictionary containing the TACO Foundation datasets.
+    """
+    dataset = "https://huggingface.co/datasets/tacofoundation/main/raw/main/tacos.json"
+    with requests.get(dataset) as r:
+        datasets = r.json()
+    return datasets
+
