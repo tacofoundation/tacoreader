@@ -176,14 +176,10 @@ def parallel_compile(
 
             # Convert the VFS path to the original file path
             message = compile_utils.tortilla_message()
-            files = dataframe["internal:subfile"].apply(
+            dataframe["internal:filepath"] = dataframe["internal:subfile"].apply(
                 lambda x: compile_utils.transform_from_gdal_vfs(vfs_path=x.split(",")[-1])
             )
-
-            # Sort the dataset according to the taco files order
-            new_idxs = files.sort_values().index.tolist()
-            dataframe = dataframe.loc[new_idxs]
-            dataframe.reset_index(drop=True, inplace=True)            
+            dataframe.sort_values("internal:filepath", inplace=True)
                         
             # Write the DATA
             with concurrent.futures.ThreadPoolExecutor(
@@ -192,7 +188,7 @@ def parallel_compile(
                 futures = []
                 for idx, item in dataframe.iterrows():
                     # TODO: Check with more detail what this function does
-                    fs, fs_file = fsspec.core.url_to_fs(files[idx], **storage_options)
+                    fs, fs_file = fsspec.core.url_to_fs(item["internal:filepath"], **storage_options)
 
                     old_offset = item["tortilla:offset"]
                     new_offset = item["tortilla:new_offset"]
