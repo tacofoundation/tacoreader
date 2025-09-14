@@ -9,7 +9,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import tqdm
 
-from tacoreader import compile_utils
+from tacoreader.v1 import compile_utils
 
 
 def compile(

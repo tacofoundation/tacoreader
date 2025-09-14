@@ -8,8 +8,8 @@ import pandas as pd
 from pyarrow import BufferReader
 from pyarrow.parquet import read_table
 
-from tacoreader.loader_utils import transform_to_gdal_vfs, load_tacofoundation_datasets
-from tacoreader.TortillaDataFrame import TortillaDataFrame
+from tacoreader.v1.loader_utils import transform_to_gdal_vfs, load_tacofoundation_datasets
+from tacoreader.v1.TortillaDataFrame import TortillaDataFrame
 
 
 def load(file: Union[str, List[str], Path, List[Path]], **storage_options):

@@ -4,7 +4,7 @@ from typing import Callable, List, Union
 
 import pandas as pd
 
-from tacoreader.loader_dataframe import TortillaDataFrame
+from tacoreader.v1.loader_dataframe import TortillaDataFrame
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"

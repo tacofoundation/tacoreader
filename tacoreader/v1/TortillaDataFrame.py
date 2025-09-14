@@ -7,7 +7,7 @@ import pandas as pd
 from pyarrow import BufferReader
 from pyarrow.parquet import read_table
 
-from tacoreader.loader_utils import transform_to_gdal_vfs
+from tacoreader.v1.loader_utils import transform_to_gdal_vfs
 
 
 class TortillaDataSeries(pd.Series):
@@ -68,7 +68,7 @@ class TortillaDataSeries(pd.Series):
 
 
 class TortillaDataFrame(pd.DataFrame):
-    def __init__(self, data=None, *args, **kwargs):
+    def __init__(self, data=None, *args, **kwargs):        
         # Apply sort_columns_add_geometry before passing
         # to the parent constructor
         dataclass: str = type(data).__name__
