@@ -14,7 +14,7 @@ def query(
     Args:
         multi_df: MultiDataFrame with hierarchical data
         level: Target level (>= 1) where to find matches
-        id: ID to match at target level  
+        id: ID to match at target level
         columns: JOIN/Column selection:
             - None (default): only internal:* from target level (excludes internal:position)
             - "left": LEFT JOIN - only PARENT levels (excludes target)

@@ -246,8 +246,29 @@ def load(file_paths: str | list[str], max_concurrent: int = 20) -> MultiDataFram
     if max_concurrent < 1:
         raise ValueError("max_concurrent must be >= 1")
     
-    # Read TACO data asynchronously
-    dataframes = asyncio.run(read_taco_data_async(file_paths, max_concurrent))
+    # Handle async execution based on environment
+    try:
+        # Check if there's a running event loop
+        asyncio.get_running_loop()
+        # We're in Jupyter/Colab - run in separate thread with new loop
+        def run_in_new_loop():
+            new_loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(new_loop)
+            try:
+                result = new_loop.run_until_complete(read_taco_data_async(file_paths, max_concurrent))
+                return result
+            finally:
+                new_loop.close()
+        
+        # Run in thread to avoid loop conflicts
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = executor.submit(run_in_new_loop)
+            dataframes = future.result()
+            
+    except RuntimeError:
+        # No running loop - normal Python environment
+        dataframes = asyncio.run(read_taco_data_async(file_paths, max_concurrent))
     
     if not dataframes:
         raise ValueError("No data loaded from files")
