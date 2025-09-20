@@ -214,7 +214,7 @@ class MultiDataFrame(pd.DataFrame):
                 result = MultiDataFrame(filtered_df.reset_index(drop=True))
                 
                 # Copy auxiliary chain
-                result._auxiliary_dfs = next_level._auxiliary_dfs
+                result._auxiliary_dfs = self._auxiliary_dfs[1:] if len(self._auxiliary_dfs) > 1 else []
                 
                 return result
             else:
@@ -222,12 +222,12 @@ class MultiDataFrame(pd.DataFrame):
         
         else:
             # Terminal file - return VSI path
-            if 'internal:gdal_vsi' in self.columns:
-                vsi_path = self.iloc[position]['internal:gdal_vsi']
+            if 'internal:gdal_vsi' in row:
+                vsi_path = row['internal:gdal_vsi']
                 if pd.notna(vsi_path):
                     return str(vsi_path)
             
-            raise ValueError(f"No VSI path for position {position}")
+            raise ValueError(f"No VSI path for row with id '{identifier}'")
     
     def get_auxiliary_df(self, index: int) -> Self:
         """Get auxiliary level by index."""
