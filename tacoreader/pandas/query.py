@@ -1,18 +1,18 @@
 import pandas as pd
-from tacoreader.pandas.multidataframe import MultiDataFrame
+from tacoreader.pandas.treedataframe import TreeDataFrame
 
 
 def query(
-    multi_df: MultiDataFrame,
+    multi_df: TreeDataFrame,
     level: int,
     id: str,
     columns: str | list[str] | dict[str, list[str]] | None = None
 ) -> pd.DataFrame:
     """
-    Query files with hierarchical JOINs from MultiDataFrame.
+    Query files with hierarchical JOINs from TreeDataFrame.
     
     Args:
-        multi_df: MultiDataFrame with hierarchical data
+        multi_df: TreeDataFrame with hierarchical data
         level: Target level (>= 1) where to find matches
         id: ID to match at target level
         columns: JOIN/Column selection:
@@ -64,7 +64,7 @@ def query(
 
 
 def _execute_default(
-    multi_df: MultiDataFrame, 
+    multi_df: TreeDataFrame, 
     target_matches: pd.DataFrame, 
     level: int
 ) -> pd.DataFrame:
@@ -86,7 +86,7 @@ def _execute_default(
 
 
 def _execute_join(
-    multi_df: MultiDataFrame, 
+    multi_df: TreeDataFrame, 
     target_matches: pd.DataFrame, 
     level: int, 
     join_type: str
@@ -128,7 +128,7 @@ def _execute_join(
 
 
 def _execute_field_list(
-    multi_df: MultiDataFrame, 
+    multi_df: TreeDataFrame, 
     target_matches: pd.DataFrame, 
     level: int, 
     requested_fields: list[str]
@@ -178,7 +178,7 @@ def _execute_field_list(
 
 
 def _execute_field_dict(
-    multi_df: MultiDataFrame, 
+    multi_df: TreeDataFrame, 
     target_matches: pd.DataFrame, 
     level: int, 
     level_spec: dict[str, list[str]]
@@ -228,7 +228,7 @@ def _execute_field_dict(
 
 
 def _get_multi_level_data(
-    multi_df: MultiDataFrame, 
+    multi_df: TreeDataFrame, 
     target_matches: pd.DataFrame, 
     levels: list[int]
 ) -> dict[int, pd.DataFrame]:
@@ -272,7 +272,7 @@ def _get_multi_level_data(
 
 
 def _build_hierarchical_ids(
-    multi_df: MultiDataFrame, 
+    multi_df: TreeDataFrame, 
     target_matches: pd.DataFrame, 
     target_level: int
 ) -> list[str]:
@@ -321,7 +321,7 @@ def _build_hierarchical_ids(
     return hierarchical_ids
 
 
-def _build_column_map(multi_df: MultiDataFrame, max_level: int) -> dict[int, list[str]]:
+def _build_column_map(multi_df: TreeDataFrame, max_level: int) -> dict[int, list[str]]:
     """Build map of available columns by level."""
     
     column_map = {0: list(multi_df.columns)}
