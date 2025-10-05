@@ -8,7 +8,10 @@ import pandas as pd
 from pyarrow import BufferReader
 from pyarrow.parquet import read_table
 
-from tacoreader.v1.loader_utils import transform_to_gdal_vfs, load_tacofoundation_datasets
+from tacoreader.v1.loader_utils import (
+    load_tacofoundation_datasets,
+    transform_to_gdal_vfs,
+)
 from tacoreader.v1.TortillaDataFrame import TortillaDataFrame
 
 
@@ -28,7 +31,7 @@ def load(file: Union[str, List[str], Path, List[Path]], **storage_options):
         if file.startswith("tacofoundation:"):
             datasets = load_tacofoundation_datasets()
             return load_files(datasets[file[15:]])
-        
+
         return load_file(file, **storage_options)
     elif isinstance(file, list):
         return load_files(file, **storage_options)
@@ -92,7 +95,7 @@ def load_files(files: list, **storage_options) -> pd.DataFrame:
             try:
                 results.append(future.result())
             except Exception as e:
-                print(f"Error processing file {futures[future]}: {e}")    
+                print(f"Error processing file {futures[future]}: {e}")
     return TortillaDataFrame(
         pd.concat(results, ignore_index=True).sort_values(by=["tortilla:id"])
     )

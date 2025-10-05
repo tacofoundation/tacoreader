@@ -1,5 +1,7 @@
 from pathlib import Path
+
 import requests
+
 
 def transform_to_gdal_vfs(path) -> str:
     """

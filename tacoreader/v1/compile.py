@@ -177,10 +177,12 @@ def parallel_compile(
             # Convert the VFS path to the original file path
             message = compile_utils.tortilla_message()
             dataframe["internal:filepath"] = dataframe["internal:subfile"].apply(
-                lambda x: compile_utils.transform_from_gdal_vfs(vfs_path=x.split(",")[-1])
+                lambda x: compile_utils.transform_from_gdal_vfs(
+                    vfs_path=x.split(",")[-1]
+                )
             )
             dataframe.sort_values("internal:filepath", inplace=True)
-                        
+
             # Write the DATA
             with concurrent.futures.ThreadPoolExecutor(
                 max_workers=nworkers
@@ -188,7 +190,9 @@ def parallel_compile(
                 futures = []
                 for idx, item in dataframe.iterrows():
                     # TODO: Check with more detail what this function does
-                    fs, fs_file = fsspec.core.url_to_fs(item["internal:filepath"], **storage_options)
+                    fs, fs_file = fsspec.core.url_to_fs(
+                        item["internal:filepath"], **storage_options
+                    )
 
                     old_offset = item["tortilla:offset"]
                     new_offset = item["tortilla:new_offset"]
@@ -216,4 +220,3 @@ def parallel_compile(
             mm[bytes_counter : (bytes_counter + len(FOOTER))] = FOOTER
 
     return pathlib.Path(output)
-

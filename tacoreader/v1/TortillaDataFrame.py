@@ -51,7 +51,7 @@ class TortillaDataSeries(pd.Series):
         return int(offset), int(length), path
 
     def read(self):
-        """Read data based on the row's tortilla:file_format. """
+        """Read data based on the row's tortilla:file_format."""
         if self["tortilla:file_format"] == "TORTILLA":
             offset, length, path = self.get_internal_path(self)
             return partial_load_file(self["tortilla:offset"], path)
@@ -68,7 +68,7 @@ class TortillaDataSeries(pd.Series):
 
 
 class TortillaDataFrame(pd.DataFrame):
-    def __init__(self, data=None, *args, **kwargs):        
+    def __init__(self, data=None, *args, **kwargs):
         # Apply sort_columns_add_geometry before passing
         # to the parent constructor
         dataclass: str = type(data).__name__
@@ -153,11 +153,11 @@ class TortillaDataFrame(pd.DataFrame):
             from geopandas import GeoDataFrame, points_from_xy
         except ImportError:
             raise ImportError("geopandas is required to convert to GeoDataFrame")
-        
+
         if inplace:
             self = GeoDataFrame(data=self, crs="EPSG:4326")
             return self
-                
+
         return GeoDataFrame(
             data=self,
             geometry=points_from_xy(*parse_wkt_bulk(self["stac:centroid"])),
@@ -241,7 +241,7 @@ def partial_load_file(offset: int, path: str, **storage_options) -> pd.DataFrame
         lambda row: f"/vsisubfile/{row['tortilla:offset']}_{row['tortilla:length']},{vfs_path}",
         axis=1,
     )
-    
+
     return TortillaDataFrame(dataframe)
 
 
