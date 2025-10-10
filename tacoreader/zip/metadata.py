@@ -10,8 +10,8 @@ def build_vsi_paths(
     """
     Build internal:gdal_vsi column for ZIP format.
 
-    TORTILLA nodes point to their level's metadata parquet.
-    SAMPLE nodes point to their file using internal:offset and internal:size.
+    FOLDER nodes point to their level's metadata parquet.
+    FILE nodes point to their file using internal:offset and internal:size.
 
     Args:
         df: DataFrame with type, internal:offset, internal:size columns
@@ -39,7 +39,7 @@ def build_vsi_paths(
         )
 
     vsi_paths = (
-        pl.when(pl.col("type") == "TORTILLA")
+        pl.when(pl.col("type") == "FOLDER")
         .then(
             pl.lit("/vsisubfile/")
             + pl.lit(str(metadata_offset))

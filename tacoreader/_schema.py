@@ -5,7 +5,7 @@ class PITRootLevel(TypedDict):
     """Root level descriptor (level 0 - the collection)."""
 
     n: int  # Number of items in collection
-    type: Literal["TORTILLA", "SAMPLE"]  # Node type
+    type: Literal["FOLDER", "FILE"]  # Node type
 
 
 class PITPattern(TypedDict):
@@ -46,10 +46,9 @@ class PITSchema:
     def _validate(self) -> None:
         """Validate schema structure and consistency."""
         # Validate root
-        if self.root["type"] not in ("TORTILLA", "SAMPLE"):
+        if self.root["type"] not in ("FOLDER", "FILE"):
             raise ValueError(
-                f"Invalid root type: {self.root['type']}. "
-                "Must be 'TORTILLA' or 'SAMPLE'"
+                f"Invalid root type: {self.root['type']}. " "Must be 'FOLDER' or 'FILE'"
             )
 
         # Validate hierarchy levels
@@ -72,7 +71,7 @@ class PITSchema:
 
                 # Validate child types
                 for child_type in pattern["children"]:
-                    if child_type not in ("TORTILLA", "SAMPLE"):
+                    if child_type not in ("FOLDER", "FILE"):
                         raise ValueError(
                             f"Depth {depth_str}, pattern {i}: "
                             f"invalid child type '{child_type}'"
@@ -87,16 +86,16 @@ class PITSchema:
             pattern_index: Index into patterns array at this depth (default 0)
 
         Returns:
-            List of child types (e.g., ['SAMPLE', 'TORTILLA', 'SAMPLE'])
+            List of child types (e.g., ['FILE', 'FOLDER', 'FILE'])
 
         Raises:
             ValueError: If depth or pattern_index is out of range
 
         Examples:
             >>> schema.get_pattern(1, 0)
-            ['SAMPLE', 'TORTILLA']
+            ['FILE', 'FOLDER']
             >>> schema.get_pattern(2, 0)
-            ['SAMPLE', 'SAMPLE']
+            ['FILE', 'FILE']
         """
         depth_str = str(depth)
         if depth_str not in self.hierarchy:
@@ -123,7 +122,7 @@ class PITSchema:
 
         Examples:
             >>> schema.get_children_count(1, 0)
-            2  # ['SAMPLE', 'TORTILLA'] -> 2 children
+            2  # ['FILE', 'FOLDER'] -> 2 children
         """
         pattern = self.get_pattern(depth, pattern_index)
         return len(pattern)
@@ -314,8 +313,8 @@ def merge_schemas(schemas: list[PITSchema]) -> PITSchema:
 
     Examples:
         >>> # Two files with same structure, different counts
-        >>> schema1 = PITSchema({"root": {"n": 500, "type": "TORTILLA"}, ...})
-        >>> schema2 = PITSchema({"root": {"n": 300, "type": "TORTILLA"}, ...})
+        >>> schema1 = PITSchema({"root": {"n": 500, "type": "FOLDER"}, ...})
+        >>> schema2 = PITSchema({"root": {"n": 300, "type": "FOLDER"}, ...})
         >>> merged = merge_schemas([schema1, schema2])
         >>> merged.root["n"]
         800

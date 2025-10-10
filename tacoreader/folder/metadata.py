@@ -9,8 +9,8 @@ def build_vsi_paths(
     """
     Build internal:gdal_vsi column for FOLDER format.
 
-    TORTILLA nodes point to their level's metadata Avro file.
-    SAMPLE nodes point to their file using internal:relative_path.
+    FOLDER nodes point to their level's metadata Avro file.
+    FILE nodes point to their file using internal:relative_path.
 
     Args:
         df: DataFrame with type and internal:relative_path columns
@@ -31,19 +31,19 @@ def build_vsi_paths(
     if "type" not in df.columns:
         raise ValueError("Missing required 'type' column")
 
-    # Check if SAMPLE nodes have relative_path
-    has_samples = (df["type"] != "TORTILLA").any()
-    if has_samples and "internal:relative_path" not in df.columns:
-        raise ValueError("FOLDER format SAMPLEs require internal:relative_path column")
+    # Check if FILE nodes have relative_path
+    has_files = (df["type"] != "FOLDER").any()
+    if has_files and "internal:relative_path" not in df.columns:
+        raise ValueError("FOLDER format FILEs require internal:relative_path column")
 
     # Ensure root ends with /
     root = root_path if root_path.endswith("/") else root_path + "/"
 
     # Build VSI paths:
-    # TORTILLA: root + "METADATA/levelN.avro"
-    # SAMPLE: root + relative_path
+    # FOLDER: root + "METADATA/levelN.avro"
+    # FILE: root + relative_path
     vsi_paths = (
-        pl.when(pl.col("type") == "TORTILLA")
+        pl.when(pl.col("type") == "FOLDER")
         .then(
             pl.lit(root)
             + pl.lit("METADATA/level")

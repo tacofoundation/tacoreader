@@ -16,7 +16,7 @@ class TacoDataFrame(pd.DataFrame):
     2. By ID: df.read("landslide_001").read("imagery")
     3. By path: df.read("10:4:2")
 
-    Returns DataFrame if navigating to TORTILLA, VSI string if SAMPLE.
+    Returns DataFrame if navigating to FOLDER, VSI string if FILE.
     """
 
     _metadata: ClassVar[list[str]] = [
@@ -30,27 +30,35 @@ class TacoDataFrame(pd.DataFrame):
     def __init__(
         self,
         data: Any = None,
+        index: Any = None,
+        columns: Any = None,
+        dtype: Any = None,
+        copy: bool | None = None,
         all_levels: list[pd.DataFrame] | None = None,
         schema: PITSchema | None = None,
         current_depth: int = 0,
         root_path: str = "",
         slice_offset: int = 0,
-        *args: Any,
-        **kwargs: Any,
     ) -> None:
         """
         Initialize TacoDataFrame.
 
         Args:
             data: DataFrame data (current level)
+            index: Index for DataFrame
+            columns: Column labels for DataFrame
+            dtype: Data type to force
+            copy: Whether to copy data
             all_levels: List of all DataFrames [level0, level1, ...]
             schema: PIT schema for navigation
             current_depth: Current depth (0 = root)
             root_path: VSI root path
             slice_offset: Global offset of first row in this DataFrame
         """
-        super().__init__(data, *args, **kwargs)
+        # Initialize parent DataFrame with positional arguments (mypy compatibility)
+        super().__init__(data, index, columns, dtype, copy)  # type: ignore[call-arg]
 
+        # Set TacoDataFrame-specific attributes after parent initialization
         self._all_levels = all_levels if all_levels is not None else []
         self._schema = schema
         self._current_depth = current_depth
@@ -83,7 +91,7 @@ class TacoDataFrame(pd.DataFrame):
             index: Position (int), ID (str), or path (str with ":")
 
         Returns:
-            TacoDataFrame if TORTILLA, VSI path if SAMPLE
+            TacoDataFrame if FOLDER, VSI path if FILE
 
         Examples:
             >>> df.read(10)           # Position
@@ -134,13 +142,13 @@ class TacoDataFrame(pd.DataFrame):
         row_idx = matches.index[0]
         node_type = matches.iloc[0]["type"]
 
-        if node_type != "TORTILLA":
+        if node_type != "FOLDER":
             return str(matches.iloc[0]["internal:gdal_vsi"])
 
         child_depth = self._current_depth + 1
 
         if child_depth > self.max_depth:
-            raise ValueError(f"TORTILLA '{node_id}' has no children")
+            raise ValueError(f"FOLDER '{node_id}' has no children")
 
         # Cast row_idx to int - pandas index can be various types
         position_in_current = row_idx if isinstance(row_idx, int) else int(row_idx)  # type: ignore[arg-type]
@@ -181,7 +189,7 @@ class TacoDataFrame(pd.DataFrame):
 
         node_type = self.iloc[position]["type"]
 
-        if node_type != "TORTILLA":
+        if node_type != "FOLDER":
             return str(self.iloc[position]["internal:gdal_vsi"])
 
         child_depth = self._current_depth + 1
@@ -397,8 +405,18 @@ class TacoDataFrame(pd.DataFrame):
         )
 
     def __repr__(self) -> str:
-        """Custom representation."""
-        base_repr = super().__repr__()
+        """Custom representation (filters out padding samples for display)."""
+        # Filter padding samples for display only (using ternary operator)
+        display_df = (
+            self[~self["id"].str.contains("__TACOPAD__", na=False)]
+            if "id" in self.columns
+            else self
+        )
+
+        # Use regular pandas repr (without TacoDataFrame metadata)
+        base_repr = pd.DataFrame(display_df).__repr__()
+
+        # Add tree info
         tree_info = (
             f"\n[TacoDataFrame: {len(self)} rows, "
             f"depth={self._current_depth}, "

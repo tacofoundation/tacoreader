@@ -1,5 +1,9 @@
 import asyncio
 
+import polars as pl
+from shapely import wkt
+from shapely.wkb import loads as wkb_loads
+
 from tacoreader._format import detect_format
 from tacoreader._legacy import is_legacy_format, raise_legacy_error
 from tacoreader._tree import TacoDataFrame
@@ -34,18 +38,22 @@ def load(paths: str | list[str]) -> TacoDataFrame:
         >>> df = load("s3://bucket/dataset/")
         >>> df = load(["part1.tacozip", "part2.tacozip"])
     """
+    # Normalize input to list format
     path_list: list[str] = [paths] if isinstance(paths, str) else paths
 
+    # Validate at least one path provided
     if not path_list:
         raise ValueError("At least one path must be provided")
 
-    # Check for legacy v1 format
+    # Check for legacy v1 format and raise helpful migration error
     for path in path_list:
         if is_legacy_format(path):
             raise_legacy_error(path)
 
+    # Detect format from first path (ZIP or FOLDER)
     format_type = detect_format(path_list[0])
 
+    # Validate all paths have same format
     for path in path_list[1:]:
         if detect_format(path) != format_type:
             raise ValueError(
@@ -53,9 +61,59 @@ def load(paths: str | list[str]) -> TacoDataFrame:
                 f"First path is {format_type}, but found different format in: {path}"
             )
 
+    # Route to appropriate loader
     if format_type == "zip":
         return _load_zip(path_list)
     return _load_folder(path_list)
+
+
+def _convert_stored_types(dataframes: list[pl.DataFrame]) -> list[pl.DataFrame]:
+    """
+    Convert stored binary/epoch formats back to user-friendly types.
+
+    Performs rollback conversions from storage-optimized formats to
+    human-readable formats for better user experience:
+
+    - WKB geometries → WKT strings (shapely/geopandas compatible)
+    - Unix timestamps → datetime objects (pandas datetime64)
+
+    Args:
+        dataframes: List of Polars DataFrames (one per level)
+
+    Returns:
+        List of DataFrames with converted types
+    """
+    converted = []
+
+    for df in dataframes:
+        # Start with original DataFrame
+        result = df
+
+        # Iterate through all columns looking for known stored types
+        for col_name in df.columns:
+            # Convert WKB binary geometries to WKT strings
+            if col_name in ["istac:geometry", "istac:centroid", "stac:centroid"]:
+                result = result.with_columns(
+                    pl.col(col_name).map_elements(
+                        lambda wkb: wkt.dumps(wkb_loads(wkb)) if wkb else None,
+                        return_dtype=pl.Utf8,  # Result is string (WKT format)
+                    )
+                )
+
+            # Convert Unix epoch timestamps to datetime objects
+            elif col_name in [
+                "stac:time_start",
+                "stac:time_end",
+                "istac:time_start",
+                "istac:time_end",
+            ]:
+                result = result.with_columns(
+                    pl.from_epoch(col_name, time_unit="s")  # Seconds since 1970-01-01
+                )
+
+        converted.append(result)
+
+    return converted
 
 
 def _load_zip(paths: list[str]) -> TacoDataFrame:
@@ -68,8 +126,9 @@ def _load_zip(paths: list[str]) -> TacoDataFrame:
     3. Concatenate DataFrames by level (level0 + level0, level1 + level1, etc)
     4. Get metadata offsets from ZIP header for VSI path construction
     5. Enrich DataFrames with internal:gdal_vsi using /vsisubfile/offset_size,root
-    6. Convert from Polars to Pandas
-    7. Build TacoDataFrame with all levels
+    6. Convert stored types (WKB→WKT, epoch→datetime)
+    7. Convert from Polars to Pandas
+    8. Build TacoDataFrame with all levels
 
     Args:
         paths: List of ZIP paths
@@ -78,43 +137,61 @@ def _load_zip(paths: list[str]) -> TacoDataFrame:
         TacoDataFrame instance (level 0)
     """
     if len(paths) == 1:
+        # Single file loading path
         schema, dataframes = load_single_zip(paths[0])
+
+        # Convert to GDAL VSI path (handles S3, GCS, HTTP, etc.)
         root_path = to_vsi_root(paths[0])
 
+        # Get file offsets for /vsisubfile/ construction
         metadata_offsets = asyncio.run(get_metadata_offsets(paths[0]))
 
+        # Add internal:gdal_vsi column with /vsisubfile paths
         enriched = enrich_zip_levels(dataframes, root_path, metadata_offsets)
 
-        # Convert Polars to Pandas
-        pandas_levels = [df.to_pandas() for df in enriched]
+        # Convert stored types to user-friendly formats
+        converted = _convert_stored_types(enriched)
 
+        # Convert from Polars to Pandas for TacoDataFrame compatibility
+        pandas_levels = [df.to_pandas() for df in converted]
+
+        # Build navigable tree structure
         return TacoDataFrame(
-            pandas_levels[0],
-            all_levels=pandas_levels,
-            schema=schema,
-            current_depth=0,
-            root_path=root_path,
+            pandas_levels[0],  # Root level (level 0)
+            all_levels=pandas_levels,  # All levels for navigation
+            schema=schema,  # PIT schema for arithmetic navigation
+            current_depth=0,  # Starting at root
+            root_path=root_path,  # VSI root for path construction
         )
 
+    # Multiple file loading path
     merged_schema, all_dataframes = load_multiple_zips(paths)
 
+    # Concatenate DataFrames by level (level0s together, level1s together, etc.)
     merged_dataframes = merge_zip_dataframes(all_dataframes)
 
+    # Use first path as representative root (all should have same storage)
     root_path = to_vsi_root(paths[0])
 
+    # Get file offsets from first file (structure should be identical)
     metadata_offsets = asyncio.run(get_metadata_offsets(paths[0]))
 
+    # Add internal:gdal_vsi column with /vsisubfile paths
     enriched = enrich_zip_levels(merged_dataframes, root_path, metadata_offsets)
 
-    # Convert Polars to Pandas
-    pandas_levels = [df.to_pandas() for df in enriched]
+    # Convert stored types to user-friendly formats
+    converted = _convert_stored_types(enriched)
 
+    # Convert from Polars to Pandas for TacoDataFrame compatibility
+    pandas_levels = [df.to_pandas() for df in converted]
+
+    # Build navigable tree structure
     return TacoDataFrame(
-        pandas_levels[0],
-        all_levels=pandas_levels,
-        schema=merged_schema,
-        current_depth=0,
-        root_path=root_path,
+        pandas_levels[0],  # Root level (level 0)
+        all_levels=pandas_levels,  # All levels for navigation
+        schema=merged_schema,  # Merged PIT schema
+        current_depth=0,  # Starting at root
+        root_path=root_path,  # VSI root for path construction
     )
 
 
@@ -127,10 +204,11 @@ def _load_folder(paths: list[str]) -> TacoDataFrame:
     2. If multiple files: validate schemas identical, merge them (sum 'n' values)
     3. Concatenate DataFrames by level (level0 + level0, level1 + level1, etc)
     4. Enrich DataFrames with internal:gdal_vsi paths
-       - TORTILLA nodes: root/METADATA/levelN.avro
-       - SAMPLE nodes: root/DATA/path/to/file.tif (from internal:relative_path)
-    5. Convert from Polars to Pandas
-    6. Build TacoDataFrame with all levels
+       - FOLDER nodes: root/METADATA/levelN.avro
+       - FILE nodes: root/DATA/path/to/file.tif (from internal:relative_path)
+    5. Convert stored types (WKB→WKT, epoch→datetime)
+    6. Convert from Polars to Pandas
+    7. Build TacoDataFrame with all levels
 
     Args:
         paths: List of FOLDER paths
@@ -139,37 +217,53 @@ def _load_folder(paths: list[str]) -> TacoDataFrame:
         TacoDataFrame instance (level 0)
     """
     if len(paths) == 1:
+        # Single folder loading path
         schema, dataframes = load_single_folder(paths[0])
+
+        # Convert to GDAL VSI path (handles S3, GCS, HTTP, etc.)
         root_path = to_vsi_root(paths[0])
 
+        # Add internal:gdal_vsi column pointing to DATA/ or METADATA/
         enriched = enrich_folder_levels(dataframes, root_path)
 
-        # Convert Polars to Pandas
-        pandas_levels = [df.to_pandas() for df in enriched]
+        # Convert stored types to user-friendly formats
+        converted = _convert_stored_types(enriched)
 
+        # Convert from Polars to Pandas for TacoDataFrame compatibility
+        pandas_levels = [df.to_pandas() for df in converted]
+
+        # Build navigable tree structure
         return TacoDataFrame(
-            pandas_levels[0],
-            all_levels=pandas_levels,
-            schema=schema,
-            current_depth=0,
-            root_path=root_path,
+            pandas_levels[0],  # Root level (level 0)
+            all_levels=pandas_levels,  # All levels for navigation
+            schema=schema,  # PIT schema for arithmetic navigation
+            current_depth=0,  # Starting at root
+            root_path=root_path,  # VSI root for path construction
         )
 
+    # Multiple folder loading path
     merged_schema, all_dataframes = load_multiple_folders(paths)
 
+    # Concatenate DataFrames by level (level0s together, level1s together, etc.)
     merged_dataframes = merge_folder_dataframes(all_dataframes)
 
+    # Use first path as representative root (all should have same storage)
     root_path = to_vsi_root(paths[0])
 
+    # Add internal:gdal_vsi column pointing to DATA/ or METADATA/
     enriched = enrich_folder_levels(merged_dataframes, root_path)
 
-    # Convert Polars to Pandas
-    pandas_levels = [df.to_pandas() for df in enriched]
+    # Convert stored types to user-friendly formats
+    converted = _convert_stored_types(enriched)
 
+    # Convert from Polars to Pandas for TacoDataFrame compatibility
+    pandas_levels = [df.to_pandas() for df in converted]
+
+    # Build navigable tree structure
     return TacoDataFrame(
-        pandas_levels[0],
-        all_levels=pandas_levels,
-        schema=merged_schema,
-        current_depth=0,
-        root_path=root_path,
+        pandas_levels[0],  # Root level (level 0)
+        all_levels=pandas_levels,  # All levels for navigation
+        schema=merged_schema,  # Merged PIT schema
+        current_depth=0,  # Starting at root
+        root_path=root_path,  # VSI root for path construction
     )
