@@ -104,6 +104,8 @@ def _convert_stored_types(dataframes: list[pl.DataFrame]) -> list[pl.DataFrame]:
             elif col_name in [
                 "stac:time_start",
                 "stac:time_end",
+                "stac:time_middle",
+                "istac:time_middle",
                 "istac:time_start",
                 "istac:time_end",
             ]:
