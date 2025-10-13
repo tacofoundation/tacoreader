@@ -2,9 +2,21 @@ from __future__ import annotations
 
 from typing import Any, ClassVar
 
+import numpy as np
 import pandas as pd
 
 from tacoreader._schema import PITSchema
+from tacoreader._stats import (
+    stats_categorical,
+    stats_max,
+    stats_mean,
+    stats_min,
+    stats_p25,
+    stats_p50,
+    stats_p75,
+    stats_p95,
+    stats_std,
+)
 
 
 class TacoDataFrame(pd.DataFrame):
@@ -82,6 +94,259 @@ class TacoDataFrame(pd.DataFrame):
     def max_depth(self) -> int:
         """Get maximum navigable depth."""
         return len(self._all_levels) - 1
+
+    def flat(
+        self,
+        depth: int | None = None,
+        include: list[str] | None = None,
+        where: str | None = None,
+    ) -> TacoDataFrame:
+        """
+        Flatten hierarchical structure into flat TacoDataFrame.
+
+        Expands all levels and merges into a flat structure. Always filters
+        padding samples (__TACOPAD__) and returns only FILE nodes.
+
+        Args:
+            depth: Maximum depth to expand (None = all levels)
+            include: Extra columns beyond defaults (id, type, internal:gdal_vsi)
+            where: Regex pattern to filter 'id' column (None = include all)
+
+        Returns:
+            Flat TacoDataFrame (no hierarchy, but still supports .read())
+
+        Examples:
+            >>> df.flat()  # All files
+            >>> df.flat(where='cloudmask|s2')  # Only cloudmask or s2
+            >>> df.flat(where='^(?!.*thumbnail)')  # Exclude thumbnails
+            >>> df.flat(include=['stac:time_start'], where='cloudmask')
+        """
+        if self._schema is None:
+            raise ValueError("Schema is required for flat() operation")
+
+        # Determine target depth
+        target_depth = depth if depth is not None else self.max_depth
+
+        if target_depth < self._current_depth:
+            raise ValueError(
+                f"depth ({target_depth}) cannot be less than current depth ({self._current_depth})"
+            )
+
+        # Step 1: Collect global indices from current subset
+        # Use actual pandas index values to handle non-contiguous selections
+        global_indices = [self._slice_offset + int(idx) for idx in self.index]
+
+        # Step 2: Expand indices level by level using PIT arithmetic
+        indices_by_level = self._expand_indices_to_depth(global_indices, target_depth)
+
+        # Step 3: Extract DataFrames and repeat parent rows to align with children
+        level_dfs = []
+        for depth_level in range(self._current_depth, target_depth + 1):
+            indices = indices_by_level[depth_level]
+            level_df = self._all_levels[depth_level].iloc[indices].reset_index(drop=True)
+            
+            # Calculate how many times each row should be repeated
+            if depth_level < target_depth:
+                repeat_counts = self._calculate_repeat_counts(indices, depth_level)
+                # Repeat rows to align with children at the next level
+                level_df = level_df.loc[level_df.index.repeat(repeat_counts)].reset_index(drop=True)
+            
+            level_dfs.append((depth_level, level_df))
+
+        # Step 4: Merge horizontally with proper column renaming
+        merged_df = self._merge_levels_horizontal(level_dfs, include)
+
+        # Step 5: Filter padding samples
+        if "id" in merged_df.columns:
+            merged_df = merged_df[~merged_df["id"].str.contains("__TACOPAD__", na=False)]
+
+        # Step 6: Always filter only FILEs
+        if "type" in merged_df.columns:
+            merged_df = merged_df[merged_df["type"] == "FILE"]
+
+        # Step 7: Apply regex filter on 'id' if provided
+        if where is not None and "id" in merged_df.columns:
+            merged_df = merged_df[merged_df["id"].str.contains(where, regex=True, na=False)]
+
+        # Return as TacoDataFrame (flattened, no hierarchy metadata needed)
+        return TacoDataFrame(
+            merged_df.reset_index(drop=True),
+            all_levels=[],  # Flat structure has no levels
+            schema=None,  # No schema for flat structure
+            current_depth=0,
+            root_path=self._root_path,
+            slice_offset=0,
+        )
+
+    def stats_categorical(self) -> np.ndarray:
+        """Aggregate categorical probabilities using weighted average."""
+        return stats_categorical(self)
+
+    def stats_mean(self) -> np.ndarray:
+        """Aggregate means using weighted average."""
+        return stats_mean(self)
+
+    def stats_std(self) -> np.ndarray:
+        """Aggregate standard deviations using pooled std formula."""
+        return stats_std(self)
+
+    def stats_min(self) -> np.ndarray:
+        """Aggregate minimums (global min across all rows)."""
+        return stats_min(self)
+
+    def stats_max(self) -> np.ndarray:
+        """Aggregate maximums (global max across all rows)."""
+        return stats_max(self)
+
+    def stats_p25(self) -> np.ndarray:
+        """Aggregate 25th percentiles using simple average."""
+        return stats_p25(self)
+
+    def stats_p50(self) -> np.ndarray:
+        """Aggregate 50th percentiles (median) using simple average."""
+        return stats_p50(self)
+
+    def stats_median(self) -> np.ndarray:
+        """Aggregate medians using simple average (alias for stats_p50)."""
+        return stats_p50(self)
+
+    def stats_p75(self) -> np.ndarray:
+        """Aggregate 75th percentiles using simple average."""
+        return stats_p75(self)
+
+    def stats_p95(self) -> np.ndarray:
+        """Aggregate 95th percentiles using simple average."""
+        return stats_p95(self)
+
+    def _calculate_repeat_counts(self, parent_indices: list[int], parent_depth: int) -> list[int]:
+        """
+        Calculate how many children each parent has.
+        
+        This is used to repeat parent rows so they align with their children
+        when merging levels horizontally.
+        
+        Args:
+            parent_indices: Global indices of parents at parent_depth
+            parent_depth: Depth of parent level
+            
+        Returns:
+            List of repeat counts (one per parent index)
+        """
+        if self._schema is None:
+            raise ValueError("Schema is required for repeat count calculation")
+        
+        child_depth = parent_depth + 1
+        repeat_counts = []
+        
+        for parent_idx in parent_indices:
+            # Determine which pattern this parent uses for its children
+            pattern_index = self._determine_pattern_index(parent_idx, child_depth)
+            child_patterns = self._schema.hierarchy[str(child_depth)]
+            pattern = child_patterns[pattern_index]["children"]
+            children_count = len(pattern)
+            repeat_counts.append(children_count)
+        
+        return repeat_counts
+
+    def _expand_indices_to_depth(
+        self, start_indices: list[int], target_depth: int
+    ) -> dict[int, list[int]]:
+        """
+        Expand parent indices to all child indices level by level.
+
+        Uses PIT arithmetic to calculate child offsets without recursion.
+
+        Args:
+            start_indices: Initial indices at current depth
+            target_depth: Target depth to expand to
+
+        Returns:
+            Dictionary mapping depth -> list of indices at that depth
+        """
+        indices_by_level: dict[int, list[int]] = {self._current_depth: start_indices}
+
+        for depth in range(self._current_depth, target_depth):
+            parent_indices = indices_by_level[depth]
+            child_indices: list[int] = []
+
+            for parent_idx in parent_indices:
+                # Determine pattern index for this parent
+                pattern_index = self._determine_pattern_index(parent_idx, depth + 1)
+
+                # Get pattern for children
+                child_patterns = self._schema.hierarchy[str(depth + 1)]  # type: ignore[union-attr]
+                pattern = child_patterns[pattern_index]["children"]
+                children_count = len(pattern)
+
+                # Calculate child offset using PIT arithmetic
+                child_offset = self._calculate_child_offset(parent_idx, depth + 1)
+
+                # Add all children indices
+                child_indices.extend(range(child_offset, child_offset + children_count))
+
+            indices_by_level[depth + 1] = child_indices
+
+        return indices_by_level
+
+    def _merge_levels_horizontal(
+        self, level_dfs: list[tuple[int, pd.DataFrame]], extra_columns: list[str] | None
+    ) -> pd.DataFrame:
+        """
+        Merge multiple level DataFrames horizontally with proper column handling.
+
+        Creates merged id column (level0___level1___level2), takes last type,
+        preserves internal:gdal_vsi, and includes requested extra columns.
+
+        Args:
+            level_dfs: List of (depth, DataFrame) tuples
+            extra_columns: Extra columns to include from deepest level
+
+        Returns:
+            Merged DataFrame with id, type, gdal_vsi, and extra columns
+        """
+        if not level_dfs:
+            return pd.DataFrame()
+
+        # Collect id columns from all levels
+        id_parts = []
+        last_type = None
+        gdal_vsi = None
+
+        for depth, df in level_dfs:
+            if "id" in df.columns:
+                id_parts.append(df["id"])
+
+            # Keep updating type (last one wins)
+            if "type" in df.columns:
+                last_type = df["type"]
+
+            # Get gdal_vsi from deepest level
+            if "internal:gdal_vsi" in df.columns:
+                gdal_vsi = df["internal:gdal_vsi"]
+
+        # Build result DataFrame
+        result_data = {}
+
+        # Merged id with ___
+        if id_parts:
+            result_data["id"] = id_parts[0].str.cat(id_parts[1:], sep="___")
+
+        # Last type
+        if last_type is not None:
+            result_data["type"] = last_type
+
+        # GDAL VSI
+        if gdal_vsi is not None:
+            result_data["internal:gdal_vsi"] = gdal_vsi
+
+        # Add extra columns from deepest level
+        if extra_columns:
+            deepest_depth, deepest_df = level_dfs[-1]
+            for col in extra_columns:
+                if col in deepest_df.columns:
+                    result_data[col] = deepest_df[col]
+
+        return pd.DataFrame(result_data)
 
     def read(self, index: int | str) -> TacoDataFrame | str:
         """
@@ -416,11 +681,16 @@ class TacoDataFrame(pd.DataFrame):
         # Use regular pandas repr (without TacoDataFrame metadata)
         base_repr = pd.DataFrame(display_df).__repr__()
 
-        # Add tree info
-        tree_info = (
-            f"\n[TacoDataFrame: {len(self)} rows, "
-            f"depth={self._current_depth}, "
-            f"max_depth={self.max_depth}, "
-            f"offset={self._slice_offset}]"
-        )
+        # Add tree info (different for flat vs hierarchical)
+        if not self._all_levels:
+            # Flat DataFrame
+            tree_info = f"\n[TacoDataFrame: {len(self)} rows (flat)]"
+        else:
+            # Hierarchical DataFrame
+            tree_info = (
+                f"\n[TacoDataFrame: {len(self)} rows, "
+                f"depth={self._current_depth}, "
+                f"max_depth={self.max_depth}, "
+                f"offset={self._slice_offset}]"
+            )
         return base_repr + tree_info
