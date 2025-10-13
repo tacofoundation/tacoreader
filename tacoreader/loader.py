@@ -1,5 +1,6 @@
 import asyncio
 
+import numpy as np
 import pandas as pd
 import shapely
 
@@ -128,10 +129,18 @@ def _convert_stored_types_pandas(
 
         # Convert WKB geometries to Shapely objects
         for col_name in geom_cols_to_convert:
-            # Get as NumPy array (works with both NumPy and PyArrow backends)
+            # Handle null values: convert only non-null geometries
+            mask = pd.notna(result[col_name])
             wkb_array = result[col_name].to_numpy()
-            # Convert WKB to Shapely geometry objects
-            geometry_objects = shapely.from_wkb(wkb_array)
+
+            # Create result array with None for nulls
+            geometry_objects = np.empty(len(wkb_array), dtype=object)
+            geometry_objects[~mask] = None
+
+            # Convert non-null WKB to Shapely objects
+            if mask.any():
+                geometry_objects[mask] = shapely.from_wkb(wkb_array[mask])
+
             result[col_name] = geometry_objects
 
         # Convert Unix epoch timestamps to datetime objects
