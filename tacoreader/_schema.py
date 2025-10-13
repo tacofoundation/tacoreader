@@ -179,31 +179,37 @@ class PITSchema:
         """
         Check if another schema is structurally identical to this one.
 
-        Used for multi-file validation - all files must have identical schemas.
+        Only compares structure (types and patterns), NOT counts (n values).
+        Used for multi-file validation - all files must have identical structure.
 
         Args:
             other: Another PITSchema to compare
 
         Returns:
-            True if schemas are identical, False otherwise
+            True if schemas are structurally identical, False otherwise
 
         Examples:
             >>> schema1.is_compatible(schema2)
             True
         """
-        # Compare root
-        if self.root != other.root:
+        # Compare root type only (ignore n)
+        if self.root["type"] != other.root["type"]:
             return False
 
         # Compare hierarchy depths
         if set(self.hierarchy.keys()) != set(other.hierarchy.keys()):
             return False
 
-        # Compare patterns at each depth
-        return all(
-            self.hierarchy[depth_str] == other.hierarchy[depth_str]
-            for depth_str in self.hierarchy
-        )
+        # Compare patterns at each depth (ignore n values)
+        for depth_str in self.hierarchy:
+            # Extract only the children patterns (not n)
+            self_patterns = [p["children"] for p in self.hierarchy[depth_str]]
+            other_patterns = [p["children"] for p in other.hierarchy[depth_str]]
+
+            if self_patterns != other_patterns:
+                return False
+
+        return True
 
     def max_depth(self) -> int:
         """
@@ -236,7 +242,7 @@ class PITSchema:
 
 def validate_schemas(schemas: list[PITSchema]) -> None:
     """
-    Validate that all schemas are identical.
+    Validate that all schemas are structurally identical.
 
     Used when loading multiple files - they must have compatible schemas.
 

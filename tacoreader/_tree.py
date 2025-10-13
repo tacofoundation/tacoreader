@@ -143,14 +143,18 @@ class TacoDataFrame(pd.DataFrame):
         level_dfs = []
         for depth_level in range(self._current_depth, target_depth + 1):
             indices = indices_by_level[depth_level]
-            level_df = self._all_levels[depth_level].iloc[indices].reset_index(drop=True)
-            
+            level_df = (
+                self._all_levels[depth_level].iloc[indices].reset_index(drop=True)
+            )
+
             # Calculate how many times each row should be repeated
             if depth_level < target_depth:
                 repeat_counts = self._calculate_repeat_counts(indices, depth_level)
                 # Repeat rows to align with children at the next level
-                level_df = level_df.loc[level_df.index.repeat(repeat_counts)].reset_index(drop=True)
-            
+                level_df = level_df.loc[
+                    level_df.index.repeat(repeat_counts)
+                ].reset_index(drop=True)
+
             level_dfs.append((depth_level, level_df))
 
         # Step 4: Merge horizontally with proper column renaming
@@ -158,7 +162,9 @@ class TacoDataFrame(pd.DataFrame):
 
         # Step 5: Filter padding samples
         if "id" in merged_df.columns:
-            merged_df = merged_df[~merged_df["id"].str.contains("__TACOPAD__", na=False)]
+            merged_df = merged_df[
+                ~merged_df["id"].str.contains("__TACOPAD__", na=False)
+            ]
 
         # Step 6: Always filter only FILEs
         if "type" in merged_df.columns:
@@ -166,7 +172,9 @@ class TacoDataFrame(pd.DataFrame):
 
         # Step 7: Apply regex filter on 'id' if provided
         if where is not None and "id" in merged_df.columns:
-            merged_df = merged_df[merged_df["id"].str.contains(where, regex=True, na=False)]
+            merged_df = merged_df[
+                merged_df["id"].str.contains(where, regex=True, na=False)
+            ]
 
         # Return as TacoDataFrame (flattened, no hierarchy metadata needed)
         return TacoDataFrame(
@@ -218,26 +226,28 @@ class TacoDataFrame(pd.DataFrame):
         """Aggregate 95th percentiles using simple average."""
         return stats_p95(self)
 
-    def _calculate_repeat_counts(self, parent_indices: list[int], parent_depth: int) -> list[int]:
+    def _calculate_repeat_counts(
+        self, parent_indices: list[int], parent_depth: int
+    ) -> list[int]:
         """
         Calculate how many children each parent has.
-        
+
         This is used to repeat parent rows so they align with their children
         when merging levels horizontally.
-        
+
         Args:
             parent_indices: Global indices of parents at parent_depth
             parent_depth: Depth of parent level
-            
+
         Returns:
             List of repeat counts (one per parent index)
         """
         if self._schema is None:
             raise ValueError("Schema is required for repeat count calculation")
-        
+
         child_depth = parent_depth + 1
         repeat_counts = []
-        
+
         for parent_idx in parent_indices:
             # Determine which pattern this parent uses for its children
             pattern_index = self._determine_pattern_index(parent_idx, child_depth)
@@ -245,7 +255,7 @@ class TacoDataFrame(pd.DataFrame):
             pattern = child_patterns[pattern_index]["children"]
             children_count = len(pattern)
             repeat_counts.append(children_count)
-        
+
         return repeat_counts
 
     def _expand_indices_to_depth(
@@ -288,6 +298,78 @@ class TacoDataFrame(pd.DataFrame):
 
         return indices_by_level
 
+    def _collect_merge_components(
+        self, level_dfs: list[tuple[int, pd.DataFrame]]
+    ) -> tuple[list[pd.Series], pd.Series | None, pd.Series | None]:
+        """
+        Collect id parts, type, and gdal_vsi from level DataFrames.
+
+        Args:
+            level_dfs: List of (depth, DataFrame) tuples
+
+        Returns:
+            Tuple of (id_parts, last_type, gdal_vsi)
+        """
+        id_parts = []
+        last_type = None
+        gdal_vsi = None
+
+        for _depth, df in level_dfs:
+            if "id" in df.columns:
+                id_parts.append(df["id"])
+
+            if "type" in df.columns:
+                last_type = df["type"]
+
+            if "internal:gdal_vsi" in df.columns:
+                gdal_vsi = df["internal:gdal_vsi"]
+
+        return id_parts, last_type, gdal_vsi
+
+    def _build_result_data(
+        self,
+        id_parts: list[pd.Series],
+        last_type: pd.Series | None,
+        gdal_vsi: pd.Series | None,
+        level_dfs: list[tuple[int, pd.DataFrame]],
+        extra_columns: list[str] | None,
+    ) -> dict[str, pd.Series]:
+        """
+        Build result data dictionary for merged DataFrame.
+
+        Args:
+            id_parts: List of id Series from each level
+            last_type: Last type column
+            gdal_vsi: GDAL VSI column
+            level_dfs: List of (depth, DataFrame) tuples
+            extra_columns: Extra columns to include from deepest level
+
+        Returns:
+            Dictionary with all columns for result DataFrame
+        """
+        result_data = {}
+
+        # Merged id with ___
+        if id_parts:
+            result_data["id"] = id_parts[0].str.cat(id_parts[1:], sep="___")
+
+        # Last type
+        if last_type is not None:
+            result_data["type"] = last_type
+
+        # GDAL VSI
+        if gdal_vsi is not None:
+            result_data["internal:gdal_vsi"] = gdal_vsi
+
+        # Add extra columns from deepest level
+        if extra_columns and level_dfs:
+            _deepest_depth, deepest_df = level_dfs[-1]
+            for col in extra_columns:
+                if col in deepest_df.columns:
+                    result_data[col] = deepest_df[col]
+
+        return result_data
+
     def _merge_levels_horizontal(
         self, level_dfs: list[tuple[int, pd.DataFrame]], extra_columns: list[str] | None
     ) -> pd.DataFrame:
@@ -307,44 +389,13 @@ class TacoDataFrame(pd.DataFrame):
         if not level_dfs:
             return pd.DataFrame()
 
-        # Collect id columns from all levels
-        id_parts = []
-        last_type = None
-        gdal_vsi = None
+        # Collect components
+        id_parts, last_type, gdal_vsi = self._collect_merge_components(level_dfs)
 
-        for depth, df in level_dfs:
-            if "id" in df.columns:
-                id_parts.append(df["id"])
-
-            # Keep updating type (last one wins)
-            if "type" in df.columns:
-                last_type = df["type"]
-
-            # Get gdal_vsi from deepest level
-            if "internal:gdal_vsi" in df.columns:
-                gdal_vsi = df["internal:gdal_vsi"]
-
-        # Build result DataFrame
-        result_data = {}
-
-        # Merged id with ___
-        if id_parts:
-            result_data["id"] = id_parts[0].str.cat(id_parts[1:], sep="___")
-
-        # Last type
-        if last_type is not None:
-            result_data["type"] = last_type
-
-        # GDAL VSI
-        if gdal_vsi is not None:
-            result_data["internal:gdal_vsi"] = gdal_vsi
-
-        # Add extra columns from deepest level
-        if extra_columns:
-            deepest_depth, deepest_df = level_dfs[-1]
-            for col in extra_columns:
-                if col in deepest_df.columns:
-                    result_data[col] = deepest_df[col]
+        # Build result data
+        result_data = self._build_result_data(
+            id_parts, last_type, gdal_vsi, level_dfs, extra_columns
+        )
 
         return pd.DataFrame(result_data)
 
