@@ -1,5 +1,3 @@
-"""Statistical aggregation functions for TacoDataFrame with internal:stats."""
-
 import warnings
 from typing import TYPE_CHECKING
 
