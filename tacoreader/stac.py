@@ -11,10 +11,192 @@ Main functions:
     - build_intersects_sql: Generate intersection filter SQL
     - build_within_sql: Generate within filter SQL
     - build_datetime_sql: Generate temporal filter SQL
+    - validate_level_exists: Validate that level exists in dataset
+    - get_columns_for_level: Get available columns for a specific level
+    - build_cascade_join_sql: Build SQL with cascading JOINs for multi-level filtering
 """
 
 from datetime import datetime
-from typing import Any
+from typing import Any, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from tacoreader.dataset import TacoDataset
+
+
+# ============================================================================
+# LEVEL HELPERS (Multi-level filtering support)
+# ============================================================================
+
+
+def validate_level_exists(dataset: "TacoDataset", level: int) -> None:
+    """
+    Validate that a specific level exists in the dataset.
+
+    Checks if the levelN view exists in consolidated_files.
+    Level 0 always exists by definition.
+
+    Args:
+        dataset: TacoDataset instance
+        level: Level number to validate (0, 1, 2, ...)
+
+    Raises:
+        ValueError: If level does not exist in dataset
+
+    Examples:
+        >>> validate_level_exists(dataset, 1)  # OK if level1 exists
+        >>> validate_level_exists(dataset, 5)  # ValueError if max level is 2
+    """
+    # Level 0 always exists
+    if level == 0:
+        return
+
+    level_key = f"level{level}"
+
+    if level_key not in dataset._consolidated_files:
+        max_level = dataset.pit_schema.max_depth()
+        raise ValueError(
+            f"Level {level} does not exist in dataset.\n"
+            f"Available levels: 0 to {max_level}\n"
+            f"Available views: {list(dataset._consolidated_files.keys())}"
+        )
+
+
+def get_columns_for_level(dataset: "TacoDataset", level: int) -> list[str]:
+    """
+    Get available column names for a specific level.
+
+    Queries DuckDB to get actual columns from the levelN view.
+    Includes both metadata columns and internal columns.
+
+    Args:
+        dataset: TacoDataset instance
+        level: Level number (0, 1, 2, ...)
+
+    Returns:
+        List of column names available at that level
+
+    Raises:
+        ValueError: If level does not exist
+
+    Examples:
+        >>> cols = get_columns_for_level(dataset, 1)
+        >>> print(cols)
+        ['id', 'type', 'stac:bbox', 'stac:time_start', 'internal:parent_id', ...]
+    """
+    validate_level_exists(dataset, level)
+
+    level_view = f"level{level}" if level > 0 else "data"
+
+    # Query DuckDB for column names
+    result = dataset._duckdb.execute(
+        f"DESCRIBE {level_view}"
+    ).fetchall()
+
+    # Result is list of tuples: (column_name, column_type, null, key, default, extra)
+    return [row[0] for row in result]
+
+
+def build_cascade_join_sql(
+    current_view: str,
+    target_level: int,
+    where_clause: str,
+    format_type: str = "zip"
+) -> str:
+    """
+    Build SQL with cascading JOINs from level0 to target level.
+
+    Creates INNER JOINs connecting level0 → level1 → level2 → ... → target_level
+    using internal:parent_id foreign keys. Always returns DISTINCT level0 samples.
+
+    JOIN strategy varies by format:
+    - ZIP/FOLDER: parent_id references parent's ID (string)
+    - TacoCat: parent_id is local index + source_file for disambiguation
+
+    Hierarchy structure:
+        Level0 (id: "sample_001")
+          └── Level1 (id: "s2_l1c", parent_id: "sample_001")
+               └── Level2 (id: "band_B04", parent_id: "s2_l1c")
+
+    Args:
+        current_view: Current view name (e.g., "data" or "view_abc123")
+        target_level: Level where filter will be applied (1, 2, 3, ...)
+        where_clause: SQL WHERE clause to apply (without "WHERE" keyword)
+        format_type: Dataset format ("zip", "folder", or "tacocat")
+
+    Returns:
+        Complete SQL query string with JOINs and WHERE clause
+
+    Examples:
+        >>> # Filter by level1 metadata (ZIP format)
+        >>> sql = build_cascade_join_sql(
+        ...     "data",
+        ...     1,
+        ...     'ST_Within(ST_GeomFromWKB(l1."stac:bbox"), ST_MakeEnvelope(...))',
+        ...     "zip"
+        ... )
+        >>> print(sql)
+        SELECT DISTINCT l0.*
+        FROM data l0
+        INNER JOIN level1 l1 ON l1."internal:parent_id" = l0.id
+        WHERE ST_Within(ST_GeomFromWKB(l1."stac:bbox"), ...)
+
+        >>> # Filter by level1 metadata (TacoCat format)
+        >>> sql = build_cascade_join_sql(
+        ...     "data",
+        ...     1,
+        ...     'l1.id LIKE "l3_swot%"',
+        ...     "tacocat"
+        ... )
+        >>> print(sql)
+        SELECT DISTINCT l0.*
+        FROM data l0
+        INNER JOIN level1 l1 
+          ON l1."internal:parent_id" = l0."internal:parent_id"
+         AND l1."internal:source_file" = l0."internal:source_file"
+        WHERE l1.id LIKE "l3_swot%"
+    """
+    if target_level == 0:
+        # No JOINs needed - filter directly on level0
+        return f"""
+            SELECT *
+            FROM {current_view}
+            WHERE {where_clause}
+        """
+
+    # Build cascading JOINs
+    joins = []
+
+    # First JOIN: current_view (level0) → level1
+    if format_type == "tacocat":
+        # TacoCat: parent_id is local index, need source_file for disambiguation
+        joins.append(
+            f'INNER JOIN level1 l1\n'
+            f'      ON l1."internal:parent_id" = l0."internal:parent_id"\n'
+            f'     AND l1."internal:source_file" = l0."internal:source_file"'
+        )
+    else:
+        # ZIP/FOLDER: parent_id references parent's ID string
+        joins.append(
+            f'INNER JOIN level1 l1 ON l1."internal:parent_id" = l0.id'
+        )
+
+    # Subsequent JOINs: level1 → level2 → level3 ...
+    for level in range(2, target_level + 1):
+        prev_level = level - 1
+        joins.append(
+            f'INNER JOIN level{level} l{level} '
+            f'ON l{level}."internal:parent_id" = l{prev_level}.id'
+        )
+
+    join_clause = "\n    ".join(joins)
+
+    # Build complete query
+    return f"""
+        SELECT DISTINCT l0.*
+        FROM {current_view} l0
+        {join_clause}
+        WHERE {where_clause}
+    """
 
 
 # ============================================================================
@@ -393,7 +575,7 @@ def geojson_to_wkt(geojson: dict) -> str:
 
 
 def build_bbox_sql(
-    minx: float, miny: float, maxx: float, maxy: float, geometry_col: str
+    minx: float, miny: float, maxx: float, maxy: float, geometry_col: str, level: int = 0
 ) -> str:
     """
     Build SQL for bounding box filter.
@@ -411,23 +593,32 @@ def build_bbox_sql(
         maxx: Maximum longitude/X coordinate
         maxy: Maximum latitude/Y coordinate
         geometry_col: Name of WKB geometry column
+        level: Level where the geometry column exists (0, 1, 2, ...)
 
     Returns:
         SQL WHERE clause (without "WHERE" keyword)
 
     Examples:
-        >>> build_bbox_sql(-81, -18, -68, 0, "istac:geometry")
+        >>> build_bbox_sql(-81, -18, -68, 0, "istac:geometry", level=0)
         'ST_Within(ST_GeomFromWKB("istac:geometry"), ST_MakeEnvelope(-81.0, -18.0, -68.0, 0.0))'
+        >>> build_bbox_sql(-81, -18, -68, 0, "stac:bbox", level=1)
+        'ST_Within(ST_GeomFromWKB(l1."stac:bbox"), ST_MakeEnvelope(-81.0, -18.0, -68.0, 0.0))'
     """
+    # Prefix column with level alias if level > 0
+    if level > 0:
+        col_ref = f'l{level}."{geometry_col}"'
+    else:
+        col_ref = f'"{geometry_col}"'
+
     return (
         f"ST_Within("
-        f'ST_GeomFromWKB("{geometry_col}"), '
+        f'ST_GeomFromWKB({col_ref}), '
         f"ST_MakeEnvelope({float(minx)}, {float(miny)}, {float(maxx)}, {float(maxy)})"
         f")"
     )
 
 
-def build_intersects_sql(geometry: Any, geometry_col: str) -> str:
+def build_intersects_sql(geometry: Any, geometry_col: str, level: int = 0) -> str:
     """
     Build SQL for geometry intersection filter.
 
@@ -437,28 +628,37 @@ def build_intersects_sql(geometry: Any, geometry_col: str) -> str:
     Args:
         geometry: User geometry (WKT string, GeoJSON dict, or shapely object)
         geometry_col: Name of WKB geometry column
+        level: Level where the geometry column exists (0, 1, 2, ...)
 
     Returns:
         SQL WHERE clause (without "WHERE" keyword)
 
     Examples:
         >>> polygon = {"type": "Polygon", "coordinates": [[...]]}
-        >>> build_intersects_sql(polygon, "istac:geometry")
+        >>> build_intersects_sql(polygon, "istac:geometry", level=0)
         'ST_Intersects(ST_GeomFromWKB("istac:geometry"), ST_GeomFromText(...))'
+        >>> build_intersects_sql(polygon, "stac:bbox", level=1)
+        'ST_Intersects(ST_GeomFromWKB(l1."stac:bbox"), ST_GeomFromText(...))'
     """
     wkt = geometry_to_wkt(geometry)
     # Escape single quotes in WKT
     wkt_escaped = wkt.replace("'", "''")
 
+    # Prefix column with level alias if level > 0
+    if level > 0:
+        col_ref = f'l{level}."{geometry_col}"'
+    else:
+        col_ref = f'"{geometry_col}"'
+
     return (
         f"ST_Intersects("
-        f'ST_GeomFromWKB("{geometry_col}"), '
+        f'ST_GeomFromWKB({col_ref}), '
         f"ST_GeomFromText('{wkt_escaped}')"
         f")"
     )
 
 
-def build_within_sql(geometry: Any, geometry_col: str) -> str:
+def build_within_sql(geometry: Any, geometry_col: str, level: int = 0) -> str:
     """
     Build SQL for within filter.
 
@@ -468,28 +668,37 @@ def build_within_sql(geometry: Any, geometry_col: str) -> str:
     Args:
         geometry: User geometry (WKT string, GeoJSON dict, or shapely object)
         geometry_col: Name of WKB geometry column
+        level: Level where the geometry column exists (0, 1, 2, ...)
 
     Returns:
         SQL WHERE clause (without "WHERE" keyword)
 
     Examples:
         >>> polygon = "POLYGON((-81 -18, -68 -18, -68 0, -81 0, -81 -18))"
-        >>> build_within_sql(polygon, "istac:geometry")
+        >>> build_within_sql(polygon, "istac:geometry", level=0)
         'ST_Within(ST_GeomFromWKB("istac:geometry"), ST_GeomFromText(...))'
+        >>> build_within_sql(polygon, "stac:bbox", level=1)
+        'ST_Within(ST_GeomFromWKB(l1."stac:bbox"), ST_GeomFromText(...))'
     """
     wkt = geometry_to_wkt(geometry)
     # Escape single quotes in WKT
     wkt_escaped = wkt.replace("'", "''")
 
+    # Prefix column with level alias if level > 0
+    if level > 0:
+        col_ref = f'l{level}."{geometry_col}"'
+    else:
+        col_ref = f'"{geometry_col}"'
+
     return (
         f"ST_Within("
-        f'ST_GeomFromWKB("{geometry_col}"), '
+        f'ST_GeomFromWKB({col_ref}), '
         f"ST_GeomFromText('{wkt_escaped}')"
         f")"
     )
 
 
-def build_datetime_sql(start: int, end: int | None, time_col: str) -> str:
+def build_datetime_sql(start: int, end: int | None, time_col: str, level: int = 0) -> str:
     """
     Build SQL for temporal filter.
 
@@ -500,19 +709,26 @@ def build_datetime_sql(start: int, end: int | None, time_col: str) -> str:
         start: Start timestamp (seconds since epoch)
         end: End timestamp (seconds since epoch) or None
         time_col: Name of time column
+        level: Level where the time column exists (0, 1, 2, ...)
 
     Returns:
         SQL WHERE clause (without "WHERE" keyword)
 
     Examples:
-        >>> build_datetime_sql(1672531200, 1704067199, "istac:time_start")
+        >>> build_datetime_sql(1672531200, 1704067199, "istac:time_start", level=0)
         '("istac:time_start" BETWEEN 1672531200 AND 1704067199)'
-        >>> build_datetime_sql(1672531200, None, "stac:time_start")
-        '("stac:time_start" = 1672531200)'
+        >>> build_datetime_sql(1672531200, None, "stac:time_start", level=1)
+        '(l1."stac:time_start" = 1672531200)'
     """
+    # Prefix column with level alias if level > 0
+    if level > 0:
+        col_ref = f'l{level}."{time_col}"'
+    else:
+        col_ref = f'"{time_col}"'
+
     if end is None:
         # Single timestamp
-        return f'("{time_col}" = {start})'
+        return f'({col_ref} = {start})'
     else:
         # Time range
-        return f'("{time_col}" BETWEEN {start} AND {end})'
+        return f'({col_ref} BETWEEN {start} AND {end})'

@@ -208,11 +208,13 @@ class TacoDataset(BaseModel):
         maxx: float,
         maxy: float,
         geometry_col: str = "auto",
+        level: int = 0,
     ) -> "TacoDataset":
         """
         Filter by bounding box (PySTAC-style).
 
         Returns samples whose geometry is within the specified bounding box.
+        When level > 0, filters level0 samples based on their children's metadata.
 
         Args:
             minx: Minimum longitude/X coordinate
@@ -220,25 +222,45 @@ class TacoDataset(BaseModel):
             maxx: Maximum longitude/X coordinate
             maxy: Maximum latitude/Y coordinate
             geometry_col: Geometry column name or "auto" for auto-detection
+            level: Level where geometry column exists (default: 0)
+                - level=0: Filter directly on level0 (standard behavior)
+                - level=1: Filter level0 samples by level1 children metadata
+                - level=2: Filter level0 samples by level2 descendants metadata
 
         Returns:
             New TacoDataset with filtered samples (still lazy)
 
+        Raises:
+            ValueError: If level does not exist or geometry column not found
+
         Example:
-            >>> # Peru bounding box
+            >>> # Standard: filter by level0 geometry
             >>> peru = dataset.filter_bbox(-81, -18, -68, 0)
             >>>
+            >>> # Multi-level: filter samples by children's geometry
+            >>> filtered = dataset.filter_bbox(-81, -18, -68, 0, level=1)
+            >>> # Returns level0 samples that have children within bbox
+            >>>
             >>> # Chain with other filters
-            >>> filtered = dataset.filter_bbox(-81, -18, -68, 0).filter_datetime("2023-01-01/2023-12-31")
+            >>> result = dataset.filter_bbox(-81, -18, -68, 0, level=1).filter_datetime("2023/2024", level=1)
         """
         from tacoreader.stac import (
+            validate_level_exists,
+            get_columns_for_level,
             detect_geometry_column,
             validate_geometry_column,
             build_bbox_sql,
+            build_cascade_join_sql,
         )
 
-        # Get current columns from the view
-        current_cols = self.data.columns
+        # Validate level exists
+        validate_level_exists(self, level)
+
+        # Get columns for target level
+        if level == 0:
+            current_cols = self.data.columns
+        else:
+            current_cols = get_columns_for_level(self, level)
 
         # Detect or validate geometry column
         if geometry_col == "auto":
@@ -251,37 +273,75 @@ class TacoDataset(BaseModel):
             )
 
         # Build SQL filter
-        sql_filter = build_bbox_sql(minx, miny, maxx, maxy, geometry_col)
+        sql_filter = build_bbox_sql(minx, miny, maxx, maxy, geometry_col, level)
 
-        # Apply filter
-        return self.sql(f"SELECT * FROM data WHERE {sql_filter}")
+        # Apply filter based on level
+        if level == 0:
+            # Standard: filter directly on current view
+            return self.sql(f"SELECT * FROM data WHERE {sql_filter}")
+        else:
+            # Multi-level: build cascading JOINs
+            full_query = build_cascade_join_sql(
+                self._view_name,
+                level,
+                sql_filter,
+                self._format
+            )
+            return self.sql(full_query)
 
-    def filter_intersects(self, geometry, geometry_col: str = "auto") -> "TacoDataset":
+    def filter_intersects(
+        self, 
+        geometry, 
+        geometry_col: str = "auto",
+        level: int = 0,
+    ) -> "TacoDataset":
         """
         Filter by geometry intersection (PySTAC-style).
 
         Returns samples whose geometry intersects with the specified geometry.
+        When level > 0, filters level0 samples based on their children's metadata.
 
         Args:
             geometry: Geometry to intersect with (WKT, GeoJSON, shapely, etc.)
             geometry_col: Geometry column name or "auto" for auto-detection
+            level: Level where geometry column exists (default: 0)
+                - level=0: Filter directly on level0 (standard behavior)
+                - level=1: Filter level0 samples by level1 children metadata
+                - level=2: Filter level0 samples by level2 descendants metadata
 
         Returns:
             New TacoDataset with filtered samples (still lazy)
 
+        Raises:
+            ValueError: If level does not exist or geometry column not found
+
         Example:
             >>> from shapely.geometry import box
             >>> aoi = box(-81, -18, -68, 0)
+            >>> 
+            >>> # Standard: filter by level0 geometry
             >>> filtered = dataset.filter_intersects(aoi)
+            >>>
+            >>> # Multi-level: filter samples by children's geometry
+            >>> filtered = dataset.filter_intersects(aoi, level=1)
         """
         from tacoreader.stac import (
+            validate_level_exists,
+            get_columns_for_level,
             detect_geometry_column,
             validate_geometry_column,
             build_intersects_sql,
+            build_cascade_join_sql,
         )
 
-        # Get current columns from the view
-        current_cols = self.data.columns
+        # Validate level exists
+        validate_level_exists(self, level)
+
+        # Get columns for target level
+        if level == 0:
+            current_cols = self.data.columns
+        else:
+            current_cols = get_columns_for_level(self, level)
 
         # Detect or validate geometry column
         if geometry_col == "auto":
@@ -294,39 +354,77 @@ class TacoDataset(BaseModel):
             )
 
         # Build SQL filter
-        sql_filter = build_intersects_sql(geometry, geometry_col)
+        sql_filter = build_intersects_sql(geometry, geometry_col, level)
 
-        # Apply filter
-        return self.sql(f"SELECT * FROM data WHERE {sql_filter}")
+        # Apply filter based on level
+        if level == 0:
+            # Standard: filter directly on current view
+            return self.sql(f"SELECT * FROM data WHERE {sql_filter}")
+        else:
+            # Multi-level: build cascading JOINs
+            full_query = build_cascade_join_sql(
+                self._view_name,
+                level,
+                sql_filter,
+                self._format
+            )
+            return self.sql(full_query)
 
-    def filter_within(self, geometry, geometry_col: str = "auto") -> "TacoDataset":
+    def filter_within(
+        self, 
+        geometry, 
+        geometry_col: str = "auto",
+        level: int = 0,
+    ) -> "TacoDataset":
         """
         Filter by geometry containment (PySTAC-style).
 
         Returns samples whose geometry is completely within the specified geometry.
         More conservative than filter_intersects.
+        When level > 0, filters level0 samples based on their children's metadata.
 
         Args:
             geometry: Geometry to check containment (WKT, GeoJSON, shapely, etc.)
             geometry_col: Geometry column name or "auto" for auto-detection
+            level: Level where geometry column exists (default: 0)
+                - level=0: Filter directly on level0 (standard behavior)
+                - level=1: Filter level0 samples by level1 children metadata
+                - level=2: Filter level0 samples by level2 descendants metadata
 
         Returns:
             New TacoDataset with filtered samples (still lazy)
+
+        Raises:
+            ValueError: If level does not exist or geometry column not found
 
         Example:
             >>> # Only samples completely within Peru
             >>> from shapely.geometry import box
             >>> peru_bbox = box(-81, -18, -68, 0)
+            >>> 
+            >>> # Standard: filter by level0 geometry
             >>> filtered = dataset.filter_within(peru_bbox)
+            >>>
+            >>> # Multi-level: filter samples by children's geometry
+            >>> filtered = dataset.filter_within(peru_bbox, level=1)
         """
         from tacoreader.stac import (
+            validate_level_exists,
+            get_columns_for_level,
             detect_geometry_column,
             validate_geometry_column,
             build_within_sql,
+            build_cascade_join_sql,
         )
 
-        # Get current columns from the view
-        current_cols = self.data.columns
+        # Validate level exists
+        validate_level_exists(self, level)
+
+        # Get columns for target level
+        if level == 0:
+            current_cols = self.data.columns
+        else:
+            current_cols = get_columns_for_level(self, level)
 
         # Detect or validate geometry column
         if geometry_col == "auto":
@@ -339,17 +437,34 @@ class TacoDataset(BaseModel):
             )
 
         # Build SQL filter
-        sql_filter = build_within_sql(geometry, geometry_col)
+        sql_filter = build_within_sql(geometry, geometry_col, level)
 
-        # Apply filter
-        return self.sql(f"SELECT * FROM data WHERE {sql_filter}")
+        # Apply filter based on level
+        if level == 0:
+            # Standard: filter directly on current view
+            return self.sql(f"SELECT * FROM data WHERE {sql_filter}")
+        else:
+            # Multi-level: build cascading JOINs
+            full_query = build_cascade_join_sql(
+                self._view_name,
+                level,
+                sql_filter,
+                self._format
+            )
+            return self.sql(full_query)
 
-    def filter_datetime(self, datetime_range, time_col: str = "auto") -> "TacoDataset":
+    def filter_datetime(
+        self, 
+        datetime_range, 
+        time_col: str = "auto",
+        level: int = 0,
+    ) -> "TacoDataset":
         """
         Filter by temporal range (PySTAC-style).
 
         Returns samples within the specified time range.
         Always uses time_start column.
+        When level > 0, filters level0 samples based on their children's metadata.
 
         Args:
             datetime_range: Temporal specification:
@@ -357,26 +472,45 @@ class TacoDataset(BaseModel):
                 - Single datetime: datetime(2023, 1, 1)
                 - Datetime tuple: (start_dt, end_dt)
             time_col: Time column name or "auto" for auto-detection
+            level: Level where time column exists (default: 0)
+                - level=0: Filter directly on level0 (standard behavior)
+                - level=1: Filter level0 samples by level1 children metadata
+                - level=2: Filter level0 samples by level2 descendants metadata
 
         Returns:
             New TacoDataset with filtered samples (still lazy)
 
+        Raises:
+            ValueError: If level does not exist or time column not found
+
         Example:
-            >>> # String range (PySTAC-style)
+            >>> # Standard: filter by level0 time
             >>> year_2023 = dataset.filter_datetime("2023-01-01/2023-12-31")
             >>>
+            >>> # Multi-level: filter samples by children's time
+            >>> filtered = dataset.filter_datetime("2023-01-01/2023-12-31", level=1)
+            >>>
             >>> # Chain with spatial filter
-            >>> result = dataset.filter_bbox(-81, -18, -68, 0).filter_datetime("2023-01-01/2023-12-31")
+            >>> result = dataset.filter_bbox(-81, -18, -68, 0, level=1).filter_datetime("2023/2024", level=1)
         """
         from tacoreader.stac import (
+            validate_level_exists,
+            get_columns_for_level,
             detect_time_column,
             validate_time_column,
             parse_datetime,
             build_datetime_sql,
+            build_cascade_join_sql,
         )
 
-        # Get current columns from the view
-        current_cols = self.data.columns
+        # Validate level exists
+        validate_level_exists(self, level)
+
+        # Get columns for target level
+        if level == 0:
+            current_cols = self.data.columns
+        else:
+            current_cols = get_columns_for_level(self, level)
 
         # Detect or validate time column
         if time_col == "auto":
@@ -390,10 +524,21 @@ class TacoDataset(BaseModel):
         start, end = parse_datetime(datetime_range)
 
         # Build SQL filter
-        sql_filter = build_datetime_sql(start, end, time_col)
+        sql_filter = build_datetime_sql(start, end, time_col, level)
 
-        # Apply filter
-        return self.sql(f"SELECT * FROM data WHERE {sql_filter}")
+        # Apply filter based on level
+        if level == 0:
+            # Standard: filter directly on current view
+            return self.sql(f"SELECT * FROM data WHERE {sql_filter}")
+        else:
+            # Multi-level: build cascading JOINs
+            full_query = build_cascade_join_sql(
+                self._view_name,
+                level,
+                sql_filter,
+                self._format
+            )
+            return self.sql(full_query)
 
     # ========================================================================
     # REPRESENTATION

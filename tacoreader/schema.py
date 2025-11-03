@@ -393,7 +393,8 @@ class PITSchema:
             >>> print(original.root["n"])
             1000
         """
-        schema_dict = self.to_dict()
+        import copy
+        schema_dict = copy.deepcopy(self.to_dict())
         schema_dict["root"]["n"] = new_n
         return PITSchema(schema_dict)
 
