@@ -12,7 +12,6 @@ from pydantic import BaseModel, ConfigDict, PrivateAttr
 
 from tacoreader.schema import PITSchema
 
-
 # ============================================================================
 # TACODATASET
 # ============================================================================
@@ -245,12 +244,12 @@ class TacoDataset(BaseModel):
             >>> result = dataset.filter_bbox(-81, -18, -68, 0, level=1).filter_datetime("2023/2024", level=1)
         """
         from tacoreader.stac import (
-            validate_level_exists,
-            get_columns_for_level,
-            detect_geometry_column,
-            validate_geometry_column,
             build_bbox_sql,
             build_cascade_join_sql,
+            detect_geometry_column,
+            get_columns_for_level,
+            validate_geometry_column,
+            validate_level_exists,
         )
 
         # Validate level exists
@@ -282,16 +281,13 @@ class TacoDataset(BaseModel):
         else:
             # Multi-level: build cascading JOINs
             full_query = build_cascade_join_sql(
-                self._view_name,
-                level,
-                sql_filter,
-                self._format
+                self._view_name, level, sql_filter, self._format
             )
             return self.sql(full_query)
 
     def filter_intersects(
-        self, 
-        geometry, 
+        self,
+        geometry,
         geometry_col: str = "auto",
         level: int = 0,
     ) -> "TacoDataset":
@@ -318,7 +314,7 @@ class TacoDataset(BaseModel):
         Example:
             >>> from shapely.geometry import box
             >>> aoi = box(-81, -18, -68, 0)
-            >>> 
+            >>>
             >>> # Standard: filter by level0 geometry
             >>> filtered = dataset.filter_intersects(aoi)
             >>>
@@ -326,12 +322,12 @@ class TacoDataset(BaseModel):
             >>> filtered = dataset.filter_intersects(aoi, level=1)
         """
         from tacoreader.stac import (
-            validate_level_exists,
-            get_columns_for_level,
-            detect_geometry_column,
-            validate_geometry_column,
-            build_intersects_sql,
             build_cascade_join_sql,
+            build_intersects_sql,
+            detect_geometry_column,
+            get_columns_for_level,
+            validate_geometry_column,
+            validate_level_exists,
         )
 
         # Validate level exists
@@ -363,16 +359,13 @@ class TacoDataset(BaseModel):
         else:
             # Multi-level: build cascading JOINs
             full_query = build_cascade_join_sql(
-                self._view_name,
-                level,
-                sql_filter,
-                self._format
+                self._view_name, level, sql_filter, self._format
             )
             return self.sql(full_query)
 
     def filter_within(
-        self, 
-        geometry, 
+        self,
+        geometry,
         geometry_col: str = "auto",
         level: int = 0,
     ) -> "TacoDataset":
@@ -401,7 +394,7 @@ class TacoDataset(BaseModel):
             >>> # Only samples completely within Peru
             >>> from shapely.geometry import box
             >>> peru_bbox = box(-81, -18, -68, 0)
-            >>> 
+            >>>
             >>> # Standard: filter by level0 geometry
             >>> filtered = dataset.filter_within(peru_bbox)
             >>>
@@ -409,12 +402,12 @@ class TacoDataset(BaseModel):
             >>> filtered = dataset.filter_within(peru_bbox, level=1)
         """
         from tacoreader.stac import (
-            validate_level_exists,
-            get_columns_for_level,
-            detect_geometry_column,
-            validate_geometry_column,
-            build_within_sql,
             build_cascade_join_sql,
+            build_within_sql,
+            detect_geometry_column,
+            get_columns_for_level,
+            validate_geometry_column,
+            validate_level_exists,
         )
 
         # Validate level exists
@@ -446,16 +439,13 @@ class TacoDataset(BaseModel):
         else:
             # Multi-level: build cascading JOINs
             full_query = build_cascade_join_sql(
-                self._view_name,
-                level,
-                sql_filter,
-                self._format
+                self._view_name, level, sql_filter, self._format
             )
             return self.sql(full_query)
 
     def filter_datetime(
-        self, 
-        datetime_range, 
+        self,
+        datetime_range,
         time_col: str = "auto",
         level: int = 0,
     ) -> "TacoDataset":
@@ -494,13 +484,13 @@ class TacoDataset(BaseModel):
             >>> result = dataset.filter_bbox(-81, -18, -68, 0, level=1).filter_datetime("2023/2024", level=1)
         """
         from tacoreader.stac import (
-            validate_level_exists,
-            get_columns_for_level,
-            detect_time_column,
-            validate_time_column,
-            parse_datetime,
-            build_datetime_sql,
             build_cascade_join_sql,
+            build_datetime_sql,
+            detect_time_column,
+            get_columns_for_level,
+            parse_datetime,
+            validate_level_exists,
+            validate_time_column,
         )
 
         # Validate level exists
@@ -533,10 +523,7 @@ class TacoDataset(BaseModel):
         else:
             # Multi-level: build cascading JOINs
             full_query = build_cascade_join_sql(
-                self._view_name,
-                level,
-                sql_filter,
-                self._format
+                self._view_name, level, sql_filter, self._format
             )
             return self.sql(full_query)
 
@@ -569,7 +556,7 @@ class TacoDataset(BaseModel):
                 f"{spatial[2]:.1f}, {spatial[3]:.1f}]"
             )
 
-        if "temporal" in self.extent and self.extent["temporal"]:
+        if self.extent.get("temporal"):
             temporal = self.extent["temporal"]
             lines.append(f"├── Temporal Extent: {temporal[0]} -> {temporal[1]}")
 

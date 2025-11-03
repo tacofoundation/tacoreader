@@ -20,7 +20,6 @@ from tacoreader.dataset import TacoDataset
 from tacoreader.schema import PITSchema
 from tacoreader.utils.vsi import to_vsi_root
 
-
 # ============================================================================
 # ABSTRACT BASE CLASS
 # ============================================================================

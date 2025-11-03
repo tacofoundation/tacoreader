@@ -68,7 +68,6 @@ Example:
 
 from typing import Literal, TypedDict
 
-
 # ============================================================================
 # TYPE DEFINITIONS
 # ============================================================================
@@ -340,7 +339,7 @@ class PITSchema:
                 return False
 
             # Check each pattern matches
-            for self_p, other_p in zip(self_patterns, other_patterns):
+            for self_p, other_p in zip(self_patterns, other_patterns, strict=False):
                 # Type arrays must match exactly
                 if self_p["type"] != other_p["type"]:
                     return False
@@ -394,6 +393,7 @@ class PITSchema:
             1000
         """
         import copy
+
         schema_dict = copy.deepcopy(self.to_dict())
         schema_dict["root"]["n"] = new_n
         return PITSchema(schema_dict)

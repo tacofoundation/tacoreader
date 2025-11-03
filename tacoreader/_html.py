@@ -141,7 +141,7 @@ def render_hierarchy_section(dataset: "TacoDataset") -> str:
             <details class="taco-sub-details">
                 <summary>▶ Show IDs ({len(ids)})</summary>
                 <ul class="taco-id-list">
-                    {''.join(f'<li><span class="taco-id">{id_}</span> ({typ})</li>' for id_, typ in zip(ids, types))}
+                    {''.join(f'<li><span class="taco-id">{id_}</span> ({typ})</li>' for id_, typ in zip(ids, types, strict=False))}
                 </ul>
             </details>
             """
@@ -201,7 +201,7 @@ def render_metadata_section(dataset: "TacoDataset") -> str:
         )
 
     # Add temporal extent if available
-    if "temporal" in dataset.extent and dataset.extent["temporal"]:
+    if dataset.extent.get("temporal"):
         temporal = dataset.extent["temporal"]
         attrs.append(("temporal", f"{temporal[0]} → {temporal[1]}"))
 
@@ -316,7 +316,7 @@ def render_graph(dataset: "TacoDataset") -> str:
         "level": 0,
         "x": START_X - NODE_SPACING,
         "y": level0_y,
-        "label": f"Sample 0",
+        "label": "Sample 0",
         "color": get_node_color(root["type"]),
     }
     nodes.append(sample_left)

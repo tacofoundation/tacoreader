@@ -62,7 +62,7 @@ def concat(datasets: list["TacoDataset"], verbose: bool = False) -> "TacoDataset
     consolidated_schema = _merge_schemas([ds.schema for ds in datasets])
 
     if verbose:
-        print(f"\nConsolidating levels...")
+        print("\nConsolidating levels...")
 
     cache_dir = Path(tempfile.gettempdir()) / f"tacoreader-concat-{uuid.uuid4()}"
     cache_dir.mkdir(parents=True, exist_ok=True)

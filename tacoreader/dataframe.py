@@ -16,7 +16,6 @@ import numpy as np
 import obstore as obs
 import polars as pl
 
-
 # ============================================================================
 # TACODATAFRAME
 # ============================================================================
@@ -407,13 +406,13 @@ class TacoDataFrame:
         Returns:
             TacoDataFrame with child samples
         """
+        from tacoreader.utils.format import is_remote
         from tacoreader.utils.vsi import (
-            parse_vsi_subfile,
-            strip_vsi_prefix,
             create_obstore_from_url,
             extract_path_from_url,
+            parse_vsi_subfile,
+            strip_vsi_prefix,
         )
-        from tacoreader.utils.format import is_remote
 
         vsi_path = row["internal:gdal_vsi"]
 

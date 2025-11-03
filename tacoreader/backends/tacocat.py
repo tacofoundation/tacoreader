@@ -68,7 +68,6 @@ from obstore.store import from_url
 
 from tacoreader.backends.base import TacoBackend
 
-
 # ============================================================================
 # CONSTANTS
 # ============================================================================
@@ -488,7 +487,7 @@ class TacoCatBackend(TacoBackend):
                 result = obs.get_range(store, "", start=0, length=TOTAL_HEADER_SIZE)
                 header_bytes = bytes(result)
             except Exception as e:
-                raise IOError(f"Failed to read TacoCat header from {path}: {e}")
+                raise OSError(f"Failed to read TacoCat header from {path}: {e}")
 
         if len(header_bytes) < TOTAL_HEADER_SIZE:
             raise ValueError(
@@ -571,7 +570,7 @@ class TacoCatBackend(TacoBackend):
             table = pq.read_table(reader)
             return cast(pl.DataFrame, pl.from_arrow(table))
         except Exception as e:
-            raise IOError(
+            raise OSError(
                 f"Failed to read Parquet from TacoCat {path} "
                 f"at offset {offset}, size {size}: {e}"
             )

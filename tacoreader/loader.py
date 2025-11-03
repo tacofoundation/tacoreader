@@ -7,11 +7,10 @@ and dispatches to appropriate backend.
 
 from pathlib import Path
 
-from tacoreader.backends import load_dataset, create_backend
+from tacoreader.backends import create_backend, load_dataset
 from tacoreader.dataset import TacoDataset
 from tacoreader.utils.format import detect_format
 from tacoreader.utils.vsi import to_vsi_root
-
 
 # ============================================================================
 # PUBLIC API

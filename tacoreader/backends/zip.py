@@ -53,7 +53,6 @@ from obstore.store import from_url
 
 from tacoreader.backends.base import TacoBackend
 
-
 # ============================================================================
 # ZIP BACKEND
 # ============================================================================

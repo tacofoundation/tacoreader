@@ -234,12 +234,7 @@ def extract_path_from_url(url: str) -> str:
         ''
     """
     # S3 protocol: extract path after bucket name
-    if url.startswith("s3://"):
-        parts = url[5:].split("/", 1)
-        return parts[1] if len(parts) > 1 else ""
-
-    # Google Cloud Storage protocol: extract path after bucket name
-    elif url.startswith("gs://"):
+    if url.startswith("s3://") or url.startswith("gs://"):
         parts = url[5:].split("/", 1)
         return parts[1] if len(parts) > 1 else ""
 

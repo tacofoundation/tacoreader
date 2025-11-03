@@ -47,7 +47,6 @@ from obstore.store import from_url
 
 from tacoreader.backends.base import TacoBackend
 
-
 # ============================================================================
 # FOLDER BACKEND
 # ============================================================================
@@ -148,7 +147,7 @@ class FolderBackend(TacoBackend):
                 f"Invalid COLLECTION.json in {path}: {e.msg}", e.doc, e.pos
             )
         except Exception as e:
-            raise IOError(f"Failed to read COLLECTION.json from {path}: {e}")
+            raise OSError(f"Failed to read COLLECTION.json from {path}: {e}")
 
     def cache_metadata_files(self, path: str, cache_dir: Path) -> dict[str, str]:
         """

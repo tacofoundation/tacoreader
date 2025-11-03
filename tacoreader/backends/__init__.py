@@ -7,11 +7,10 @@ Factory functions for creating backend instances.
 from pathlib import Path
 
 from tacoreader.backends.base import TacoBackend
-from tacoreader.backends.zip import ZipBackend
 from tacoreader.backends.folder import FolderBackend
 from tacoreader.backends.tacocat import TacoCatBackend
+from tacoreader.backends.zip import ZipBackend
 from tacoreader.dataset import TacoDataset
-
 
 # ============================================================================
 # FACTORY FUNCTIONS
@@ -75,10 +74,10 @@ def load_dataset(
 
 
 __all__ = [
-    "TacoBackend",
-    "ZipBackend",
     "FolderBackend",
+    "TacoBackend",
     "TacoCatBackend",
+    "ZipBackend",
     "create_backend",
     "load_dataset",
 ]

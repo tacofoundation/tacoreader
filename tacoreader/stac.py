@@ -17,7 +17,7 @@ Main functions:
 """
 
 from datetime import datetime
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from tacoreader.dataset import TacoDataset
@@ -88,19 +88,14 @@ def get_columns_for_level(dataset: "TacoDataset", level: int) -> list[str]:
     level_view = f"level{level}" if level > 0 else "data"
 
     # Query DuckDB for column names
-    result = dataset._duckdb.execute(
-        f"DESCRIBE {level_view}"
-    ).fetchall()
+    result = dataset._duckdb.execute(f"DESCRIBE {level_view}").fetchall()
 
     # Result is list of tuples: (column_name, column_type, null, key, default, extra)
     return [row[0] for row in result]
 
 
 def build_cascade_join_sql(
-    current_view: str,
-    target_level: int,
-    where_clause: str,
-    format_type: str = "zip"
+    current_view: str, target_level: int, where_clause: str, format_type: str = "zip"
 ) -> str:
     """
     Build SQL with cascading JOINs from level0 to target level.
@@ -150,7 +145,7 @@ def build_cascade_join_sql(
         >>> print(sql)
         SELECT DISTINCT l0.*
         FROM data l0
-        INNER JOIN level1 l1 
+        INNER JOIN level1 l1
           ON l1."internal:parent_id" = l0."internal:parent_id"
          AND l1."internal:source_file" = l0."internal:source_file"
         WHERE l1.id LIKE "l3_swot%"
@@ -170,21 +165,19 @@ def build_cascade_join_sql(
     if format_type == "tacocat":
         # TacoCat: parent_id is local index, need source_file for disambiguation
         joins.append(
-            f'INNER JOIN level1 l1\n'
-            f'      ON l1."internal:parent_id" = l0."internal:parent_id"\n'
-            f'     AND l1."internal:source_file" = l0."internal:source_file"'
+            "INNER JOIN level1 l1\n"
+            '      ON l1."internal:parent_id" = l0."internal:parent_id"\n'
+            '     AND l1."internal:source_file" = l0."internal:source_file"'
         )
     else:
         # ZIP/FOLDER: parent_id references parent's ID string
-        joins.append(
-            f'INNER JOIN level1 l1 ON l1."internal:parent_id" = l0.id'
-        )
+        joins.append('INNER JOIN level1 l1 ON l1."internal:parent_id" = l0.id')
 
     # Subsequent JOINs: level1 → level2 → level3 ...
     for level in range(2, target_level + 1):
         prev_level = level - 1
         joins.append(
-            f'INNER JOIN level{level} l{level} '
+            f"INNER JOIN level{level} l{level} "
             f'ON l{level}."internal:parent_id" = l{prev_level}.id'
         )
 
@@ -437,7 +430,7 @@ def parse_datetime(
         end_ts = int(end_dt.timestamp())
 
         if start_ts > end_ts:
-            raise ValueError(f"Invalid datetime range: start > end")
+            raise ValueError("Invalid datetime range: start > end")
 
         return start_ts, end_ts
 
@@ -575,7 +568,12 @@ def geojson_to_wkt(geojson: dict) -> str:
 
 
 def build_bbox_sql(
-    minx: float, miny: float, maxx: float, maxy: float, geometry_col: str, level: int = 0
+    minx: float,
+    miny: float,
+    maxx: float,
+    maxy: float,
+    geometry_col: str,
+    level: int = 0,
 ) -> str:
     """
     Build SQL for bounding box filter.
@@ -612,7 +610,7 @@ def build_bbox_sql(
 
     return (
         f"ST_Within("
-        f'ST_GeomFromWKB({col_ref}), '
+        f"ST_GeomFromWKB({col_ref}), "
         f"ST_MakeEnvelope({float(minx)}, {float(miny)}, {float(maxx)}, {float(maxy)})"
         f")"
     )
@@ -652,7 +650,7 @@ def build_intersects_sql(geometry: Any, geometry_col: str, level: int = 0) -> st
 
     return (
         f"ST_Intersects("
-        f'ST_GeomFromWKB({col_ref}), '
+        f"ST_GeomFromWKB({col_ref}), "
         f"ST_GeomFromText('{wkt_escaped}')"
         f")"
     )
@@ -692,13 +690,15 @@ def build_within_sql(geometry: Any, geometry_col: str, level: int = 0) -> str:
 
     return (
         f"ST_Within("
-        f'ST_GeomFromWKB({col_ref}), '
+        f"ST_GeomFromWKB({col_ref}), "
         f"ST_GeomFromText('{wkt_escaped}')"
         f")"
     )
 
 
-def build_datetime_sql(start: int, end: int | None, time_col: str, level: int = 0) -> str:
+def build_datetime_sql(
+    start: int, end: int | None, time_col: str, level: int = 0
+) -> str:
     """
     Build SQL for temporal filter.
 
@@ -728,7 +728,7 @@ def build_datetime_sql(start: int, end: int | None, time_col: str, level: int = 
 
     if end is None:
         # Single timestamp
-        return f'({col_ref} = {start})'
+        return f"({col_ref} = {start})"
     else:
         # Time range
-        return f'({col_ref} BETWEEN {start} AND {end})'
+        return f"({col_ref} BETWEEN {start} AND {end})"
