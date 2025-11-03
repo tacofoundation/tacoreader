@@ -17,6 +17,27 @@ import obstore as obs
 import polars as pl
 
 # ============================================================================
+# PROTECTED COLUMNS
+# ============================================================================
+
+# Columns that cannot be modified (critical for TACO navigation)
+PROTECTED_COLUMNS = frozenset(
+    {
+        # Core columns (modifying breaks references and navigation)
+        "id",
+        "type",
+        # Internal columns (modifying breaks hierarchical navigation)
+        "internal:parent_id",
+        "internal:offset",
+        "internal:size",
+        "internal:gdal_vsi",
+        "internal:source_file",
+        "internal:relative_path",
+    }
+)
+
+
+# ============================================================================
 # TACODATAFRAME
 # ============================================================================
 
@@ -29,9 +50,14 @@ class TacoDataFrame:
     - Hierarchical navigation via read() method
     - Statistics aggregation via stats_*() methods
     - Standard DataFrame operations (head, tail, shape, etc.)
+    - Column modification with protection for critical columns
 
     The underlying DataFrame is always materialized in memory (Polars).
     Navigation to child levels loads child metadata on-demand.
+
+    Protected columns (cannot be modified):
+        - id, type: Core columns required for navigation
+        - internal:*: All internal columns used for hierarchical navigation
 
     Attributes:
         columns: Column names from underlying DataFrame
@@ -48,6 +74,12 @@ class TacoDataFrame:
         >>>
         >>> # Get file path
         >>> vsi_path = tdf.read(5)  # Returns str if FILE type
+        >>>
+        >>> # Modify columns (pandas-style, in-place)
+        >>> tdf["cloud_cover"] = tdf["cloud_cover"] * 100
+        >>>
+        >>> # Modify columns (Polars-style, immutable)
+        >>> tdf = tdf.with_column("timestamp", pl.col("timestamp").cast(pl.Datetime))
         >>>
         >>> # Statistics
         >>> mean_values = tdf.stats_mean()
@@ -128,6 +160,57 @@ class TacoDataFrame:
             DataFrame(...)
         """
         return self._data[key]
+
+    def __setitem__(self, key: str, value):
+        """
+        Modify column (in-place mutation, pandas-style).
+
+        Allows modifying metadata columns but protects critical columns
+        required for hierarchical navigation. For immutable operations,
+        use .with_column() instead.
+
+        Protected columns (cannot be modified):
+            - id, type: Core navigation columns
+            - internal:*: All internal columns
+
+        Args:
+            key: Column name to modify
+            value: New values (Polars Series, list, numpy array, etc.)
+
+        Raises:
+            ValueError: If attempting to modify protected column
+
+        Examples:
+            >>> # Convert timestamp string to datetime
+            >>> tdf["timestamp"] = pd.to_datetime(tdf["timestamp"])
+            >>>
+            >>> # Scale values
+            >>> tdf["cloud_cover"] = tdf["cloud_cover"] * 100
+            >>>
+            >>> # Add new column
+            >>> tdf["normalized"] = tdf["value"] / tdf["value"].max()
+            >>>
+            >>> # PROTECTED: Cannot modify critical columns
+            >>> tdf["id"] = "new_id"  # ValueError!
+            >>> tdf["internal:offset"] = 0  # ValueError!
+        """
+        # Check if column is protected
+        if key in PROTECTED_COLUMNS or key.startswith("internal:"):
+            raise ValueError(
+                f"Cannot modify protected column: '{key}'\n"
+                f"Protected columns are required for hierarchical navigation:\n"
+                f"  - Core: id, type\n"
+                f"  - Internal: internal:parent_id, internal:offset, internal:size, "
+                f"internal:gdal_vsi, internal:source_file, internal:relative_path\n"
+                f"To create derived columns, use a different name."
+            )
+
+        # Convert to Polars Series if needed
+        if isinstance(value, pl.Series):
+            self._data = self._data.with_columns(value.alias(key))
+        else:
+            # Handle pandas Series, numpy arrays, lists, etc.
+            self._data = self._data.with_columns(pl.Series(key, value))
 
     # ========================================================================
     # DATAFRAME PROPERTIES
@@ -320,6 +403,77 @@ class TacoDataFrame:
         sorted_df = self._data.sort(by, *args, **kwargs)
         return TacoDataFrame(
             data=sorted_df,
+            format_type=self._format_type,
+            consolidated_files=self._consolidated_files,
+        )
+
+    def with_column(self, name: str, expr) -> "TacoDataFrame":
+        """
+        Add or replace column (immutable, Polars-style).
+
+        Returns new TacoDataFrame with modified column, leaving original unchanged.
+        Protects critical columns required for hierarchical navigation.
+
+        This is the recommended way to modify columns as it follows Polars'
+        functional paradigm and prevents accidental mutations.
+
+        Protected columns (cannot be modified):
+            - id, type: Core navigation columns
+            - internal:*: All internal columns
+
+        Args:
+            name: Column name to add/replace
+            expr: Polars expression, Series, or values
+
+        Returns:
+            New TacoDataFrame with modified column
+
+        Raises:
+            ValueError: If attempting to modify protected column
+
+        Examples:
+            >>> # Cast column type (Polars expression)
+            >>> tdf = tdf.with_column("timestamp", pl.col("timestamp").cast(pl.Datetime))
+            >>>
+            >>> # Add computed column
+            >>> tdf = tdf.with_column("normalized", pl.col("value") / pl.col("value").max())
+            >>>
+            >>> # Replace with new values (Series or list)
+            >>> tdf = tdf.with_column("cloud_cover", pl.Series([10, 20, 30]))
+            >>>
+            >>> # Chain operations
+            >>> tdf = (tdf
+            ...     .with_column("timestamp", pl.col("timestamp").cast(pl.Datetime))
+            ...     .with_column("cloud_cover", pl.col("cloud_cover") * 100)
+            ... )
+            >>>
+            >>> # PROTECTED: Cannot modify critical columns
+            >>> tdf = tdf.with_column("id", "new_id")  # ValueError!
+        """
+        # Check if column is protected
+        if name in PROTECTED_COLUMNS or name.startswith("internal:"):
+            raise ValueError(
+                f"Cannot modify protected column: '{name}'\n"
+                f"Protected columns are required for hierarchical navigation:\n"
+                f"  - Core: id, type\n"
+                f"  - Internal: internal:parent_id, internal:offset, internal:size, "
+                f"internal:gdal_vsi, internal:source_file, internal:relative_path\n"
+                f"To create derived columns, use a different name."
+            )
+
+        # Handle different input types
+        if isinstance(expr, pl.Expr):
+            # Polars expression: pl.col("x") * 2
+            new_data = self._data.with_columns(expr.alias(name))
+        elif isinstance(expr, pl.Series):
+            # Polars Series
+            new_data = self._data.with_columns(expr.alias(name))
+        else:
+            # List, numpy array, etc.
+            new_data = self._data.with_columns(pl.Series(name, expr))
+
+        return TacoDataFrame(
+            data=new_data,
             format_type=self._format_type,
             consolidated_files=self._consolidated_files,
         )

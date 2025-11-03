@@ -263,13 +263,14 @@ class TacoDataset(BaseModel):
 
         # Detect or validate geometry column
         if geometry_col == "auto":
-            detected = detect_geometry_column(current_cols)
-            geometry_col = detected
+            geometry_col = detect_geometry_column(current_cols)
         else:
-            detected = detect_geometry_column(current_cols)
-            geometry_col = validate_geometry_column(
-                current_cols, geometry_col, detected
-            )
+            # User provided explicit column name - just validate it exists
+            if geometry_col not in current_cols:
+                raise ValueError(
+                    f"Requested geometry column '{geometry_col}' not found.\n"
+                    f"Available columns: {current_cols}"
+                )
 
         # Build SQL filter
         sql_filter = build_bbox_sql(minx, miny, maxx, maxy, geometry_col, level)
@@ -341,13 +342,14 @@ class TacoDataset(BaseModel):
 
         # Detect or validate geometry column
         if geometry_col == "auto":
-            detected = detect_geometry_column(current_cols)
-            geometry_col = detected
+            geometry_col = detect_geometry_column(current_cols)
         else:
-            detected = detect_geometry_column(current_cols)
-            geometry_col = validate_geometry_column(
-                current_cols, geometry_col, detected
-            )
+            # User provided explicit column name - just validate it exists
+            if geometry_col not in current_cols:
+                raise ValueError(
+                    f"Requested geometry column '{geometry_col}' not found.\n"
+                    f"Available columns: {current_cols}"
+                )
 
         # Build SQL filter
         sql_filter = build_intersects_sql(geometry, geometry_col, level)
@@ -421,13 +423,14 @@ class TacoDataset(BaseModel):
 
         # Detect or validate geometry column
         if geometry_col == "auto":
-            detected = detect_geometry_column(current_cols)
-            geometry_col = detected
+            geometry_col = detect_geometry_column(current_cols)
         else:
-            detected = detect_geometry_column(current_cols)
-            geometry_col = validate_geometry_column(
-                current_cols, geometry_col, detected
-            )
+            # User provided explicit column name - just validate it exists
+            if geometry_col not in current_cols:
+                raise ValueError(
+                    f"Requested geometry column '{geometry_col}' not found.\n"
+                    f"Available columns: {current_cols}"
+                )
 
         # Build SQL filter
         sql_filter = build_within_sql(geometry, geometry_col, level)
@@ -455,6 +458,9 @@ class TacoDataset(BaseModel):
         Returns samples within the specified time range.
         Always uses time_start column.
         When level > 0, filters level0 samples based on their children's metadata.
+
+        Automatically detects column type (INTEGER, VARCHAR, TIMESTAMP, DATE) and
+        generates appropriate SQL comparison.
 
         Args:
             datetime_range: Temporal specification:
@@ -504,17 +510,20 @@ class TacoDataset(BaseModel):
 
         # Detect or validate time column
         if time_col == "auto":
-            detected = detect_time_column(current_cols)
-            time_col = detected
+            time_col = detect_time_column(current_cols)
         else:
-            detected = detect_time_column(current_cols)
-            time_col = validate_time_column(current_cols, time_col, detected)
+            # User provided explicit column name - just validate it exists
+            if time_col not in current_cols:
+                raise ValueError(
+                    f"Requested time column '{time_col}' not found.\n"
+                    f"Available columns: {current_cols}"
+                )
 
         # Parse datetime input
         start, end = parse_datetime(datetime_range)
 
-        # Build SQL filter
-        sql_filter = build_datetime_sql(start, end, time_col, level)
+        # Build SQL filter (auto-detects column type)
+        sql_filter = build_datetime_sql(start, end, time_col, level, self)
 
         # Apply filter based on level
         if level == 0:

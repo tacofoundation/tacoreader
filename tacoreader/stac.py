@@ -10,7 +10,7 @@ Main functions:
     - build_bbox_sql: Generate bounding box filter SQL
     - build_intersects_sql: Generate intersection filter SQL
     - build_within_sql: Generate within filter SQL
-    - build_datetime_sql: Generate temporal filter SQL
+    - build_datetime_sql: Generate temporal filter SQL (with auto type detection)
     - validate_level_exists: Validate that level exists in dataset
     - get_columns_for_level: Get available columns for a specific level
     - build_cascade_join_sql: Build SQL with cascading JOINs for multi-level filtering
@@ -563,6 +563,86 @@ def geojson_to_wkt(geojson: dict) -> str:
 
 
 # ============================================================================
+# TYPE DETECTION (for datetime columns)
+# ============================================================================
+
+
+def _get_column_type(dataset: "TacoDataset", col: str, level: int) -> str:
+    """
+    Detect column type from DuckDB schema.
+
+    Queries DuckDB DESCRIBE to get actual column type.
+    This enables automatic type-aware SQL generation.
+
+    Args:
+        dataset: TacoDataset instance with DuckDB connection
+        col: Column name to check
+        level: Level where column exists (0, 1, 2, ...)
+
+    Returns:
+        DuckDB type name (e.g., 'VARCHAR', 'BIGINT', 'TIMESTAMP', 'DATE')
+
+    Raises:
+        ValueError: If column does not exist in view
+
+    Examples:
+        >>> _get_column_type(dataset, "istac:time_start", 0)
+        'BIGINT'
+        >>> _get_column_type(dataset, "stac:time_start", 1)
+        'VARCHAR'
+    """
+    level_view = f"level{level}" if level > 0 else "data"
+
+    # Query DuckDB for column type
+    # Note: DuckDB returns 'column_type' not 'data_type'
+    result = dataset._duckdb.execute(
+        f"SELECT column_type FROM (DESCRIBE {level_view}) WHERE column_name = '{col}'"
+    ).fetchone()
+
+    if result:
+        return result[0].upper()
+
+    raise ValueError(
+        f"Column '{col}' not found in {level_view}\n"
+        f"Available columns: {get_columns_for_level(dataset, level)}"
+    )
+
+
+def _timestamp_to_iso_string(timestamp: int) -> str:
+    """
+    Convert Unix timestamp to ISO 8601 string.
+
+    Args:
+        timestamp: Seconds since epoch
+
+    Returns:
+        ISO 8601 datetime string (e.g., '2024-04-01T00:00:00')
+
+    Examples:
+        >>> _timestamp_to_iso_string(1711929600)
+        '2024-04-01T00:00:00'
+    """
+    return datetime.fromtimestamp(timestamp).isoformat()
+
+
+def _timestamp_to_date_string(timestamp: int) -> str:
+    """
+    Convert Unix timestamp to DATE string.
+
+    Args:
+        timestamp: Seconds since epoch
+
+    Returns:
+        DATE string (e.g., '2024-04-01')
+
+    Examples:
+        >>> _timestamp_to_date_string(1711929600)
+        '2024-04-01'
+    """
+    return datetime.fromtimestamp(timestamp).date().isoformat()
+
+
+# ============================================================================
 # SQL BUILDERS
 # ============================================================================
 
@@ -697,38 +777,90 @@ def build_within_sql(geometry: Any, geometry_col: str, level: int = 0) -> str:
 
 
 def build_datetime_sql(
-    start: int, end: int | None, time_col: str, level: int = 0
+    start: int,
+    end: int | None,
+    time_col: str,
+    level: int,
+    dataset: "TacoDataset",
 ) -> str:
     """
-    Build SQL for temporal filter.
+    Build SQL for temporal filter with automatic type detection.
 
-    If end is None, filters for exact timestamp match.
-    If end is provided, filters for time range (start <= time <= end).
+    Detects column type from DuckDB schema and generates appropriate SQL.
+    Supports multiple column types:
+    - INTEGER/BIGINT: Direct timestamp comparison (current behavior)
+    - VARCHAR: ISO string comparison
+    - TIMESTAMP: Timestamp comparison with conversion
+    - DATE: Date comparison
 
     Args:
         start: Start timestamp (seconds since epoch)
         end: End timestamp (seconds since epoch) or None
         time_col: Name of time column
         level: Level where the time column exists (0, 1, 2, ...)
+        dataset: TacoDataset instance (for automatic type detection)
 
     Returns:
         SQL WHERE clause (without "WHERE" keyword)
 
     Examples:
-        >>> build_datetime_sql(1672531200, 1704067199, "istac:time_start", level=0)
+        >>> # INTEGER column
+        >>> build_datetime_sql(1672531200, 1704067199, "istac:time_start", 0, ds)
         '("istac:time_start" BETWEEN 1672531200 AND 1704067199)'
-        >>> build_datetime_sql(1672531200, None, "stac:time_start", level=1)
-        '(l1."stac:time_start" = 1672531200)'
+        
+        >>> # VARCHAR column
+        >>> build_datetime_sql(1672531200, 1704067199, "time_str", 0, ds)
+        '("time_str" BETWEEN '2023-01-01T00:00:00' AND '2023-12-31T23:59:59')'
+        
+        >>> # TIMESTAMP column
+        >>> build_datetime_sql(1672531200, None, "timestamp_col", 1, ds)
+        '(l1."timestamp_col" = to_timestamp(1672531200))'
     """
+    # Detect column type automatically
+    col_type = _get_column_type(dataset, time_col, level)
+
     # Prefix column with level alias if level > 0
     if level > 0:
         col_ref = f'l{level}."{time_col}"'
     else:
         col_ref = f'"{time_col}"'
 
-    if end is None:
-        # Single timestamp
-        return f"({col_ref} = {start})"
+    # Generate SQL based on detected type
+    if col_type in ("BIGINT", "INTEGER", "HUGEINT"):
+        # INTEGER types: Direct timestamp comparison (current behavior)
+        if end is None:
+            return f"({col_ref} = {start})"
+        else:
+            return f"({col_ref} BETWEEN {start} AND {end})"
+
+    elif col_type == "VARCHAR":
+        # STRING type: ISO string comparison
+        start_str = _timestamp_to_iso_string(start)
+        if end is None:
+            return f"({col_ref} = '{start_str}')"
+        else:
+            end_str = _timestamp_to_iso_string(end)
+            return f"({col_ref} BETWEEN '{start_str}' AND '{end_str}')"
+
+    elif col_type in ("TIMESTAMP", "TIMESTAMP WITH TIME ZONE"):
+        # TIMESTAMP type: Convert INT to TIMESTAMP for comparison
+        if end is None:
+            return f"({col_ref} = to_timestamp({start}))"
+        else:
+            return f"({col_ref} BETWEEN to_timestamp({start}) AND to_timestamp({end}))"
+
+    elif col_type == "DATE":
+        # DATE type: Convert INT to DATE for comparison
+        start_date = _timestamp_to_date_string(start)
+        if end is None:
+            return f"({col_ref} = DATE '{start_date}')"
+        else:
+            end_date = _timestamp_to_date_string(end)
+            return f"({col_ref} BETWEEN DATE '{start_date}' AND DATE '{end_date}')"
+
     else:
-        # Time range
-        return f"({col_ref} BETWEEN {start} AND {end})"
+        raise ValueError(
+            f"Unsupported time column type: {col_type}\n"
+            f"Supported types: INTEGER, BIGINT, VARCHAR, TIMESTAMP, DATE\n"
+            f"Column '{time_col}' has type '{col_type}'"
+        )
