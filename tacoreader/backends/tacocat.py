@@ -411,6 +411,7 @@ class TacoCatBackend(TacoBackend):
                   "internal:size" || ',{base_path}' || "internal:source_file"
                   as "internal:gdal_vsi"
                 FROM read_parquet('{file_path}')
+                WHERE id NOT LIKE '__TACOPAD__%'
             """
             )
 

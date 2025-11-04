@@ -237,6 +237,7 @@ class ZipBackend(TacoBackend):
                   '/vsisubfile/' || "internal:offset" || '_' || 
                   "internal:size" || ',{root_path}' as "internal:gdal_vsi"
                 FROM read_parquet('{file_path}')
+                WHERE id NOT LIKE '__TACOPAD__%'
             """
             )
 

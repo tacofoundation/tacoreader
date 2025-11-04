@@ -273,6 +273,7 @@ class FolderBackend(TacoBackend):
                         ELSE NULL
                       END as "internal:gdal_vsi"
                     FROM read_avro('{file_path}')
+                    WHERE id NOT LIKE '__TACOPAD__%'
                 """
                 )
             else:
@@ -287,5 +288,6 @@ class FolderBackend(TacoBackend):
                         ELSE NULL
                       END as "internal:gdal_vsi"
                     FROM read_avro('{file_path}')
+                    WHERE id NOT LIKE '__TACOPAD__%'
                 """
                 )

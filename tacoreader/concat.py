@@ -113,6 +113,7 @@ def concat(datasets: list["TacoDataset"], verbose: bool = False) -> "TacoDataset
                   '/vsisubfile/' || "internal:offset" || '_' || 
                   "internal:size" || ',{root_path}' as "internal:gdal_vsi"
                 FROM read_parquet('{file_path}')
+                WHERE id NOT LIKE '__TACOPAD__%'
             """
             )
 
@@ -132,6 +133,7 @@ def concat(datasets: list["TacoDataset"], verbose: bool = False) -> "TacoDataset
                         ELSE NULL
                       END as "internal:gdal_vsi"
                     FROM read_parquet('{file_path}')
+                    WHERE id NOT LIKE '__TACOPAD__%'
                 """
                 )
             else:
@@ -145,6 +147,7 @@ def concat(datasets: list["TacoDataset"], verbose: bool = False) -> "TacoDataset
                         ELSE NULL
                       END as "internal:gdal_vsi"
                     FROM read_parquet('{file_path}')
+                    WHERE id NOT LIKE '__TACOPAD__%'
                 """
                 )
 
@@ -160,6 +163,7 @@ def concat(datasets: list["TacoDataset"], verbose: bool = False) -> "TacoDataset
                   "internal:size" || ',{base_path}' || "internal:source_file"
                   as "internal:gdal_vsi"
                 FROM read_parquet('{file_path}')
+                WHERE id NOT LIKE '__TACOPAD__%'
             """
             )
 
