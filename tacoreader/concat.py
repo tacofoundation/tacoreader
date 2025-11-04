@@ -46,20 +46,20 @@ def concat(datasets: list["TacoDataset"], verbose: bool = False) -> "TacoDataset
     if verbose:
         print(f"Validating {len(datasets)} datasets...")
 
-    reference_schema = datasets[0].schema
+    reference_schema = datasets[0].pit_schema
     for i, ds in enumerate(datasets[1:], 1):
-        if not reference_schema.is_compatible(ds.schema):
+        if not reference_schema.is_compatible(ds.pit_schema):
             raise ValueError(
                 f"Dataset {i} has incompatible schema. "
                 f"All datasets must share same hierarchy structure.\n"
                 f"Reference: {reference_schema}\n"
-                f"Dataset {i}: {ds.schema}"
+                f"Dataset {i}: {ds.pit_schema}"
             )
 
     if verbose:
         print("All schemas compatible")
 
-    consolidated_schema = _merge_schemas([ds.schema for ds in datasets])
+    consolidated_schema = _merge_schemas([ds.pit_schema for ds in datasets])
 
     if verbose:
         print("\nConsolidating levels...")

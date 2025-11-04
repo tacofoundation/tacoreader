@@ -2,7 +2,8 @@
 Load TACO datasets from any format.
 
 Main entry point for loading datasets. Automatically detects format
-and dispatches to appropriate backend.
+and dispatches to appropriate backend. Supports loading single files
+or lists of files (automatically concatenated).
 """
 
 from pathlib import Path
@@ -18,22 +19,25 @@ from tacoreader.utils.vsi import to_vsi_root
 
 
 def load(
-    path: str,
+    path: str | list[str],
     cache_dir: Path | None = None,
     base_path: str | None = None,
 ) -> TacoDataset:
     """
-    Load TACO dataset from any format.
+    Load TACO dataset(s) from any format.
 
     Automatically detects format (ZIP, FOLDER, or TacoCat) and loads
     dataset with lazy SQL interface. Returns TacoDataset with DuckDB
     connection for efficient queries.
 
+    Supports loading multiple files at once by passing a list of paths.
+    Files are automatically concatenated if schemas are compatible.
+
     Args:
-        path: Path to TACO dataset
-            - ZIP: "data.tacozip" or "s3://bucket/data.tacozip"
-            - FOLDER: "data/" or "s3://bucket/data/"
-            - TacoCat: "__TACOCAT__" or "s3://bucket/__TACOCAT__"
+        path: Path to TACO dataset OR list of paths to concatenate
+            - Single path: "data.tacozip" or "s3://bucket/data.tacozip"
+            - List of paths: ["data1.tacozip", "data2.tacozip", ...]
+            Formats: ZIP (.tacozip), FOLDER (directory), TacoCat (__TACOCAT__)
         cache_dir: Cache directory for metadata files (optional)
         base_path: Override base path for TacoCat ZIP files (optional, TacoCat only)
             Used when __TACOCAT__ and .tacozip files are in different locations
@@ -42,17 +46,32 @@ def load(
         TacoDataset with lazy SQL interface
 
     Raises:
-        ValueError: If format cannot be detected or path invalid
+        ValueError: If format cannot be detected, path invalid, or empty list
+        ValueError: If multiple files have incompatible schemas
         IOError: If files cannot be read
 
     Example:
-        >>> # Load local ZIP
+        >>> # Load single file
         >>> dataset = load("data.tacozip")
         >>> print(dataset.id)
         'sentinel2-l2a'
 
         >>> # Load from S3
         >>> dataset = load("s3://bucket/data.tacozip")
+
+        >>> # Load multiple files (automatically concatenated)
+        >>> dataset = load([
+        ...     "part001.tacozip",
+        ...     "part002.tacozip",
+        ...     "part003.tacozip"
+        ... ])
+        >>> print(dataset.schema.root['n'])
+        3000  # Combined count
+
+        >>> # Load with glob patterns
+        >>> from pathlib import Path
+        >>> files = list(Path("data/").glob("*.tacozip"))
+        >>> dataset = load(files)
 
         >>> # Lazy SQL queries
         >>> peru = dataset.sql("SELECT * FROM data WHERE country = 'Peru'")
@@ -68,6 +87,25 @@ def load(
         ...     base_path="s3://other-bucket/zips/"
         ... )
     """
+    # Handle list of paths
+    if isinstance(path, list):
+        if len(path) == 0:
+            raise ValueError("Cannot load empty list of paths")
+
+        if len(path) == 1:
+            # Single file in list - unwrap and load normally
+            return load(path[0], cache_dir, base_path)
+
+        # Multiple files - load all and concatenate
+        datasets = []
+        for p in path:
+            datasets.append(load(p, cache_dir, base_path))
+
+        from tacoreader.concat import concat
+
+        return concat(datasets)
+
+    # Handle single path
     format_type = detect_format(path)
 
     # Special handling for TacoCat with base_path override
