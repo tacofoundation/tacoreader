@@ -5,6 +5,7 @@ Provides STAC-like metadata with DuckDB connection for lazy SQL queries.
 Queries are not executed until .data is called.
 """
 
+import re
 import uuid
 from typing import Any, Literal
 
@@ -45,6 +46,8 @@ class TacoDataset(BaseModel):
         _duckdb: DuckDB in-memory connection
         _view_name: Current view name for queries
         _root_path: VSI root path for file access
+        _has_level1_joins: Flag indicating if level1+ JOINs have been used
+        _joined_levels: Set of level names that have been joined
 
     Example:
         >>> dataset = load("data.tacozip")
@@ -81,6 +84,10 @@ class TacoDataset(BaseModel):
     _duckdb: Any = PrivateAttr(default=None)
     _view_name: str = PrivateAttr(default="data")
     _root_path: str = PrivateAttr(default="")
+    
+    # JOIN tracking (for migrate() validation)
+    _has_level1_joins: bool = PrivateAttr(default=False)
+    _joined_levels: set[str] = PrivateAttr(default_factory=set)
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
@@ -128,6 +135,62 @@ class TacoDataset(BaseModel):
         """
         return self._collection.get("taco:field_schema", {})
 
+    @property
+    def collection(self) -> dict[str, Any]:
+        """
+        Full COLLECTION.json content.
+        
+        Exposes complete collection metadata including STAC-like fields,
+        TACO extensions, and all custom metadata. This is used by migrate()
+        to reconstruct metadata when creating dataset subsets.
+        
+        Returns:
+            Dictionary containing complete COLLECTION.json with all metadata,
+            including taco:pit_schema, taco:field_schema, extent, providers, etc.
+        
+        Example:
+            >>> collection = dataset.collection
+            >>> print(collection["taco:version"])
+            '0.5.0'
+            >>> print(collection["extent"])
+            {'spatial': {...}, 'temporal': {...}}
+            >>> 
+            >>> # Used by migrate() to preserve metadata
+            >>> from tacotoolbox import migrate
+            >>> filtered = dataset.sql("SELECT * FROM data WHERE country = 'Peru'")
+            >>> migrate(filtered, "peru_subset/")
+        """
+        return self._collection.copy()
+
+    @property
+    def consolidated_files(self) -> dict[str, str]:
+        """
+        Paths to cached metadata files.
+        
+        Returns dictionary mapping level names (level0, level1, etc.) to
+        their cached file paths. These files contain the consolidated metadata
+        in Parquet or Avro format that DuckDB queries.
+        
+        Used internally by migrate() to read level1+ metadata when extracting
+        hierarchical structures from FOLDER samples.
+        
+        Returns:
+            Dictionary mapping level names to file paths.
+            Example: {"level0": "/tmp/level0.parquet", "level1": ...}
+        
+        Example:
+            >>> files = dataset.consolidated_files
+            >>> print(files)
+            {'level0': '/tmp/cache/level0.parquet', 'level1': '/tmp/cache/level1.parquet'}
+            >>> 
+            >>> # Check metadata format
+            >>> import polars as pl
+            >>> level0 = pl.read_parquet(files["level0"])
+            >>> print(level0.columns)
+            ['id', 'type', 'internal:offset', 'internal:size', ...]
+        """
+        return self._consolidated_files.copy()
+
     # ========================================================================
     # LAZY SQL INTERFACE
     # ========================================================================
@@ -141,6 +204,9 @@ class TacoDataset(BaseModel):
 
         Always use 'data' as the table name in queries, even when chaining.
         The method automatically replaces 'data' with the current view name.
+        
+        The method also tracks JOINs with level1+ tables to enable validation
+        in migrate() - only level0 filters are supported for migration.
 
         Args:
             query: SQL query string (use table name 'data')
@@ -149,9 +215,16 @@ class TacoDataset(BaseModel):
             New TacoDataset with filtered view (still lazy)
 
         Example:
+            >>> # Level 0 filter (OK for migrate)
             >>> peru = dataset.sql("SELECT * FROM data WHERE country = 'Peru'")
-            >>> low_cloud = peru.sql("SELECT * FROM data WHERE cloud_cover < 10")
-            >>> tdf = low_cloud.data
+            >>> 
+            >>> # Level 1 JOIN (NOT OK for migrate)
+            >>> with_children = dataset.sql('''
+            ...     SELECT l0.* FROM data l0
+            ...     JOIN level1 l1 ON l1."internal:parent_id" = l0.id
+            ...     WHERE l1.band = 'B04'
+            ... ''')
+            >>> # with_children._has_level1_joins == True
         """
         new_view_name = f"view_{uuid.uuid4().hex[:8]}"
 
@@ -174,6 +247,23 @@ class TacoDataset(BaseModel):
         # Update schema with new count
         new_schema = self.pit_schema.with_n(new_n)
 
+        # Detect JOINs with level1+ tables
+        # Pattern matches: JOIN level1, FROM level1, etc. (case insensitive)
+        join_pattern = r'\b(?:JOIN|FROM)\s+(level[1-5])\b'
+        matches = re.findall(join_pattern, query, re.IGNORECASE)
+        
+        # Track if this query introduces level1+ JOINs
+        has_new_joins = len(matches) > 0
+        new_joined_levels = set(matches) if has_new_joins else set()
+        
+        # Inherit tracking from parent dataset
+        inherited_has_joins = self._has_level1_joins
+        inherited_joined_levels = self._joined_levels.copy()
+        
+        # Merge with current query's JOINs
+        final_has_joins = inherited_has_joins or has_new_joins
+        final_joined_levels = inherited_joined_levels.union(new_joined_levels)
+
         # Return new TacoDataset with same connection, different view
         return TacoDataset.model_construct(
             id=self.id,
@@ -194,6 +284,8 @@ class TacoDataset(BaseModel):
             _duckdb=self._duckdb,  # Shared connection
             _view_name=new_view_name,  # New view
             _root_path=self._root_path,
+            _has_level1_joins=final_has_joins,  # Preserve + update
+            _joined_levels=final_joined_levels,  # Preserve + update
         )
 
     # ========================================================================

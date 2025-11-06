@@ -552,7 +552,7 @@ class TacoDataFrame:
 
         Handles both formats:
         - /vsisubfile/ paths (ZIP, TacoCat): Read Parquet from offset
-        - Direct paths (FOLDER): Read Avro from filesystem
+        - Direct paths (FOLDER): Read Parquet from filesystem (__meta__ now uses Parquet)
 
         Args:
             row: Row dictionary with sample metadata
@@ -600,19 +600,31 @@ class TacoDataFrame:
                 .alias("internal:gdal_vsi")
             )
         else:
-            # FOLDER format: Read Avro from __meta__ file
+            # FOLDER format: Read Parquet from __meta__ file
             if is_remote(vsi_path):
                 store = create_obstore_from_url(vsi_path)
                 base_path = extract_path_from_url(vsi_path)
-                meta_path = f"{base_path}/__meta__"
+                
+                # Check if path already ends with __meta__
+                if base_path.endswith("/__meta__"):
+                    meta_path = base_path
+                else:
+                    meta_path = f"{base_path}/__meta__"
 
                 response = obs.get(store, meta_path)
                 meta_bytes = response.bytes()
 
-                children_df = pl.read_avro(BytesIO(bytes(meta_bytes)))
+                children_df = pl.read_parquet(BytesIO(bytes(meta_bytes)))
             else:
-                meta_path = str(Path(vsi_path) / "__meta__")
-                children_df = pl.read_avro(meta_path)
+                # Check if path already ends with __meta__
+                if vsi_path.endswith("/__meta__"):
+                    meta_path = vsi_path
+                else:
+                    meta_path = str(Path(vsi_path) / "__meta__")
+                
+                children_df = pl.read_parquet(meta_path)
+            
+            # Parquet preserves colons natively - no desanitization needed
 
             # Construct direct paths for children
             children_df = children_df.with_columns(

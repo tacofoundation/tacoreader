@@ -257,16 +257,26 @@ class FolderBackend(TacoBackend):
             >>> backend.setup_duckdb_views(db, files, "s3://bucket/data/")
             >>> result = db.execute("SELECT * FROM level0 LIMIT 1").fetchone()
         """
+        # Ensure avro extension is installed and loaded
+        try:
+            db.execute("LOAD avro")
+        except Exception:
+            # If load fails, try installing first
+            db.execute("INSTALL avro")
+            db.execute("LOAD avro")
+
         # Ensure root path has trailing slash
         root = root_path if root_path.endswith("/") else root_path + "/"
 
         for level_key, file_path in consolidated_files.items():
+            columns_sql = self._build_column_select(db, file_path)
+            
             if level_key == "level0":
                 # Level 0: Use id directly (no relative_path column)
                 db.execute(
                     f"""
                     CREATE VIEW {level_key} AS 
-                    SELECT *,
+                    SELECT {columns_sql},
                       CASE 
                         WHEN type = 'FOLDER' THEN '{root}DATA/' || id || '/__meta__'
                         WHEN type = 'FILE' THEN '{root}DATA/' || id
@@ -281,13 +291,28 @@ class FolderBackend(TacoBackend):
                 db.execute(
                     f"""
                     CREATE VIEW {level_key} AS 
-                    SELECT *,
+                    SELECT {columns_sql},
                       CASE 
-                        WHEN type = 'FOLDER' THEN '{root}DATA/' || "internal:relative_path" || '__meta__'
-                        WHEN type = 'FILE' THEN '{root}DATA/' || "internal:relative_path"
+                        WHEN type = 'FOLDER' THEN '{root}DATA/' || "internal_COLON_relative_path" || '__meta__'
+                        WHEN type = 'FILE' THEN '{root}DATA/' || "internal_COLON_relative_path"
                         ELSE NULL
                       END as "internal:gdal_vsi"
                     FROM read_avro('{file_path}')
                     WHERE id NOT LIKE '__TACOPAD__%'
                 """
                 )
+
+    def _build_column_select(self, db: duckdb.DuckDBPyConnection, file_path: str) -> str:
+        """Build column SELECT with rename from _COLON_ back to :."""
+        schema = db.execute(f"DESCRIBE SELECT * FROM read_avro('{file_path}')").fetchall()
+        
+        columns = []
+        for row in schema:
+            col_name = row[0]
+            if "_COLON_" in col_name:
+                original_name = col_name.replace("_COLON_", ":")
+                columns.append(f'"{col_name}" AS "{original_name}"')
+            else:
+                columns.append(f'"{col_name}"')
+        
+        return ", ".join(columns)
