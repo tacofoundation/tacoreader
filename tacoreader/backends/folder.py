@@ -258,19 +258,15 @@ class FolderBackend(TacoBackend):
             >>> result = db.execute("SELECT * FROM level0 LIMIT 1").fetchone()
         """
         # Ensure avro extension is installed and loaded
-        try:
-            db.execute("LOAD avro")
-        except Exception:
-            # If load fails, try installing first
-            db.execute("INSTALL avro")
-            db.execute("LOAD avro")
+        db.execute("INSTALL avro IF NOT EXISTS")
+        db.execute("LOAD avro")
 
         # Ensure root path has trailing slash
         root = root_path if root_path.endswith("/") else root_path + "/"
 
         for level_key, file_path in consolidated_files.items():
             columns_sql = self._build_column_select(db, file_path)
-            
+
             if level_key == "level0":
                 # Level 0: Use id directly (no relative_path column)
                 db.execute(
@@ -302,10 +298,14 @@ class FolderBackend(TacoBackend):
                 """
                 )
 
-    def _build_column_select(self, db: duckdb.DuckDBPyConnection, file_path: str) -> str:
+    def _build_column_select(
+        self, db: duckdb.DuckDBPyConnection, file_path: str
+    ) -> str:
         """Build column SELECT with rename from _COLON_ back to :."""
-        schema = db.execute(f"DESCRIBE SELECT * FROM read_avro('{file_path}')").fetchall()
-        
+        schema = db.execute(
+            f"DESCRIBE SELECT * FROM read_avro('{file_path}')"
+        ).fetchall()
+
         columns = []
         for row in schema:
             col_name = row[0]
@@ -314,5 +314,5 @@ class FolderBackend(TacoBackend):
                 columns.append(f'"{col_name}" AS "{original_name}"')
             else:
                 columns.append(f'"{col_name}"')
-        
+
         return ", ".join(columns)

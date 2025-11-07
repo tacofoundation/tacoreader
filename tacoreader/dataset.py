@@ -84,7 +84,7 @@ class TacoDataset(BaseModel):
     _duckdb: Any = PrivateAttr(default=None)
     _view_name: str = PrivateAttr(default="data")
     _root_path: str = PrivateAttr(default="")
-    
+
     # JOIN tracking (for migrate() validation)
     _has_level1_joins: bool = PrivateAttr(default=False)
     _joined_levels: set[str] = PrivateAttr(default_factory=set)
@@ -139,22 +139,22 @@ class TacoDataset(BaseModel):
     def collection(self) -> dict[str, Any]:
         """
         Full COLLECTION.json content.
-        
+
         Exposes complete collection metadata including STAC-like fields,
         TACO extensions, and all custom metadata. This is used by migrate()
         to reconstruct metadata when creating dataset subsets.
-        
+
         Returns:
             Dictionary containing complete COLLECTION.json with all metadata,
             including taco:pit_schema, taco:field_schema, extent, providers, etc.
-        
+
         Example:
             >>> collection = dataset.collection
             >>> print(collection["taco:version"])
             '0.5.0'
             >>> print(collection["extent"])
             {'spatial': {...}, 'temporal': {...}}
-            >>> 
+            >>>
             >>> # Used by migrate() to preserve metadata
             >>> from tacotoolbox import migrate
             >>> filtered = dataset.sql("SELECT * FROM data WHERE country = 'Peru'")
@@ -166,23 +166,23 @@ class TacoDataset(BaseModel):
     def consolidated_files(self) -> dict[str, str]:
         """
         Paths to cached metadata files.
-        
+
         Returns dictionary mapping level names (level0, level1, etc.) to
         their cached file paths. These files contain the consolidated metadata
         in Parquet or Avro format that DuckDB queries.
-        
+
         Used internally by migrate() to read level1+ metadata when extracting
         hierarchical structures from FOLDER samples.
-        
+
         Returns:
             Dictionary mapping level names to file paths.
             Example: {"level0": "/tmp/level0.parquet", "level1": ...}
-        
+
         Example:
             >>> files = dataset.consolidated_files
             >>> print(files)
             {'level0': '/tmp/cache/level0.parquet', 'level1': '/tmp/cache/level1.parquet'}
-            >>> 
+            >>>
             >>> # Check metadata format
             >>> import polars as pl
             >>> level0 = pl.read_parquet(files["level0"])
@@ -204,7 +204,7 @@ class TacoDataset(BaseModel):
 
         Always use 'data' as the table name in queries, even when chaining.
         The method automatically replaces 'data' with the current view name.
-        
+
         The method also tracks JOINs with level1+ tables to enable validation
         in migrate() - only level0 filters are supported for migration.
 
@@ -217,7 +217,7 @@ class TacoDataset(BaseModel):
         Example:
             >>> # Level 0 filter (OK for migrate)
             >>> peru = dataset.sql("SELECT * FROM data WHERE country = 'Peru'")
-            >>> 
+            >>>
             >>> # Level 1 JOIN (NOT OK for migrate)
             >>> with_children = dataset.sql('''
             ...     SELECT l0.* FROM data l0
@@ -249,17 +249,17 @@ class TacoDataset(BaseModel):
 
         # Detect JOINs with level1+ tables
         # Pattern matches: JOIN level1, FROM level1, etc. (case insensitive)
-        join_pattern = r'\b(?:JOIN|FROM)\s+(level[1-5])\b'
+        join_pattern = r"\b(?:JOIN|FROM)\s+(level[1-5])\b"
         matches = re.findall(join_pattern, query, re.IGNORECASE)
-        
+
         # Track if this query introduces level1+ JOINs
         has_new_joins = len(matches) > 0
         new_joined_levels = set(matches) if has_new_joins else set()
-        
+
         # Inherit tracking from parent dataset
         inherited_has_joins = self._has_level1_joins
         inherited_joined_levels = self._joined_levels.copy()
-        
+
         # Merge with current query's JOINs
         final_has_joins = inherited_has_joins or has_new_joins
         final_joined_levels = inherited_joined_levels.union(new_joined_levels)

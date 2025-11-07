@@ -604,7 +604,7 @@ class TacoDataFrame:
             if is_remote(vsi_path):
                 store = create_obstore_from_url(vsi_path)
                 base_path = extract_path_from_url(vsi_path)
-                
+
                 # Check if path already ends with __meta__
                 if base_path.endswith("/__meta__"):
                     meta_path = base_path
@@ -621,9 +621,9 @@ class TacoDataFrame:
                     meta_path = vsi_path
                 else:
                     meta_path = str(Path(vsi_path) / "__meta__")
-                
+
                 children_df = pl.read_parquet(meta_path)
-            
+
             # Parquet preserves colons natively - no desanitization needed
 
             # Construct direct paths for children

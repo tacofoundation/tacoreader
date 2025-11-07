@@ -807,11 +807,11 @@ def build_datetime_sql(
         >>> # INTEGER column
         >>> build_datetime_sql(1672531200, 1704067199, "istac:time_start", 0, ds)
         '("istac:time_start" BETWEEN 1672531200 AND 1704067199)'
-        
+
         >>> # VARCHAR column
         >>> build_datetime_sql(1672531200, 1704067199, "time_str", 0, ds)
         '("time_str" BETWEEN '2023-01-01T00:00:00' AND '2023-12-31T23:59:59')'
-        
+
         >>> # TIMESTAMP column
         >>> build_datetime_sql(1672531200, None, "timestamp_col", 1, ds)
         '(l1."timestamp_col" = to_timestamp(1672531200))'

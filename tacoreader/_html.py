@@ -326,12 +326,14 @@ def render_graph(dataset: "TacoDataset") -> str:
         "color": get_node_color(root["type"]),
     }
     nodes.append(sample_left)
-    edges.append({
-        "from_x": root_node["x"],
-        "from_y": root_node["y"],
-        "to_x": sample_left["x"],
-        "to_y": sample_left["y"],
-    })
+    edges.append(
+        {
+            "from_x": root_node["x"],
+            "from_y": root_node["y"],
+            "to_x": sample_left["x"],
+            "to_y": sample_left["y"],
+        }
+    )
 
     # Dots in the middle
     texts.append({"x": START_X, "y": level0_y + 5, "text": "..."})
@@ -347,12 +349,14 @@ def render_graph(dataset: "TacoDataset") -> str:
         "color": get_node_color(root["type"]),
     }
     nodes.append(sample_right)
-    edges.append({
-        "from_x": root_node["x"],
-        "from_y": root_node["y"],
-        "to_x": sample_right["x"],
-        "to_y": sample_right["y"],
-    })
+    edges.append(
+        {
+            "from_x": root_node["x"],
+            "from_y": root_node["y"],
+            "to_x": sample_right["x"],
+            "to_y": sample_right["y"],
+        }
+    )
 
     # EXPAND FULL HIERARCHY OF SAMPLE_0
     current_y = level0_y
@@ -372,7 +376,7 @@ def render_graph(dataset: "TacoDataset") -> str:
         current_y += NODE_SPACING_V
 
         num_children = len(types)
-        
+
         # Determine which children to show based on count
         if num_children <= MAX_CHILDREN_FULL:
             # Show all children
@@ -410,12 +414,14 @@ def render_graph(dataset: "TacoDataset") -> str:
             nodes.append(child_node)
 
             # Edge from parent to child
-            edges.append({
-                "from_x": parent_node["x"],
-                "from_y": parent_node["y"],
-                "to_x": child_node["x"],
-                "to_y": child_node["y"],
-            })
+            edges.append(
+                {
+                    "from_x": parent_node["x"],
+                    "from_y": parent_node["y"],
+                    "to_x": child_node["x"],
+                    "to_y": child_node["y"],
+                }
+            )
 
             # Mark first child for expansion if it's a FOLDER
             if i == 0 and child_type == "FOLDER":
@@ -425,12 +431,14 @@ def render_graph(dataset: "TacoDataset") -> str:
 
             # Add ellipsis after second node if needed
             if show_ellipsis and idx_pos == 1:
-                texts.append({
-                    "x": current_x,
-                    "y": current_y + 5,
-                    "text": f"...(+{hidden_count})",
-                    "size": "9"
-                })
+                texts.append(
+                    {
+                        "x": current_x,
+                        "y": current_y + 5,
+                        "text": f"...(+{hidden_count})",
+                        "size": "9",
+                    }
+                )
                 current_x += NODE_SPACING_H
 
         # Show collapsed indicator for sibling folders (those not expanded)
@@ -438,13 +446,17 @@ def render_graph(dataset: "TacoDataset") -> str:
             for i in indices_to_show[1:]:  # Skip first (expanded)
                 if types[i] == "FOLDER":
                     # Find the node we just created
-                    sibling_node = next(n for n in nodes if n["id"] == f"child_d{current_depth}_i{i}")
-                    texts.append({
-                        "x": sibling_node["x"],
-                        "y": sibling_node["y"] + NODE_SPACING_V // 2,
-                        "text": "...",
-                        "size": "10"
-                    })
+                    sibling_node = next(
+                        n for n in nodes if n["id"] == f"child_d{current_depth}_i{i}"
+                    )
+                    texts.append(
+                        {
+                            "x": sibling_node["x"],
+                            "y": sibling_node["y"] + NODE_SPACING_V // 2,
+                            "text": "...",
+                            "size": "10",
+                        }
+                    )
 
         # Move to next level with expanded child
         if expanded_child:
@@ -457,31 +469,31 @@ def render_graph(dataset: "TacoDataset") -> str:
     # Fix node positions to prevent cutoff on the left side
     if nodes:
         min_x = min(node["x"] for node in nodes)
-        
+
         # Ensure left margin for nodes
         LEFT_MARGIN = NODE_RADIUS + 10
         if min_x < LEFT_MARGIN:
             offset = LEFT_MARGIN - min_x
-            
+
             # Shift all nodes to the right
             for node in nodes:
                 node["x"] += offset
-            
+
             # Shift all edges
             for edge in edges:
                 edge["from_x"] += offset
                 edge["to_x"] += offset
-            
+
             # Shift all texts
             for text in texts:
                 text["x"] += offset
-        
+
         # Calculate SVG width with proper margins
         max_x = max(node["x"] for node in nodes)
         svg_width = int(max_x + NODE_RADIUS + 20)
     else:
         svg_width = 250
-    
+
     svg_height = current_y + 50
 
     # Render SVG
@@ -496,32 +508,38 @@ def render_graph(dataset: "TacoDataset") -> str:
             to_x = edge["from_x"] + dx * scale
             to_y = edge["from_y"] + dy * scale
 
-            svg_edges.append(f"""
+            svg_edges.append(
+                f"""
             <line x1="{edge['from_x']}" y1="{edge['from_y']}" 
                   x2="{to_x}" y2="{to_y}"
                   stroke="#999" stroke-width="1.5" 
                   marker-end="url(#arrowhead)"/>
-            """)
+            """
+            )
 
     svg_nodes = []
     for node in nodes:
-        svg_nodes.append(f"""
+        svg_nodes.append(
+            f"""
         <circle cx="{node['x']}" cy="{node['y']}" r="{NODE_RADIUS}" 
                 fill="{node['color']}" stroke="#666" stroke-width="1.5">
             <title>{node['label']} ({node['type']})</title>
         </circle>
-        """)
+        """
+        )
 
     svg_texts = []
     for text in texts:
         size = text.get("size", "12")
-        svg_texts.append(f"""
+        svg_texts.append(
+            f"""
         <text x="{text['x']}" y="{text['y']}" 
               text-anchor="middle" 
               font-size="{size}" 
               font-weight="bold"
               fill="#666">{text['text']}</text>
-        """)
+        """
+        )
 
     svg = f"""
     <svg width="{svg_width}" height="{svg_height}" class="taco-graph-svg">
