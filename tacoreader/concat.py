@@ -1,4 +1,5 @@
 from typing import TYPE_CHECKING
+from pathlib import Path
 
 import duckdb
 import polars as pl
@@ -38,7 +39,6 @@ def concat(datasets: list["TacoDataset"], verbose: bool = False) -> "TacoDataset
     """
     import tempfile
     import uuid
-    from pathlib import Path
 
     if len(datasets) < 2:
         raise ValueError(f"Need at least 2 datasets to concat, got {len(datasets)}")
@@ -86,6 +86,11 @@ def concat(datasets: list["TacoDataset"], verbose: bool = False) -> "TacoDataset
                     df = pl.read_avro(file_path)
                 else:
                     df = pl.read_parquet(file_path)
+
+                # Add internal:source_file to track original dataset
+                df = df.with_columns(
+                    pl.lit(Path(ds._path).name).alias("internal:source_file")
+                )
 
                 level_dfs.append(df)
 

@@ -258,7 +258,10 @@ class FolderBackend(TacoBackend):
             >>> result = db.execute("SELECT * FROM level0 LIMIT 1").fetchone()
         """
         # Ensure avro extension is installed and loaded
-        db.execute("INSTALL avro IF NOT EXISTS")
+        try:
+            db.execute("INSTALL avro")
+        except duckdb.Error:
+            pass        
         db.execute("LOAD avro")
 
         # Ensure root path has trailing slash
