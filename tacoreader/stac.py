@@ -19,6 +19,11 @@ Main functions:
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
+from tacoreader.constants import (
+    STAC_GEOMETRY_COLUMN_PRIORITY,
+    STAC_TIME_COLUMN_PRIORITY,
+)
+
 if TYPE_CHECKING:
     from tacoreader.dataset import TacoDataset
 
@@ -221,19 +226,15 @@ def detect_geometry_column(columns: list[str]) -> str:
         >>> detect_geometry_column(["id", "stac:centroid"])
         'stac:centroid'
     """
-    # Priority: full geometry > STAC centroid > ISTAC centroid
-    if "istac:geometry" in columns:
-        return "istac:geometry"
-    elif "stac:centroid" in columns:
-        return "stac:centroid"
-    elif "istac:centroid" in columns:
-        return "istac:centroid"
-    else:
-        raise ValueError(
-            "No geometry column found in dataset.\n"
-            "Expected one of: istac:geometry, stac:centroid, istac:centroid\n"
-            f"Available columns: {columns}"
-        )
+    for col in STAC_GEOMETRY_COLUMN_PRIORITY:
+        if col in columns:
+            return col
+
+    raise ValueError(
+        "No geometry column found in dataset.\n"
+        f"Expected one of: {', '.join(STAC_GEOMETRY_COLUMN_PRIORITY)}\n"
+        f"Available columns: {columns}"
+    )
 
 
 def detect_time_column(columns: list[str]) -> str:
@@ -260,17 +261,15 @@ def detect_time_column(columns: list[str]) -> str:
         >>> detect_time_column(["id", "stac:time_start"])
         'stac:time_start'
     """
-    # Priority: ISTAC > STAC
-    if "istac:time_start" in columns:
-        return "istac:time_start"
-    elif "stac:time_start" in columns:
-        return "stac:time_start"
-    else:
-        raise ValueError(
-            "No time column found in dataset.\n"
-            "Expected one of: istac:time_start, stac:time_start\n"
-            f"Available columns: {columns}"
-        )
+    for col in STAC_TIME_COLUMN_PRIORITY:
+        if col in columns:
+            return col
+
+    raise ValueError(
+        "No time column found in dataset.\n"
+        f"Expected one of: {', '.join(STAC_TIME_COLUMN_PRIORITY)}\n"
+        f"Available columns: {columns}"
+    )
 
 
 # ============================================================================

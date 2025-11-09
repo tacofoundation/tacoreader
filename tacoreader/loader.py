@@ -6,10 +6,15 @@ and dispatches to appropriate backend. Supports loading single files
 or lists of files (automatically concatenated with parallel loading).
 """
 
-from pathlib import Path
+import asyncio
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 from tacoreader.backends import create_backend, load_dataset
+from tacoreader.constants import (
+    PARALLEL_DEFAULT_MAX_WORKERS,
+    PARALLEL_MIN_WORKERS,
+)
 from tacoreader.dataset import TacoDataset
 from tacoreader.utils.format import detect_format
 from tacoreader.utils.vsi import to_vsi_root
@@ -24,6 +29,7 @@ def load(
     cache_dir: Path | None = None,
     base_path: str | None = None,
     max_workers: int | None = None,
+    debug: bool = False,
 ) -> TacoDataset:
     """
     Load TACO dataset(s) from any format.
@@ -48,6 +54,7 @@ def load(
             - None (default): Auto-detect as min(len(paths), 8)
             - 1: Sequential loading
             - N: Use N threads
+        debug: Print timing information for debugging (optional, default: False)
 
     Returns:
         TacoDataset with lazy SQL interface
@@ -66,7 +73,7 @@ def load(
         >>> # Load from S3
         >>> dataset = load("s3://bucket/data.tacozip")
 
-        >>> # Load multiple files (parallel by default, faster!)
+        >>> # Load multiple files (parallel by default)
         >>> dataset = load([
         ...     "part001.tacozip",
         ...     "part002.tacozip",
@@ -82,7 +89,7 @@ def load(
         >>> # Load with glob patterns
         >>> from pathlib import Path
         >>> files = list(Path("data/").glob("*.tacozip"))
-        >>> dataset = load(files)  # Parallel loading!
+        >>> dataset = load(files)
 
         >>> # Lazy SQL queries
         >>> peru = dataset.sql("SELECT * FROM data WHERE country = 'Peru'")
@@ -110,10 +117,10 @@ def load(
         # Multiple files - load in parallel and concatenate
         # Auto-detect workers if not specified
         if max_workers is None:
-            max_workers = min(len(path), 8)
+            max_workers = min(len(path), PARALLEL_DEFAULT_MAX_WORKERS)
 
         # Sequential loading if max_workers=1
-        if max_workers == 1:
+        if max_workers == PARALLEL_MIN_WORKERS:
             datasets = []
             for p in path:
                 datasets.append(load(p, cache_dir, base_path))
@@ -135,34 +142,73 @@ def load(
     # Special handling for TacoCat with base_path override
     if format_type == "tacocat" and base_path is not None:
         backend = create_backend("tacocat")
-        dataset = backend.load(path, cache_dir)
-
-        # Rebuild views with new base_path
-        base_vsi = to_vsi_root(base_path)
-
-        # Drop existing views
-        for level_key in dataset._consolidated_files.keys():
-            dataset._duckdb.execute(f"DROP VIEW IF EXISTS {level_key}")
-
-        # Recreate views with new base_path
-        for level_key, file_path in dataset._consolidated_files.items():
-            dataset._duckdb.execute(
-                f"""
-                CREATE VIEW {level_key} AS 
-                SELECT *,
-                  '/vsisubfile/' || "internal:offset" || '_' || 
-                  "internal:size" || ',{base_vsi}' || "internal:source_file"
-                  as "internal:gdal_vsi"
-                FROM read_parquet('{file_path}')
-            """
+        
+        # Check if we're in async context
+        try:
+            asyncio.get_running_loop()
+            # Async context - return coroutine
+            return _load_tacocat_with_base_path_async(
+                backend, path, cache_dir, base_path, debug
+            )
+        except RuntimeError:
+            # Sync context - run internally
+            return asyncio.run(
+                _load_tacocat_with_base_path_async(
+                    backend, path, cache_dir, base_path, debug
+                )
             )
 
-        # Recreate 'data' view
-        dataset._duckdb.execute("DROP VIEW IF EXISTS data")
-        dataset._duckdb.execute("CREATE VIEW data AS SELECT * FROM level0")
-        dataset._root_path = base_vsi
-
-        return dataset
-
     # Standard loading path
+    backend = create_backend(format_type)
+
+    # Check if backend supports optimized loading
+    if hasattr(backend, "load_async") and format_type == "tacocat":
+        try:
+            # Check if we're in async context
+            asyncio.get_running_loop()
+            return backend.load_async(path, cache_dir, debug=debug)
+        except RuntimeError:
+            # Run internally
+            return asyncio.run(backend.load_async(path, cache_dir, debug=debug))
+
+    # Standard loading for ZIP/FOLDER
     return load_dataset(path, format_type, cache_dir)
+
+
+async def _load_tacocat_with_base_path_async(
+    backend, path: str, cache_dir: Path | None, base_path: str, debug: bool = False
+) -> TacoDataset:
+    """
+    Load TacoCat with base_path override.
+    
+    Used when __TACOCAT__ and .tacozip files are in different locations.
+    """
+    # Load dataset
+    dataset = await backend.load_async(path, cache_dir, debug=debug)
+
+    # Rebuild views with new base_path
+    base_vsi = to_vsi_root(base_path)
+
+    # Drop existing views
+    for level_key in dataset._consolidated_files.keys():
+        dataset._duckdb.execute(f"DROP VIEW IF EXISTS {level_key}")
+
+    # Recreate views with new base_path
+    for level_key, file_path in dataset._consolidated_files.items():
+        dataset._duckdb.execute(
+            f"""
+            CREATE VIEW {level_key} AS 
+            SELECT *,
+              '/vsisubfile/' || "internal:offset" || '_' || 
+              "internal:size" || ',{base_vsi}' || "internal:source_file"
+              as "internal:gdal_vsi"
+            FROM read_parquet('{file_path}')
+        """
+        )
+
+    # Recreate 'data' view
+    dataset._duckdb.execute("DROP VIEW IF EXISTS data")
+    dataset._duckdb.execute("CREATE VIEW data AS SELECT * FROM level0")
+    dataset._root_path = base_vsi
+
+    return dataset

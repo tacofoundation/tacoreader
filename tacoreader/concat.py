@@ -4,6 +4,8 @@ from pathlib import Path
 import duckdb
 import polars as pl
 
+from tacoreader.constants import CACHE_CONCAT_PREFIX
+
 if TYPE_CHECKING:
     from tacoreader.dataset import TacoDataset
     from tacoreader.schema import PITSchema
@@ -64,7 +66,7 @@ def concat(datasets: list["TacoDataset"], verbose: bool = False) -> "TacoDataset
     if verbose:
         print("\nConsolidating levels...")
 
-    cache_dir = Path(tempfile.gettempdir()) / f"tacoreader-concat-{uuid.uuid4()}"
+    cache_dir = Path(tempfile.gettempdir()) / f"{CACHE_CONCAT_PREFIX}{uuid.uuid4()}"
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     all_levels = set()

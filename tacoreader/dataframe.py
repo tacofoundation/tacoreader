@@ -16,24 +16,10 @@ import numpy as np
 import obstore as obs
 import polars as pl
 
-# ============================================================================
-# PROTECTED COLUMNS
-# ============================================================================
-
-# Columns that cannot be modified (critical for TACO navigation)
-PROTECTED_COLUMNS = frozenset(
-    {
-        # Core columns (modifying breaks references and navigation)
-        "id",
-        "type",
-        # Internal columns (modifying breaks hierarchical navigation)
-        "internal:parent_id",
-        "internal:offset",
-        "internal:size",
-        "internal:gdal_vsi",
-        "internal:source_file",
-        "internal:relative_path",
-    }
+from tacoreader.constants import (
+    DATAFRAME_DEFAULT_HEAD_ROWS,
+    DATAFRAME_DEFAULT_TAIL_ROWS,    
+    is_protected_column,
 )
 
 
@@ -194,8 +180,8 @@ class TacoDataFrame:
             >>> tdf["id"] = "new_id"  # ValueError!
             >>> tdf["internal:offset"] = 0  # ValueError!
         """
-        # Check if column is protected
-        if key in PROTECTED_COLUMNS or key.startswith("internal:"):
+        # Check if column is protected using centralized helper
+        if is_protected_column(key):
             raise ValueError(
                 f"Cannot modify protected column: '{key}'\n"
                 f"Protected columns are required for hierarchical navigation:\n"
@@ -226,7 +212,7 @@ class TacoDataFrame:
         """Shape tuple: (rows, columns)."""
         return self._data.shape
 
-    def head(self, n: int = 5) -> pl.DataFrame:
+    def head(self, n: int = DATAFRAME_DEFAULT_HEAD_ROWS) -> pl.DataFrame:
         """
         First n rows as Polars DataFrame.
 
@@ -238,7 +224,7 @@ class TacoDataFrame:
         """
         return self._data.head(n)
 
-    def tail(self, n: int = 5) -> pl.DataFrame:
+    def tail(self, n: int = DATAFRAME_DEFAULT_TAIL_ROWS) -> pl.DataFrame:
         """
         Last n rows as Polars DataFrame.
 
@@ -450,8 +436,8 @@ class TacoDataFrame:
             >>> # PROTECTED: Cannot modify critical columns
             >>> tdf = tdf.with_column("id", "new_id")  # ValueError!
         """
-        # Check if column is protected
-        if name in PROTECTED_COLUMNS or name.startswith("internal:"):
+        # Check if column is protected using centralized helper
+        if is_protected_column(name):
             raise ValueError(
                 f"Cannot modify protected column: '{name}'\n"
                 f"Protected columns are required for hierarchical navigation:\n"
@@ -684,111 +670,61 @@ class TacoDataFrame:
     # ========================================================================
 
     def stats_categorical(self) -> np.ndarray:
-        """
-        Aggregate categorical probabilities using weighted average.
-
-        Returns:
-            numpy array with aggregated categorical probabilities
-        """
+        """Aggregate categorical probabilities using weighted average."""
         from tacoreader.utils.stats import stats_categorical
 
-        return stats_categorical(self._data.to_pandas())
+        return stats_categorical(self._data)
 
     def stats_mean(self) -> np.ndarray:
-        """
-        Aggregate means using weighted average.
-
-        Returns:
-            numpy array with aggregated mean values
-        """
+        """Aggregate means using weighted average."""
         from tacoreader.utils.stats import stats_mean
 
-        return stats_mean(self._data.to_pandas())
+        return stats_mean(self._data)
 
     def stats_std(self) -> np.ndarray:
-        """
-        Aggregate standard deviations using pooled std formula.
-
-        Returns:
-            numpy array with aggregated standard deviations
-        """
+        """Aggregate standard deviations using pooled std formula."""
         from tacoreader.utils.stats import stats_std
 
-        return stats_std(self._data.to_pandas())
+        return stats_std(self._data)
 
     def stats_min(self) -> np.ndarray:
-        """
-        Aggregate minimums (global min across all rows).
-
-        Returns:
-            numpy array with minimum values per band
-        """
+        """Aggregate minimums (global min across all rows)."""
         from tacoreader.utils.stats import stats_min
 
-        return stats_min(self._data.to_pandas())
+        return stats_min(self._data)
 
     def stats_max(self) -> np.ndarray:
-        """
-        Aggregate maximums (global max across all rows).
-
-        Returns:
-            numpy array with maximum values per band
-        """
+        """Aggregate maximums (global max across all rows)."""
         from tacoreader.utils.stats import stats_max
 
-        return stats_max(self._data.to_pandas())
+        return stats_max(self._data)
 
     def stats_p25(self) -> np.ndarray:
-        """
-        Aggregate 25th percentiles using simple average.
-
-        Returns:
-            numpy array with 25th percentile values
-        """
+        """Aggregate 25th percentiles using simple average."""
         from tacoreader.utils.stats import stats_p25
 
-        return stats_p25(self._data.to_pandas())
+        return stats_p25(self._data)
 
     def stats_p50(self) -> np.ndarray:
-        """
-        Aggregate 50th percentiles (median) using simple average.
-
-        Returns:
-            numpy array with median values
-        """
+        """Aggregate 50th percentiles (median) using simple average."""
         from tacoreader.utils.stats import stats_p50
 
-        return stats_p50(self._data.to_pandas())
+        return stats_p50(self._data)
 
     def stats_median(self) -> np.ndarray:
-        """
-        Aggregate medians using simple average (alias for stats_p50).
-
-        Returns:
-            numpy array with median values
-        """
+        """Aggregate medians using simple average (alias for stats_p50)."""
         from tacoreader.utils.stats import stats_p50
 
-        return stats_p50(self._data.to_pandas())
+        return stats_p50(self._data)
 
     def stats_p75(self) -> np.ndarray:
-        """
-        Aggregate 75th percentiles using simple average.
-
-        Returns:
-            numpy array with 75th percentile values
-        """
+        """Aggregate 75th percentiles using simple average."""
         from tacoreader.utils.stats import stats_p75
 
-        return stats_p75(self._data.to_pandas())
+        return stats_p75(self._data)
 
     def stats_p95(self) -> np.ndarray:
-        """
-        Aggregate 95th percentiles using simple average.
-
-        Returns:
-            numpy array with 95th percentile values
-        """
+        """Aggregate 95th percentiles using simple average."""
         from tacoreader.utils.stats import stats_p95
 
-        return stats_p95(self._data.to_pandas())
+        return stats_p95(self._data)
