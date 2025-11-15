@@ -39,8 +39,7 @@ build-backend = "poetry.core.masonry.api"
 files = ["tacoreader"]
 exclude = [
     "^tacoreader/v1/",
-    "^tests/",
-    "^tacoreader/_nest_asyncio.py"
+    "^tests/"
 ]
 ignore_missing_imports = true
 

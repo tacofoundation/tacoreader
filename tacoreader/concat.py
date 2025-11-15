@@ -4,7 +4,7 @@ from pathlib import Path
 import duckdb
 import polars as pl
 
-from tacoreader.constants import CACHE_CONCAT_PREFIX
+from tacoreader._constants import CACHE_CONCAT_PREFIX
 
 if TYPE_CHECKING:
     from tacoreader.dataset import TacoDataset

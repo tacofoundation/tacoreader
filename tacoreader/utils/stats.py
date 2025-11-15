@@ -10,7 +10,7 @@ import warnings
 import numpy as np
 import polars as pl
 
-from tacoreader.constants import STATS_CONTINUOUS_LENGTH
+from tacoreader._constants import STATS_CONTINUOUS_LENGTH
 
 
 # ============================================================================

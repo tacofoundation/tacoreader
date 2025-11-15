@@ -36,7 +36,7 @@ Key features:
 - Queries across terabytes without opening all ZIPs
 - Fixed-size header (128 bytes) for instant access
 - internal:source_file column identifies origin ZIP
-- Cloud-native with parallel chunk downloads
+- Simple synchronous loading (works in Jupyter/Colab)
 - DuckDB-optimized Parquet configuration
 
 Main classes:
@@ -53,11 +53,11 @@ Example:
     >>> df = peru.data
 """
 
-import asyncio
 import json
 import mmap
 import struct
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
 
@@ -66,8 +66,7 @@ import obstore as obs
 from obstore.store import from_url
 
 from tacoreader.backends.base import TacoBackend
-from tacoreader.constants import (
-    NETWORK_CHUNK_SIZE,
+from tacoreader._constants import (
     TACOCAT_HEADER_SIZE,
     TACOCAT_INDEX_ENTRY_SIZE,
     TACOCAT_MAGIC,
@@ -75,9 +74,12 @@ from tacoreader.constants import (
     TACOCAT_TOTAL_HEADER_SIZE,
     TACOCAT_VERSION,
 )
+from tacoreader._logging import get_logger
 from tacoreader.dataset import TacoDataset
 from tacoreader.schema import PITSchema
 from tacoreader.utils.vsi import to_vsi_root
+
+logger = get_logger(__name__)
 
 
 # ============================================================================
@@ -241,14 +243,13 @@ class TacoCatBackend(TacoBackend):
     # ABSTRACT METHOD IMPLEMENTATIONS
     # ========================================================================
 
-    def load(self, path: str, cache_dir: Path | None = None, debug: bool = False) -> TacoDataset:
+    def load(self, path: str, cache_dir: Path | None = None) -> TacoDataset:
         """
-        Load TacoCat dataset.
+        Load TacoCat dataset (synchronous).
 
         Args:
             path: Path to __TACOCAT__ file (local or remote)
             cache_dir: Cache directory for metadata files (optional)
-            debug: Print timing information (optional)
 
         Returns:
             TacoDataset with lazy SQL interface
@@ -263,10 +264,117 @@ class TacoCatBackend(TacoBackend):
             >>> print(dataset.id)
             'consolidated-dataset'
             >>>
-            >>> # With debug timing
-            >>> dataset = backend.load("__TACOCAT__", debug=True)
+            >>> # With logging enabled
+            >>> import tacoreader
+            >>> tacoreader.verbose()
+            >>> dataset = backend.load("__TACOCAT__")
+            INFO [tacoreader.backends.tacocat] Loaded TacoCat in 1.23s
         """
-        return asyncio.run(self.load_async(path, cache_dir, debug=debug))
+        t_start = time.time()
+        
+        # Step 1: Create cache directory
+        if cache_dir is None:
+            cache_dir = Path(tempfile.mkdtemp(prefix="tacoreader-"))
+        
+        logger.debug(f"Created cache directory: {cache_dir}")
+
+        # Step 2: Download/read entire TacoCat file
+        t_download = time.time()
+        full_bytes = self._get_full_file(path)
+        download_time = time.time() - t_download
+        file_size_mb = len(full_bytes) / (1024 * 1024)
+        logger.debug(f"Downloaded {file_size_mb:.1f}MB in {download_time:.2f}s ({file_size_mb/download_time:.1f}MB/s)")
+
+        # Step 3: Parse header from memory
+        header = TacoCatHeader(full_bytes[0:TACOCAT_TOTAL_HEADER_SIZE])
+        logger.debug(f"Parsed header: version={header.version}, max_depth={header.max_depth}, levels={list(header.level_index.keys())}")
+
+        # Step 4: Parse COLLECTION.json from memory
+        collection_bytes = full_bytes[
+            header.collection_offset : header.collection_offset + header.collection_size
+        ]
+        try:
+            collection = json.loads(collection_bytes)
+        except json.JSONDecodeError as e:
+            raise json.JSONDecodeError(
+                f"Invalid COLLECTION.json in TacoCat {path}: {e.msg}", e.doc, e.pos
+            )
+        
+        logger.debug("Parsed COLLECTION.json")
+
+        # Step 5: Extract and cache levels from memory
+        consolidated_files = {}
+        for level_id, (offset, size) in header.level_index.items():
+            if size == 0:
+                continue
+
+            # Extract parquet bytes from memory
+            parquet_bytes = full_bytes[offset : offset + size]
+
+            # Write to cache
+            cache_file = cache_dir / f"level{level_id}.parquet"
+            cache_file.write_bytes(parquet_bytes)
+
+            consolidated_files[f"level{level_id}"] = str(cache_file)
+
+        if not consolidated_files:
+            raise ValueError(
+                f"No metadata levels found in TacoCat: {path}\n"
+                f"TacoCat appears to be empty or malformed."
+            )
+        
+        logger.debug(f"Cached {len(consolidated_files)} metadata levels")
+
+        # Step 6: Create DuckDB connection
+        db = duckdb.connect(":memory:")
+
+        # Step 7: Load spatial extension
+        try:
+            db.execute("INSTALL spatial")
+            db.execute("LOAD spatial")
+            logger.debug("Loaded DuckDB spatial extension")
+        except Exception as e:
+            logger.debug(f"Spatial extension not available: {e}")
+
+        # Step 8: Convert path to VSI format
+        root_path = to_vsi_root(path)
+
+        # Step 9: Setup DuckDB views
+        self.setup_duckdb_views(db, consolidated_files, root_path)
+        logger.debug("Created DuckDB views")
+
+        # Step 10: Create 'data' view
+        db.execute("CREATE VIEW data AS SELECT * FROM level0")
+
+        # Step 11: Extract PIT schema
+        schema = PITSchema(collection["taco:pit_schema"])
+
+        # Step 12: Construct TacoDataset
+        dataset = TacoDataset.model_construct(
+            id=collection["id"],
+            version=collection.get("dataset_version", "unknown"),
+            description=collection.get("description", ""),
+            tasks=collection.get("tasks", []),
+            extent=collection.get("extent", {}),
+            providers=collection.get("providers", []),
+            licenses=collection.get("licenses", []),
+            title=collection.get("title"),
+            curators=collection.get("curators"),
+            keywords=collection.get("keywords"),
+            pit_schema=schema,
+            _path=path,
+            _format=self.format_name,
+            _collection=collection,
+            _consolidated_files=consolidated_files,
+            _duckdb=db,
+            _view_name="data",
+            _root_path=root_path,
+        )
+        
+        total_time = time.time() - t_start
+        logger.info(f"Loaded TacoCat in {total_time:.2f}s")
+        
+        return dataset
 
     def read_collection(self, path: str) -> dict[str, Any]:
         """
@@ -294,7 +402,26 @@ class TacoCatBackend(TacoBackend):
             >>> print(collection["_tacocat"]["num_datasets"])
             42
         """
-        return asyncio.run(self.read_collection_async(path))
+        # Get full file
+        full_bytes = self._get_full_file(path)
+
+        # Parse header
+        header = TacoCatHeader(full_bytes[0:TACOCAT_TOTAL_HEADER_SIZE])
+
+        if header.collection_size == 0:
+            raise ValueError(f"Empty COLLECTION.json in TacoCat: {path}")
+
+        # Extract collection from memory
+        collection_bytes = full_bytes[
+            header.collection_offset : header.collection_offset + header.collection_size
+        ]
+
+        try:
+            return json.loads(collection_bytes)
+        except json.JSONDecodeError as e:
+            raise json.JSONDecodeError(
+                f"Invalid COLLECTION.json in TacoCat {path}: {e.msg}", e.doc, e.pos
+            )
 
     def cache_metadata_files(self, path: str, cache_dir: Path) -> dict[str, str]:
         """
@@ -330,7 +457,34 @@ class TacoCatBackend(TacoBackend):
             >>> print(df["internal:source_file"].unique())
             ['part0001.tacozip', 'part0002.tacozip', ...]
         """
-        return asyncio.run(self.cache_metadata_files_async(path, cache_dir))
+        # Get full file
+        full_bytes = self._get_full_file(path)
+
+        # Parse header
+        header = TacoCatHeader(full_bytes[0:TACOCAT_TOTAL_HEADER_SIZE])
+
+        # Extract levels from memory
+        consolidated_files = {}
+        for level_id, (offset, size) in header.level_index.items():
+            if size == 0:
+                continue
+
+            # Extract parquet bytes
+            parquet_bytes = full_bytes[offset : offset + size]
+
+            # Write to cache
+            cache_file = cache_dir / f"level{level_id}.parquet"
+            cache_file.write_bytes(parquet_bytes)
+
+            consolidated_files[f"level{level_id}"] = str(cache_file)
+
+        if not consolidated_files:
+            raise ValueError(
+                f"No metadata levels found in TacoCat: {path}\n"
+                f"TacoCat appears to be empty or malformed."
+            )
+
+        return consolidated_files
 
     def setup_duckdb_views(
         self,
@@ -384,256 +538,36 @@ class TacoCatBackend(TacoBackend):
             )
 
     # ========================================================================
-    # INTERNAL IMPLEMENTATION
-    # ========================================================================
-
-    async def load_async(
-        self, path: str, cache_dir: Path | None = None, debug: bool = False
-    ) -> TacoDataset:
-        """Internal: Load with parallel chunk download."""
-        import time
-        
-        t_start = time.time()
-        
-        # Step 1: Create cache directory
-        if cache_dir is None:
-            cache_dir = Path(tempfile.mkdtemp(prefix="tacoreader-"))
-        
-        if debug:
-            print(f"[{time.time() - t_start:.2f}s] Created cache directory")
-
-        # Step 2: Download/read entire TacoCat file (parallel for remote)
-        t_download = time.time()
-        full_bytes = await self._get_full_file(path, debug=debug)
-        if debug:
-            mb = len(full_bytes) / (1024 * 1024)
-            dt = time.time() - t_download
-            print(f"[{time.time() - t_start:.2f}s] Downloaded {mb:.1f}MB in {dt:.2f}s ({mb/dt:.1f}MB/s)")
-
-        # Step 3: Parse header from memory
-        t_parse = time.time()
-        header = TacoCatHeader(full_bytes[0:TACOCAT_TOTAL_HEADER_SIZE])
-        if debug:
-            print(f"[{time.time() - t_start:.2f}s] Parsed header ({(time.time() - t_parse)*1000:.1f}ms)")
-
-        # Step 4: Parse COLLECTION.json from memory
-        collection_bytes = full_bytes[
-            header.collection_offset : header.collection_offset + header.collection_size
-        ]
-        try:
-            collection = json.loads(collection_bytes)
-        except json.JSONDecodeError as e:
-            raise json.JSONDecodeError(
-                f"Invalid COLLECTION.json in TacoCat {path}: {e.msg}", e.doc, e.pos
-            )
-        
-        if debug:
-            print(f"[{time.time() - t_start:.2f}s] Parsed COLLECTION.json")
-
-        # Step 5: Extract and cache levels from memory
-        t_cache = time.time()
-        consolidated_files = {}
-        for level_id, (offset, size) in header.level_index.items():
-            if size == 0:
-                continue
-
-            # Extract parquet bytes from memory
-            parquet_bytes = full_bytes[offset : offset + size]
-
-            # Write to cache
-            cache_file = cache_dir / f"level{level_id}.parquet"
-            cache_file.write_bytes(parquet_bytes)
-
-            consolidated_files[f"level{level_id}"] = str(cache_file)
-
-        if not consolidated_files:
-            raise ValueError(
-                f"No metadata levels found in TacoCat: {path}\n"
-                f"TacoCat appears to be empty or malformed."
-            )
-        
-        if debug:
-            dt = time.time() - t_cache
-            print(f"[{time.time() - t_start:.2f}s] Wrote {len(consolidated_files)} levels to cache ({dt:.2f}s)")
-
-        # Step 6: Create DuckDB connection
-        t_duckdb = time.time()
-        db = duckdb.connect(":memory:")
-
-        # Step 7: Load spatial extension
-        try:
-            db.execute("INSTALL spatial")
-            db.execute("LOAD spatial")
-        except Exception:
-            pass
-
-        # Step 8: Convert path to VSI format
-        root_path = to_vsi_root(path)
-
-        # Step 9: Setup DuckDB views
-        self.setup_duckdb_views(db, consolidated_files, root_path)
-
-        # Step 10: Create 'data' view
-        db.execute("CREATE VIEW data AS SELECT * FROM level0")
-        
-        if debug:
-            dt = time.time() - t_duckdb
-            print(f"[{time.time() - t_start:.2f}s] Setup DuckDB ({dt:.2f}s)")
-
-        # Step 11: Extract PIT schema
-        schema = PITSchema(collection["taco:pit_schema"])
-
-        # Step 12: Construct TacoDataset
-        dataset = TacoDataset.model_construct(
-            id=collection["id"],
-            version=collection.get("dataset_version", "unknown"),
-            description=collection.get("description", ""),
-            tasks=collection.get("tasks", []),
-            extent=collection.get("extent", {}),
-            providers=collection.get("providers", []),
-            licenses=collection.get("licenses", []),
-            title=collection.get("title"),
-            curators=collection.get("curators"),
-            keywords=collection.get("keywords"),
-            pit_schema=schema,
-            _path=path,
-            _format=self.format_name,
-            _collection=collection,
-            _consolidated_files=consolidated_files,
-            _duckdb=db,
-            _view_name="data",
-            _root_path=root_path,
-        )
-        
-        if debug:
-            print(f"✓ Loaded in {time.time() - t_start:.2f}s")
-        
-        return dataset
-
-    async def read_collection_async(self, path: str, debug: bool = False) -> dict[str, Any]:
-        """Internal: Read COLLECTION.json."""
-        # Get full file
-        full_bytes = await self._get_full_file(path, debug=debug)
-
-        # Parse header
-        header = TacoCatHeader(full_bytes[0:TACOCAT_TOTAL_HEADER_SIZE])
-
-        if header.collection_size == 0:
-            raise ValueError(f"Empty COLLECTION.json in TacoCat: {path}")
-
-        # Extract collection from memory
-        collection_bytes = full_bytes[
-            header.collection_offset : header.collection_offset + header.collection_size
-        ]
-
-        try:
-            return json.loads(collection_bytes)
-        except json.JSONDecodeError as e:
-            raise json.JSONDecodeError(
-                f"Invalid COLLECTION.json in TacoCat {path}: {e.msg}", e.doc, e.pos
-            )
-
-    async def cache_metadata_files_async(
-        self, path: str, cache_dir: Path, debug: bool = False
-    ) -> dict[str, str]:
-        """Internal: Cache metadata from full file download."""
-        # Get full file
-        full_bytes = await self._get_full_file(path, debug=debug)
-
-        # Parse header
-        header = TacoCatHeader(full_bytes[0:TACOCAT_TOTAL_HEADER_SIZE])
-
-        # Extract levels from memory
-        consolidated_files = {}
-        for level_id, (offset, size) in header.level_index.items():
-            if size == 0:
-                continue
-
-            # Extract parquet bytes
-            parquet_bytes = full_bytes[offset : offset + size]
-
-            # Write to cache
-            cache_file = cache_dir / f"level{level_id}.parquet"
-            cache_file.write_bytes(parquet_bytes)
-
-            consolidated_files[f"level{level_id}"] = str(cache_file)
-
-        if not consolidated_files:
-            raise ValueError(
-                f"No metadata levels found in TacoCat: {path}\n"
-                f"TacoCat appears to be empty or malformed."
-            )
-
-        return consolidated_files
-
-    # ========================================================================
     # INTERNAL HELPERS
     # ========================================================================
 
-    async def _get_full_file(self, path: str, debug: bool = False) -> bytes:
+    def _get_full_file(self, path: str) -> bytes:
         """
-        Get entire TacoCat file as bytes.
+        Get entire TacoCat file as bytes (synchronous).
         
-        Remote: Parallel chunk download with multiple get_range_async calls
-        Local: Read with mmap
+        Local: Read with mmap for efficiency
+        Remote: Simple download with obs.get()
         
-        Uses optimal 4MB chunk size for S3/GCS downloads based on empirical testing.
+        Args:
+            path: Path to __TACOCAT__ file (local or remote)
+            
+        Returns:
+            Complete file contents as bytes
         """
-        import time
-        
         if Path(path).exists():
             # Local file: read with mmap
-            if debug:
-                print(f"  Reading local file...")
+            logger.debug(f"Reading local TacoCat file: {path}")
             with open(path, "rb") as f:
                 with mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as mm:
                     return bytes(mm[:])
         else:
-            # Remote file: parallel download with multiple get_range_async
+            # Remote file: simple download with obstore
             try:
-                # Use obstore defaults                
+                logger.debug(f"Downloading remote TacoCat file: {path}")
+                    
                 store = from_url(path)
-                
-                # Get file size with HEAD request
-                t_head = time.time()
-                metadata = await obs.head_async(store, "")
-                total_size = metadata["size"]
-                
-                if debug:
-                    dt = time.time() - t_head
-                    mb = total_size / (1024 * 1024)
-                    print(f"  HEAD request: {mb:.1f}MB file ({dt:.3f}s)")
-                
-                # Calculate chunks using optimal 4MB size
-                num_chunks = (total_size + NETWORK_CHUNK_SIZE - 1) // NETWORK_CHUNK_SIZE
-                
-                if debug:
-                    print(f"  Downloading {num_chunks} chunks in parallel (chunk size: {NETWORK_CHUNK_SIZE / (1024*1024):.1f}MB)...")
-                
-                # Function to download ONE chunk
-                async def download_chunk(i):
-                    start = i * NETWORK_CHUNK_SIZE
-                    end = min(start + NETWORK_CHUNK_SIZE, total_size)
-                    return await obs.get_range_async(store, "", start=start, end=end)
-                
-                # Launch ALL chunks in parallel with gather
-                t_download = time.time()
-                chunks = await asyncio.gather(*[download_chunk(i) for i in range(num_chunks)])
-                
-                if debug:
-                    dt = time.time() - t_download
-                    mb = total_size / (1024 * 1024)
-                    print(f"  Downloaded {num_chunks} chunks in {dt:.2f}s ({mb/dt:.1f}MB/s)")
-                
-                # Concatenate chunks
-                t_concat = time.time()
-                result = b"".join(bytes(chunk) for chunk in chunks)
-                
-                if debug:
-                    dt = time.time() - t_concat
-                    print(f"  Concatenated chunks ({dt:.3f}s)")
-                
-                return result
+                result = obs.get(store, "")
+                return bytes(result.bytes())
                 
             except Exception as e:
                 raise OSError(f"Failed to download TacoCat from {path}: {e}")

@@ -19,7 +19,7 @@ Main functions:
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-from tacoreader.constants import (
+from tacoreader._constants import (
     STAC_GEOMETRY_COLUMN_PRIORITY,
     STAC_TIME_COLUMN_PRIORITY,
 )

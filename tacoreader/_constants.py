@@ -12,8 +12,6 @@ Organization:
 - CACHE_*       : Cache and temporary files (tacoreader-specific)
 """
 
-import re
-
 # =============================================================================
 # METADATA COLUMNS (SHARED with tacotoolbox)
 # =============================================================================
@@ -133,16 +131,6 @@ DATAFRAME_DEFAULT_HEAD_ROWS = 5
 
 DATAFRAME_DEFAULT_TAIL_ROWS = 5
 """Default number of rows for .tail()"""
-
-# =============================================================================
-# PARALLEL LOADING (tacoreader-specific)
-# =============================================================================
-
-PARALLEL_DEFAULT_MAX_WORKERS = 8
-"""Default max parallel workers for loading multiple files."""
-
-PARALLEL_MIN_WORKERS = 1
-"""Minimum parallel workers (sequential loading)."""
 
 # =============================================================================
 # STATISTICS AGGREGATION (tacoreader-specific)

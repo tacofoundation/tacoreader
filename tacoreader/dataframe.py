@@ -16,7 +16,7 @@ import numpy as np
 import obstore as obs
 import polars as pl
 
-from tacoreader.constants import (
+from tacoreader._constants import (
     DATAFRAME_DEFAULT_HEAD_ROWS,
     DATAFRAME_DEFAULT_TAIL_ROWS,    
     is_protected_column,
