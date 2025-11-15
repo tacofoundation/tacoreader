@@ -6,7 +6,6 @@ Organization:
 - TACOCAT_*     : TacoCat format specification (imported from tacotoolbox logic)
 - METADATA_*    : Metadata column names (shared with tacotoolbox)
 - PADDING_*     : Padding constants (shared with tacotoolbox)
-- NETWORK_*     : Network and download configuration (tacoreader-specific)
 - DUCKDB_*      : DuckDB configuration (tacoreader-specific)
 - STAC_*        : STAC/spatial filtering (tacoreader-specific)
 - DATAFRAME_*   : DataFrame operations (tacoreader-specific)
@@ -104,51 +103,6 @@ TACOCAT_TOTAL_HEADER_SIZE = TACOCAT_HEADER_SIZE + TACOCAT_INDEX_SIZE  # 128
 
 TACOCAT_FILENAME = "__TACOCAT__"
 """Fixed filename for TacoCat consolidated files."""
-
-# =============================================================================
-# AVRO SERIALIZATION (SHARED with tacotoolbox)
-# =============================================================================
-
-AVRO_COLON_REPLACEMENT = "_COLON_"
-"""
-Replacement string for colons in Avro column names.
-
-CRITICAL: Avro specification does not allow colons (:) in field names.
-We must replace them during serialization and restore during deserialization.
-
-Serialization flow:
-    Write: "internal:parent_id" → "internal_COLON_parent_id"
-    Read:  "internal_COLON_parent_id" → "internal:parent_id"
-"""
-
-# =============================================================================
-# NETWORK & DOWNLOAD CONFIGURATION (tacoreader-specific)
-# =============================================================================
-
-# Optimal chunk size for parallel downloads (empirically tested)
-# Testing results (137MB file from S3, December 2024):
-# - 2MB:  ~27s (5.0 MB/s) - too many requests, overhead dominates
-# - 4MB:  ~15s (9.1 MB/s) - OPTIMAL ✓
-# - 10MB: ~18s (7.6 MB/s) - fewer requests but larger buffers
-# - 20MB: ~21s (6.5 MB/s) - too large, memory allocation overhead
-NETWORK_CHUNK_SIZE = 4 * 1024 * 1024  # 4MB
-"""
-Chunk size for parallel range requests when downloading TacoCat files.
-
-Empirically tested as optimal for S3/GCS. Balances:
-- Number of concurrent requests (parallelism)
-- Buffer allocation overhead
-- Network round-trip latency
-"""
-
-NETWORK_CLIENT_OPTIONS = None
-"""
-obstore client configuration.
-
-Current testing shows default values are optimal. Custom options
-like pool_idle_timeout and timeout provide <5% benefit while adding
-complexity. Use None to rely on obstore's smart defaults.
-"""
 
 # =============================================================================
 # CACHE & TEMPORARY FILES (tacoreader-specific)
@@ -304,16 +258,3 @@ def validate_depth(depth: int, context: str = "operation") -> None:
             f"{context}: depth {depth} exceeds maximum of {SHARED_MAX_DEPTH} "
             f"(levels 0-{SHARED_MAX_DEPTH})"
         )
-
-
-def get_chunk_size() -> int:
-    """
-    Get optimal chunk size for downloads.
-    
-    Returns optimal chunk size in bytes. Can be extended later
-    to adapt based on file size, network conditions, etc.
-    
-    Returns:
-        Chunk size in bytes (currently 4MB)
-    """
-    return NETWORK_CHUNK_SIZE

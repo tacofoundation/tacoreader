@@ -538,7 +538,7 @@ class TacoDataFrame:
 
         Handles both formats:
         - /vsisubfile/ paths (ZIP, TacoCat): Read Parquet from offset
-        - Direct paths (FOLDER): Read Parquet from filesystem (__meta__ now uses Parquet)
+        - Direct paths (FOLDER): Read Parquet from filesystem (__meta__ uses Parquet)
 
         Args:
             row: Row dictionary with sample metadata
@@ -610,7 +610,7 @@ class TacoDataFrame:
 
                 children_df = pl.read_parquet(meta_path)
 
-            # Parquet preserves colons natively - no desanitization needed
+            # Parquet natively supports colons in column names
 
             # Construct direct paths for children
             children_df = children_df.with_columns(

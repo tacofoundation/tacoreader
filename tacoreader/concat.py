@@ -84,10 +84,8 @@ def concat(datasets: list["TacoDataset"], verbose: bool = False) -> "TacoDataset
             if level_key in ds._consolidated_files:
                 file_path = ds._consolidated_files[level_key]
 
-                if file_path.endswith(".avro"):
-                    df = pl.read_avro(file_path)
-                else:
-                    df = pl.read_parquet(file_path)
+                # All metadata files are now Parquet
+                df = pl.read_parquet(file_path)
 
                 # Add internal:source_file to track original dataset
                 df = df.with_columns(

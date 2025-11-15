@@ -11,12 +11,12 @@ FOLDER Structure:
     │   ├── sample_001.tif (if level 0 = FILEs)
     │   OR
     │   ├── folder_A/ (if level 0 = FOLDERs)
-    │   │   ├── __meta__ (Avro)
+    │   │   ├── __meta__ (Parquet)
     │   │   ├── nested_001.tif
     │   │   └── nested_002.tif
     ├── METADATA/
-    │   ├── level0.avro
-    │   └── level1.avro
+    │   ├── level0.parquet
+    │   └── level1.parquet
     └── COLLECTION.json
 
 Key features:
@@ -24,7 +24,7 @@ Key features:
 - Direct file access without decompression
 - Efficient for development and testing
 - Supports both local and remote (S3/GCS) storage
-- Metadata stored as Avro for schema support
+- Metadata stored as Parquet for efficient deduplication
 
 Main class:
     FolderBackend: Backend implementation for FOLDER format
@@ -60,9 +60,9 @@ class FolderBackend(TacoBackend):
     loose files. Files are accessed directly via filesystem paths or
     cloud storage URLs without requiring decompression.
 
-    The FOLDER format stores metadata as Avro files (for schema support)
-    and constructs GDAL paths dynamically based on sample IDs and types.
-    Navigation uses __meta__ files for FOLDERs and direct paths for FILEs.
+    The FOLDER format stores metadata as Parquet files and constructs 
+    GDAL paths dynamically based on sample IDs and types. Navigation 
+    uses __meta__ files for FOLDERs and direct paths for FILEs.
 
     Attributes:
         format_name: Returns "folder"
@@ -151,12 +151,12 @@ class FolderBackend(TacoBackend):
 
     def cache_metadata_files(self, path: str, cache_dir: Path) -> dict[str, str]:
         """
-        Cache Avro metadata files from FOLDER/METADATA/ directory.
+        Cache Parquet metadata files from FOLDER/METADATA/ directory.
 
         For local datasets, returns direct paths to existing files.
         For remote datasets, downloads files to cache directory.
 
-        Attempts to read level0.avro through level5.avro (up to 6 levels),
+        Attempts to read level0.parquet through level5.parquet (up to 6 levels),
         stopping when a level file is not found.
 
         Args:
@@ -165,7 +165,7 @@ class FolderBackend(TacoBackend):
 
         Returns:
             Dictionary mapping level names to file paths
-            Example: {"level0": "data/METADATA/level0.avro", ...}
+            Example: {"level0": "data/METADATA/level0.parquet", ...}
 
         Raises:
             ValueError: If no metadata files found
@@ -197,7 +197,7 @@ class FolderBackend(TacoBackend):
                 )
 
             for i in range(6):  # Max 6 levels (0-5)
-                level_file = metadata_dir / f"level{i}.avro"
+                level_file = metadata_dir / f"level{i}.parquet"
                 if level_file.exists():
                     consolidated_files[f"level{i}"] = str(level_file)
                 else:
@@ -209,9 +209,9 @@ class FolderBackend(TacoBackend):
 
             for i in range(6):  # Max 6 levels (0-5)
                 try:
-                    avro_result = obs.get(store, f"METADATA/level{i}.avro")
-                    level_file = cache_dir / f"level{i}.avro"
-                    level_file.write_bytes(bytes(avro_result.bytes()))
+                    parquet_result = obs.get(store, f"METADATA/level{i}.parquet")
+                    level_file = cache_dir / f"level{i}.parquet"
+                    level_file.write_bytes(bytes(parquet_result.bytes()))
                     consolidated_files[f"level{i}"] = str(level_file)
                 except Exception:
                     # Stop at first missing level (expected behavior)
@@ -220,7 +220,7 @@ class FolderBackend(TacoBackend):
         if not consolidated_files:
             raise ValueError(
                 f"No metadata files found in {path}/METADATA/\n"
-                f"Expected at least level0.avro"
+                f"Expected at least level0.parquet"
             )
 
         return consolidated_files
@@ -245,6 +245,8 @@ class FolderBackend(TacoBackend):
             - FILE: {root}DATA/{internal:relative_path}
             - FOLDER: {root}DATA/{internal:relative_path}__meta__
 
+        Parquet natively supports colons in column names, so no sanitization needed.
+
         Args:
             db: DuckDB connection for creating views
             consolidated_files: Cached metadata file paths
@@ -257,31 +259,22 @@ class FolderBackend(TacoBackend):
             >>> backend.setup_duckdb_views(db, files, "s3://bucket/data/")
             >>> result = db.execute("SELECT * FROM level0 LIMIT 1").fetchone()
         """
-        # Ensure avro extension is installed and loaded
-        try:
-            db.execute("INSTALL avro")
-        except duckdb.Error:
-            pass        
-        db.execute("LOAD avro")
-
         # Ensure root path has trailing slash
         root = root_path if root_path.endswith("/") else root_path + "/"
 
         for level_key, file_path in consolidated_files.items():
-            columns_sql = self._build_column_select(db, file_path)
-
             if level_key == "level0":
                 # Level 0: Use id directly (no relative_path column)
                 db.execute(
                     f"""
                     CREATE VIEW {level_key} AS 
-                    SELECT {columns_sql},
+                    SELECT *,
                       CASE 
                         WHEN type = 'FOLDER' THEN '{root}DATA/' || id || '/__meta__'
                         WHEN type = 'FILE' THEN '{root}DATA/' || id
                         ELSE NULL
                       END as "internal:gdal_vsi"
-                    FROM read_avro('{file_path}')
+                    FROM read_parquet('{file_path}')
                     WHERE id NOT LIKE '__TACOPAD__%'
                 """
                 )
@@ -290,32 +283,13 @@ class FolderBackend(TacoBackend):
                 db.execute(
                     f"""
                     CREATE VIEW {level_key} AS 
-                    SELECT {columns_sql},
+                    SELECT *,
                       CASE 
-                        WHEN type = 'FOLDER' THEN '{root}DATA/' || "internal_COLON_relative_path" || '__meta__'
-                        WHEN type = 'FILE' THEN '{root}DATA/' || "internal_COLON_relative_path"
+                        WHEN type = 'FOLDER' THEN '{root}DATA/' || "internal:relative_path" || '__meta__'
+                        WHEN type = 'FILE' THEN '{root}DATA/' || "internal:relative_path"
                         ELSE NULL
                       END as "internal:gdal_vsi"
-                    FROM read_avro('{file_path}')
+                    FROM read_parquet('{file_path}')
                     WHERE id NOT LIKE '__TACOPAD__%'
                 """
                 )
-
-    def _build_column_select(
-        self, db: duckdb.DuckDBPyConnection, file_path: str
-    ) -> str:
-        """Build column SELECT with rename from _COLON_ back to :."""
-        schema = db.execute(
-            f"DESCRIBE SELECT * FROM read_avro('{file_path}')"
-        ).fetchall()
-
-        columns = []
-        for row in schema:
-            col_name = row[0]
-            if "_COLON_" in col_name:
-                original_name = col_name.replace("_COLON_", ":")
-                columns.append(f'"{col_name}" AS "{original_name}"')
-            else:
-                columns.append(f'"{col_name}"')
-
-        return ", ".join(columns)
