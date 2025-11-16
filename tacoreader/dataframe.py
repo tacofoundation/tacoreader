@@ -13,14 +13,82 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-import obstore as obs
 import polars as pl
 
 from tacoreader._constants import (
+    NAVIGATION_REQUIRED_COLUMNS,
     DATAFRAME_DEFAULT_HEAD_ROWS,
     DATAFRAME_DEFAULT_TAIL_ROWS,    
     is_protected_column,
 )
+
+
+def _validate_navigation_columns(df: pl.DataFrame, operation: str) -> None:
+    """
+    Validate that critical columns required for navigation are present.
+
+    After filter/select/sort operations, we need to ensure that the
+    resulting DataFrame still has the minimum columns required for
+    .read() navigation to work.
+
+    Args:
+        df: DataFrame to validate
+        operation: Name of operation (for error message)
+
+    Raises:
+        ValueError: If required columns are missing
+    """
+    current_cols = set(df.columns)
+    missing = NAVIGATION_REQUIRED_COLUMNS - current_cols
+    
+    if missing:
+        raise ValueError(
+            f"Operation '{operation}' removed required columns: {sorted(missing)}\n"
+            f"\n"
+            f"Required columns for navigation:\n"
+            f"  - 'id': Sample identifier\n"
+            f"  - 'type': FOLDER or FILE indicator\n"
+            f"  - 'internal:gdal_vsi': Path for reading files\n"
+            f"\n"
+            f"These columns are required for .read() to work correctly.\n"
+            f"\n"
+            f"Current columns: {sorted(current_cols)}\n"
+            f"\n"
+            f"If you need to drop these columns, convert to Polars first:\n"
+            f"  df = tdf.to_polars()\n"
+            f"  df = df.select(['custom_column'])  # No restrictions"
+        )
+
+
+def _validate_not_protected(column_name: str) -> None:
+    """
+    Validate that a column is not protected and can be modified.
+
+    Protected columns are required for hierarchical navigation and cannot
+    be modified without breaking .read() functionality.
+
+    Args:
+        column_name: Column name to validate
+
+    Raises:
+        ValueError: If column is protected
+
+    Example:
+        >>> _validate_not_protected("cloud_cover")  # OK
+        >>> _validate_not_protected("id")  # ValueError
+        >>> _validate_not_protected("internal:offset")  # ValueError
+    """
+    if is_protected_column(column_name):
+        raise ValueError(
+            f"Cannot modify protected column: '{column_name}'\n"
+            f"\n"
+            f"Protected columns are required for hierarchical navigation:\n"
+            f"  - Core: id, type\n"
+            f"  - Internal: internal:parent_id, internal:offset, internal:size, "
+            f"internal:gdal_vsi, internal:source_file, internal:relative_path\n"
+            f"\n"
+            f"To create derived columns, use a different name."
+        )
 
 
 # ============================================================================
@@ -75,7 +143,6 @@ class TacoDataFrame:
         self,
         data: pl.DataFrame,
         format_type: str,
-        consolidated_files: dict[str, str],
     ):
         """
         Initialize TacoDataFrame.
@@ -83,11 +150,9 @@ class TacoDataFrame:
         Args:
             data: Materialized Polars DataFrame (in memory)
             format_type: Backend format ("zip", "folder", or "tacocat")
-            consolidated_files: Paths to cached metadata files
         """
         self._data = data
         self._format_type = format_type
-        self._consolidated_files = consolidated_files
 
     def __len__(self) -> int:
         """Number of rows in current level."""
@@ -180,16 +245,8 @@ class TacoDataFrame:
             >>> tdf["id"] = "new_id"  # ValueError!
             >>> tdf["internal:offset"] = 0  # ValueError!
         """
-        # Check if column is protected using centralized helper
-        if is_protected_column(key):
-            raise ValueError(
-                f"Cannot modify protected column: '{key}'\n"
-                f"Protected columns are required for hierarchical navigation:\n"
-                f"  - Core: id, type\n"
-                f"  - Internal: internal:parent_id, internal:offset, internal:size, "
-                f"internal:gdal_vsi, internal:source_file, internal:relative_path\n"
-                f"To create derived columns, use a different name."
-            )
+        # Validate column is not protected
+        _validate_not_protected(key)
 
         # Convert to Polars Series if needed
         if isinstance(value, pl.Series):
@@ -277,6 +334,9 @@ class TacoDataFrame:
         Returns:
             New TacoDataFrame with filtered rows
 
+        Raises:
+            ValueError: If filter removes required navigation columns
+
         Examples:
             >>> # Filter by column value
             >>> large = tdf.filter(pl.col("internal:size") > 1000000)
@@ -292,10 +352,13 @@ class TacoDataFrame:
             >>> tdf.filter(pl.col("type") == "FOLDER").limit(10).read(0)
         """
         filtered_df = self._data.filter(*args, **kwargs)
+        
+        # Validate critical columns still exist
+        _validate_navigation_columns(filtered_df, "filter")
+        
         return TacoDataFrame(
             data=filtered_df,
             format_type=self._format_type,
-            consolidated_files=self._consolidated_files,
         )
 
     def select(self, *args, **kwargs) -> TacoDataFrame:
@@ -312,6 +375,9 @@ class TacoDataFrame:
         Returns:
             New TacoDataFrame with selected columns
 
+        Raises:
+            ValueError: If selection excludes required navigation columns
+
         Examples:
             >>> # Select specific columns
             >>> subset = tdf.select(["id", "type", "internal:gdal_vsi"])
@@ -323,10 +389,13 @@ class TacoDataFrame:
             >>> tdf.filter(pl.col("type") == "FILE").select(["id", "internal:size"])
         """
         selected_df = self._data.select(*args, **kwargs)
+        
+        # Validate critical columns still exist
+        _validate_navigation_columns(selected_df, "select")
+        
         return TacoDataFrame(
             data=selected_df,
             format_type=self._format_type,
-            consolidated_files=self._consolidated_files,
         )
 
     def limit(self, n: int) -> TacoDataFrame:
@@ -342,6 +411,9 @@ class TacoDataFrame:
         Returns:
             New TacoDataFrame with at most n rows
 
+        Raises:
+            ValueError: If limit somehow removes required navigation columns (unlikely)
+
         Examples:
             >>> # Get first 10 rows
             >>> subset = tdf.limit(10)
@@ -351,10 +423,13 @@ class TacoDataFrame:
             >>> tdf.filter(pl.col("type") == "FOLDER").limit(5)
         """
         limited_df = self._data.limit(n)
+        
+        # Validate critical columns still exist (should always pass for limit)
+        _validate_navigation_columns(limited_df, "limit")
+        
         return TacoDataFrame(
             data=limited_df,
             format_type=self._format_type,
-            consolidated_files=self._consolidated_files,
         )
 
     def sort(self, by, *args, **kwargs) -> TacoDataFrame:
@@ -372,6 +447,9 @@ class TacoDataFrame:
         Returns:
             New TacoDataFrame with sorted rows
 
+        Raises:
+            ValueError: If sort somehow removes required navigation columns (unlikely)
+
         Examples:
             >>> # Sort by single column
             >>> sorted_df = tdf.sort("id")
@@ -387,10 +465,13 @@ class TacoDataFrame:
             >>> tdf.filter(pl.col("type") == "FILE").sort("internal:size").limit(10)
         """
         sorted_df = self._data.sort(by, *args, **kwargs)
+        
+        # Validate critical columns still exist (should always pass for sort)
+        _validate_navigation_columns(sorted_df, "sort")
+        
         return TacoDataFrame(
             data=sorted_df,
             format_type=self._format_type,
-            consolidated_files=self._consolidated_files,
         )
 
     def with_column(self, name: str, expr) -> "TacoDataFrame":
@@ -436,16 +517,8 @@ class TacoDataFrame:
             >>> # PROTECTED: Cannot modify critical columns
             >>> tdf = tdf.with_column("id", "new_id")  # ValueError!
         """
-        # Check if column is protected using centralized helper
-        if is_protected_column(name):
-            raise ValueError(
-                f"Cannot modify protected column: '{name}'\n"
-                f"Protected columns are required for hierarchical navigation:\n"
-                f"  - Core: id, type\n"
-                f"  - Internal: internal:parent_id, internal:offset, internal:size, "
-                f"internal:gdal_vsi, internal:source_file, internal:relative_path\n"
-                f"To create derived columns, use a different name."
-            )
+        # Validate column is not protected
+        _validate_not_protected(name)
 
         # Handle different input types
         if isinstance(expr, pl.Expr):
@@ -461,7 +534,6 @@ class TacoDataFrame:
         return TacoDataFrame(
             data=new_data,
             format_type=self._format_type,
-            consolidated_files=self._consolidated_files,
         )
 
     # ========================================================================
@@ -546,13 +618,9 @@ class TacoDataFrame:
         Returns:
             TacoDataFrame with child samples
         """
+        from tacoreader.io import download_range, download_bytes
         from tacoreader.utils.format import is_remote
-        from tacoreader.utils.vsi import (
-            create_obstore_from_url,
-            extract_path_from_url,
-            parse_vsi_subfile,
-            strip_vsi_prefix,
-        )
+        from tacoreader.utils.vsi import parse_vsi_subfile, strip_vsi_prefix
 
         vsi_path = row["internal:gdal_vsi"]
 
@@ -562,13 +630,8 @@ class TacoDataFrame:
             original_path = strip_vsi_prefix(root_path)
 
             if is_remote(original_path):
-                store = create_obstore_from_url(original_path)
-                object_path = extract_path_from_url(original_path)
-
-                parquet_bytes = obs.get_range(
-                    store, object_path, start=offset, length=size
-                )
-                children_df = pl.read_parquet(BytesIO(bytes(parquet_bytes)))
+                parquet_bytes = download_range(original_path, offset, size)
+                children_df = pl.read_parquet(BytesIO(parquet_bytes))
             else:
                 with open(original_path, "rb") as f:
                     f.seek(offset)
@@ -588,19 +651,13 @@ class TacoDataFrame:
         else:
             # FOLDER format: Read Parquet from __meta__ file
             if is_remote(vsi_path):
-                store = create_obstore_from_url(vsi_path)
-                base_path = extract_path_from_url(vsi_path)
-
-                # Check if path already ends with __meta__
-                if base_path.endswith("/__meta__"):
-                    meta_path = base_path
+                # Determine subpath for __meta__
+                if vsi_path.endswith("/__meta__"):
+                    meta_bytes = download_bytes(vsi_path)
                 else:
-                    meta_path = f"{base_path}/__meta__"
+                    meta_bytes = download_bytes(vsi_path, "__meta__")
 
-                response = obs.get(store, meta_path)
-                meta_bytes = response.bytes()
-
-                children_df = pl.read_parquet(BytesIO(bytes(meta_bytes)))
+                children_df = pl.read_parquet(BytesIO(meta_bytes))
             else:
                 # Check if path already ends with __meta__
                 if vsi_path.endswith("/__meta__"):
@@ -627,7 +684,6 @@ class TacoDataFrame:
         return TacoDataFrame(
             data=children_df,
             format_type=self._format_type,
-            consolidated_files=self._consolidated_files,
         )
 
     def _construct_vsi_path(self, row_struct: dict, zip_path: str) -> str:

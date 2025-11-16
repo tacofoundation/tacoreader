@@ -19,13 +19,6 @@ FOLDER Structure:
     │   └── level1.parquet
     └── COLLECTION.json
 
-Key features:
-- Human-readable directory structure
-- Direct file access without decompression
-- Efficient for development and testing
-- Supports both local and remote (S3/GCS) storage
-- Metadata stored as Parquet for efficient deduplication
-
 Main class:
     FolderBackend: Backend implementation for FOLDER format
 
@@ -38,14 +31,22 @@ Example:
 """
 
 import json
+import time
 from pathlib import Path
 from typing import Any
 
 import duckdb
-import obstore as obs
-from obstore.store import from_url
+import pyarrow as pa
+import pyarrow.parquet as pq
 
 from tacoreader.backends.base import TacoBackend
+from tacoreader.io import download_bytes
+from tacoreader._logging import get_logger
+from tacoreader.dataset import TacoDataset
+from tacoreader.schema import PITSchema
+from tacoreader.utils.vsi import to_vsi_root
+
+logger = get_logger(__name__)
 
 # ============================================================================
 # FOLDER BACKEND
@@ -63,6 +64,9 @@ class FolderBackend(TacoBackend):
     The FOLDER format stores metadata as Parquet files and constructs 
     GDAL paths dynamically based on sample IDs and types. Navigation 
     uses __meta__ files for FOLDERs and direct paths for FILEs.
+
+    For local datasets, metadata files are read directly from disk.
+    For remote datasets, metadata is downloaded and loaded into memory.
 
     Attributes:
         format_name: Returns "folder"
@@ -87,6 +91,152 @@ class FolderBackend(TacoBackend):
     # ========================================================================
     # ABSTRACT METHOD IMPLEMENTATIONS
     # ========================================================================
+
+    def load(self, path: str) -> TacoDataset:
+        """
+        Load FOLDER dataset.
+
+        For local datasets, reads metadata directly from disk without loading
+        into memory. For remote datasets, downloads all metadata files and
+        loads them into memory.
+
+        Args:
+            path: Path to FOLDER dataset (local or remote)
+                 Local: "data/" or "/absolute/path/to/data/"
+                 Remote: "s3://bucket/data/" or "gs://bucket/data/"
+
+        Returns:
+            TacoDataset with lazy SQL interface
+
+        Raises:
+            ValueError: If FOLDER is invalid or missing metadata
+            IOError: If file access fails
+
+        Example:
+            >>> backend = FolderBackend()
+            >>> dataset = backend.load("data/")
+            >>> print(dataset.id)
+            'sentinel2-l2a'
+            >>>
+            >>> # Remote dataset
+            >>> dataset = backend.load("s3://bucket/data/")
+        """
+        t_start = time.time()
+        
+        logger.debug(f"Loading FOLDER from {path}")
+
+        # Step 1: Read COLLECTION.json
+        collection = self.read_collection(path)
+        logger.debug("Parsed COLLECTION.json")
+
+        # Step 2: Create DuckDB connection
+        db = duckdb.connect(":memory:")
+
+        # Step 3: Load spatial extension
+        try:
+            db.execute("INSTALL spatial")
+            db.execute("LOAD spatial")
+            logger.debug("Loaded DuckDB spatial extension")
+        except Exception as e:
+            logger.debug(f"Spatial extension not available: {e}")
+
+        is_local = Path(path).exists()
+        level_ids = []
+
+        if is_local:
+            # LOCAL: Read directly from disk without loading to memory
+            base_path = Path(path)
+            metadata_dir = base_path / "METADATA"
+
+            if not metadata_dir.exists():
+                raise ValueError(
+                    f"METADATA directory not found in {path}\n"
+                    f"Expected: {metadata_dir}"
+                )
+
+            for i in range(6):  # Max 6 levels (0-5)
+                level_file = metadata_dir / f"level{i}.parquet"
+                
+                if not level_file.exists():
+                    break
+                
+                # Create table reading directly from disk
+                table_name = f"level{i}_table"
+                db.execute(
+                    f"CREATE TABLE {table_name} AS SELECT * FROM read_parquet('{level_file}')"
+                )
+                
+                level_ids.append(i)
+                
+                logger.debug(f"Loaded {table_name} from disk")
+
+        else:
+            # REMOTE: Download all metadata and load to memory
+            for i in range(6):  # Max 6 levels (0-5)
+                try:
+                    # Download parquet
+                    parquet_bytes = download_bytes(path, f"METADATA/level{i}.parquet")
+                    
+                    # Load to PyArrow from bytes
+                    reader = pa.BufferReader(parquet_bytes)
+                    arrow_table = pq.read_table(reader)
+                    
+                    # Register in DuckDB (all in memory)
+                    table_name = f"level{i}_table"
+                    db.register(table_name, arrow_table)
+                    
+                    level_ids.append(i)
+                    
+                    logger.debug(f"Registered {table_name} in DuckDB ({len(parquet_bytes)} bytes)")
+                    
+                except Exception:
+                    # Stop at first missing level (expected behavior)
+                    break
+
+        if not level_ids:
+            raise ValueError(
+                f"No metadata files found in {path}/METADATA/\n"
+                f"Expected at least level0.parquet"
+            )
+
+        # Step 4: Convert path to VSI format
+        root_path = to_vsi_root(path)
+
+        # Step 5: Setup DuckDB views
+        self.setup_duckdb_views(db, level_ids, root_path)
+        logger.debug("Created DuckDB views")
+
+        # Step 6: Create 'data' view
+        db.execute("CREATE VIEW data AS SELECT * FROM level0")
+
+        # Step 7: Extract PIT schema
+        schema = PITSchema(collection["taco:pit_schema"])
+
+        # Step 8: Construct TacoDataset
+        dataset = TacoDataset.model_construct(
+            id=collection["id"],
+            version=collection.get("dataset_version", "unknown"),
+            description=collection.get("description", ""),
+            tasks=collection.get("tasks", []),
+            extent=collection.get("extent", {}),
+            providers=collection.get("providers", []),
+            licenses=collection.get("licenses", []),
+            title=collection.get("title"),
+            curators=collection.get("curators"),
+            keywords=collection.get("keywords"),
+            pit_schema=schema,
+            _path=path,
+            _format=self.format_name,
+            _collection=collection,
+            _duckdb=db,
+            _view_name="data",
+            _root_path=root_path,
+        )
+        
+        total_time = time.time() - t_start
+        logger.info(f"Loaded FOLDER in {total_time:.2f}s")
+        
+        return dataset
 
     def read_collection(self, path: str) -> dict[str, Any]:
         """
@@ -138,10 +288,8 @@ class FolderBackend(TacoBackend):
 
         # Remote storage
         try:
-            store = from_url(path)
-            collection_result = obs.get(store, "COLLECTION.json")
-            collection_bytes = collection_result.bytes()
-            return json.loads(bytes(collection_bytes))
+            collection_bytes = download_bytes(path, "COLLECTION.json")
+            return json.loads(collection_bytes)
         except json.JSONDecodeError as e:
             raise json.JSONDecodeError(
                 f"Invalid COLLECTION.json in {path}: {e.msg}", e.doc, e.pos
@@ -149,93 +297,18 @@ class FolderBackend(TacoBackend):
         except Exception as e:
             raise OSError(f"Failed to read COLLECTION.json from {path}: {e}")
 
-    def cache_metadata_files(self, path: str, cache_dir: Path) -> dict[str, str]:
-        """
-        Cache Parquet metadata files from FOLDER/METADATA/ directory.
-
-        For local datasets, returns direct paths to existing files.
-        For remote datasets, downloads files to cache directory.
-
-        Attempts to read level0.parquet through level5.parquet (up to 6 levels),
-        stopping when a level file is not found.
-
-        Args:
-            path: Path to FOLDER dataset (local or remote)
-            cache_dir: Directory to write cached files (remote only)
-
-        Returns:
-            Dictionary mapping level names to file paths
-            Example: {"level0": "data/METADATA/level0.parquet", ...}
-
-        Raises:
-            ValueError: If no metadata files found
-            IOError: If remote download fails
-
-        Example:
-            >>> backend = FolderBackend()
-            >>> cache_dir = Path("/tmp/cache")
-            >>> files = backend.cache_metadata_files("data/", cache_dir)
-            >>> print(files.keys())
-            dict_keys(['level0', 'level1'])
-
-            >>> # Remote dataset
-            >>> files = backend.cache_metadata_files("s3://bucket/data/", cache_dir)
-            >>> # Files downloaded to cache_dir
-        """
-        is_local = Path(path).exists()
-        consolidated_files = {}
-
-        if is_local:
-            # Local filesystem - return direct paths
-            base_path = Path(path)
-            metadata_dir = base_path / "METADATA"
-
-            if not metadata_dir.exists():
-                raise ValueError(
-                    f"METADATA directory not found in {path}\n"
-                    f"Expected: {metadata_dir}"
-                )
-
-            for i in range(6):  # Max 6 levels (0-5)
-                level_file = metadata_dir / f"level{i}.parquet"
-                if level_file.exists():
-                    consolidated_files[f"level{i}"] = str(level_file)
-                else:
-                    # Stop at first missing level
-                    break
-        else:
-            # Remote storage - download to cache
-            store = from_url(path)
-
-            for i in range(6):  # Max 6 levels (0-5)
-                try:
-                    parquet_result = obs.get(store, f"METADATA/level{i}.parquet")
-                    level_file = cache_dir / f"level{i}.parquet"
-                    level_file.write_bytes(bytes(parquet_result.bytes()))
-                    consolidated_files[f"level{i}"] = str(level_file)
-                except Exception:
-                    # Stop at first missing level (expected behavior)
-                    break
-
-        if not consolidated_files:
-            raise ValueError(
-                f"No metadata files found in {path}/METADATA/\n"
-                f"Expected at least level0.parquet"
-            )
-
-        return consolidated_files
-
     def setup_duckdb_views(
         self,
         db: duckdb.DuckDBPyConnection,
-        consolidated_files: dict[str, str],
+        level_ids: list[int],
         root_path: str,
     ) -> None:
         """
         Create DuckDB views with direct filesystem paths for FOLDER format.
 
-        Each view includes a computed 'internal:gdal_vsi' column that
-        constructs paths based on sample type and hierarchy level:
+        Each view references a table already registered in DuckDB and adds
+        a computed 'internal:gdal_vsi' column that constructs paths based
+        on sample type and hierarchy level:
 
         Level 0:
             - FILE: {root}DATA/{id}
@@ -245,36 +318,38 @@ class FolderBackend(TacoBackend):
             - FILE: {root}DATA/{internal:relative_path}
             - FOLDER: {root}DATA/{internal:relative_path}__meta__
 
-        Parquet natively supports colons in column names, so no sanitization needed.
-
         Args:
-            db: DuckDB connection for creating views
-            consolidated_files: Cached metadata file paths
+            db: DuckDB connection with tables already registered
+            level_ids: List of level IDs that have tables registered
             root_path: Root path to FOLDER dataset (with trailing /)
 
         Example:
             >>> import duckdb
             >>> db = duckdb.connect(":memory:")
+            >>> # ... register tables ...
             >>> backend = FolderBackend()
-            >>> backend.setup_duckdb_views(db, files, "s3://bucket/data/")
+            >>> backend.setup_duckdb_views(db, [0, 1], "s3://bucket/data/")
             >>> result = db.execute("SELECT * FROM level0 LIMIT 1").fetchone()
         """
         # Ensure root path has trailing slash
         root = root_path if root_path.endswith("/") else root_path + "/"
 
-        for level_key, file_path in consolidated_files.items():
-            if level_key == "level0":
+        for level_id in level_ids:
+            table_name = f"level{level_id}_table"
+            view_name = f"level{level_id}"
+            
+            if level_id == 0:
                 # Level 0: Use id directly (no relative_path column)
                 db.execute(
                     f"""
-                    CREATE VIEW {level_key} AS 
+                    CREATE VIEW {view_name} AS 
                     SELECT *,
                       CASE 
                         WHEN type = 'FOLDER' THEN '{root}DATA/' || id || '/__meta__'
                         WHEN type = 'FILE' THEN '{root}DATA/' || id
                         ELSE NULL
                       END as "internal:gdal_vsi"
-                    FROM read_parquet('{file_path}')
+                    FROM {table_name}
                     WHERE id NOT LIKE '__TACOPAD__%'
                 """
                 )
@@ -282,14 +357,14 @@ class FolderBackend(TacoBackend):
                 # Level 1+: Use internal:relative_path for nested structure
                 db.execute(
                     f"""
-                    CREATE VIEW {level_key} AS 
+                    CREATE VIEW {view_name} AS 
                     SELECT *,
                       CASE 
                         WHEN type = 'FOLDER' THEN '{root}DATA/' || "internal:relative_path" || '__meta__'
                         WHEN type = 'FILE' THEN '{root}DATA/' || "internal:relative_path"
                         ELSE NULL
                       END as "internal:gdal_vsi"
-                    FROM read_parquet('{file_path}')
+                    FROM {table_name}
                     WHERE id NOT LIKE '__TACOPAD__%'
                 """
                 )

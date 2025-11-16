@@ -36,7 +36,7 @@ Key features:
 - Queries across terabytes without opening all ZIPs
 - Fixed-size header (128 bytes) for instant access
 - internal:source_file column identifies origin ZIP
-- Simple synchronous loading (works in Jupyter/Colab)
+- All-in-memory loading (no temp files)
 - DuckDB-optimized Parquet configuration
 
 Main classes:
@@ -49,23 +49,22 @@ Example:
     >>> dataset = backend.load("__TACOCAT__")
     >>> # Query across all consolidated ZIPs
     >>> peru = dataset.sql("SELECT * FROM data WHERE country = 'Peru'")
-    >>> # Access specific ZIP's data
     >>> df = peru.data
 """
 
 import json
 import mmap
 import struct
-import tempfile
 import time
 from pathlib import Path
 from typing import Any
 
 import duckdb
-import obstore as obs
-from obstore.store import from_url
+import pyarrow as pa
+import pyarrow.parquet as pq
 
 from tacoreader.backends.base import TacoBackend
+from tacoreader.io import download_bytes
 from tacoreader._constants import (
     TACOCAT_HEADER_SIZE,
     TACOCAT_INDEX_ENTRY_SIZE,
@@ -211,22 +210,19 @@ class TacoCatBackend(TacoBackend):
     This enables querying across hundreds of ZIPs without opening each file,
     dramatically improving performance for large distributed datasets.
 
+    All data is loaded directly into memory without creating temporary files,
+    making it efficient for datasets up to ~1GB.
+
     Attributes:
         format_name: Returns "tacocat"
 
     Example:
         >>> backend = TacoCatBackend()
-        >>> # Load from local directory
         >>> dataset = backend.load("datasets/__TACOCAT__")
-        >>>
-        >>> # Load with custom base_path for ZIPs in different location
-        >>> from tacoreader import load
-        >>> dataset = load("__TACOCAT__", base_path="s3://other-bucket/zips/")
         >>>
         >>> # Query consolidated metadata
         >>> peru = dataset.sql("SELECT * FROM data WHERE country = 'Peru'")
-        >>> # Get source ZIP for each sample
-        >>> df = dataset.data.select(["id", "internal:source_file"])
+        >>> df = peru.data
     """
 
     @property
@@ -243,13 +239,16 @@ class TacoCatBackend(TacoBackend):
     # ABSTRACT METHOD IMPLEMENTATIONS
     # ========================================================================
 
-    def load(self, path: str, cache_dir: Path | None = None) -> TacoDataset:
+    def load(self, path: str) -> TacoDataset:
         """
-        Load TacoCat dataset (synchronous).
+        Load TacoCat dataset entirely in memory.
+
+        Unlike other backends, TacoCat loads everything into memory without
+        creating temporary files. This is efficient because TacoCat files
+        are typically small (metadata only, no actual raster data).
 
         Args:
             path: Path to __TACOCAT__ file (local or remote)
-            cache_dir: Cache directory for metadata files (optional)
 
         Returns:
             TacoDataset with lazy SQL interface
@@ -263,33 +262,23 @@ class TacoCatBackend(TacoBackend):
             >>> dataset = backend.load("__TACOCAT__")
             >>> print(dataset.id)
             'consolidated-dataset'
-            >>>
-            >>> # With logging enabled
-            >>> import tacoreader
-            >>> tacoreader.verbose()
-            >>> dataset = backend.load("__TACOCAT__")
-            INFO [tacoreader.backends.tacocat] Loaded TacoCat in 1.23s
         """
         t_start = time.time()
         
-        # Step 1: Create cache directory
-        if cache_dir is None:
-            cache_dir = Path(tempfile.mkdtemp(prefix="tacoreader-"))
-        
-        logger.debug(f"Created cache directory: {cache_dir}")
+        logger.debug(f"Loading TacoCat from {path}")
 
-        # Step 2: Download/read entire TacoCat file
+        # Step 1: Download entire TacoCat file to memory
         t_download = time.time()
         full_bytes = self._get_full_file(path)
         download_time = time.time() - t_download
         file_size_mb = len(full_bytes) / (1024 * 1024)
         logger.debug(f"Downloaded {file_size_mb:.1f}MB in {download_time:.2f}s ({file_size_mb/download_time:.1f}MB/s)")
 
-        # Step 3: Parse header from memory
+        # Step 2: Parse header from memory
         header = TacoCatHeader(full_bytes[0:TACOCAT_TOTAL_HEADER_SIZE])
         logger.debug(f"Parsed header: version={header.version}, max_depth={header.max_depth}, levels={list(header.level_index.keys())}")
 
-        # Step 4: Parse COLLECTION.json from memory
+        # Step 3: Parse COLLECTION.json from memory
         collection_bytes = full_bytes[
             header.collection_offset : header.collection_offset + header.collection_size
         ]
@@ -302,33 +291,10 @@ class TacoCatBackend(TacoBackend):
         
         logger.debug("Parsed COLLECTION.json")
 
-        # Step 5: Extract and cache levels from memory
-        consolidated_files = {}
-        for level_id, (offset, size) in header.level_index.items():
-            if size == 0:
-                continue
-
-            # Extract parquet bytes from memory
-            parquet_bytes = full_bytes[offset : offset + size]
-
-            # Write to cache
-            cache_file = cache_dir / f"level{level_id}.parquet"
-            cache_file.write_bytes(parquet_bytes)
-
-            consolidated_files[f"level{level_id}"] = str(cache_file)
-
-        if not consolidated_files:
-            raise ValueError(
-                f"No metadata levels found in TacoCat: {path}\n"
-                f"TacoCat appears to be empty or malformed."
-            )
-        
-        logger.debug(f"Cached {len(consolidated_files)} metadata levels")
-
-        # Step 6: Create DuckDB connection
+        # Step 4: Create DuckDB connection
         db = duckdb.connect(":memory:")
 
-        # Step 7: Load spatial extension
+        # Step 5: Load spatial extension
         try:
             db.execute("INSTALL spatial")
             db.execute("LOAD spatial")
@@ -336,20 +302,44 @@ class TacoCatBackend(TacoBackend):
         except Exception as e:
             logger.debug(f"Spatial extension not available: {e}")
 
-        # Step 8: Convert path to VSI format
+        # Step 6: Register Parquet tables directly from memory
+        for level_id, (offset, size) in header.level_index.items():
+            if size == 0:
+                continue
+
+            # Extract parquet bytes from memory
+            parquet_bytes = full_bytes[offset : offset + size]
+
+            # Read with PyArrow from bytes
+            reader = pa.BufferReader(parquet_bytes)
+            arrow_table = pq.read_table(reader)
+
+            # Register table in DuckDB (no disk I/O)
+            table_name = f"level{level_id}_table"
+            db.register(table_name, arrow_table)
+            
+            logger.debug(f"Registered {table_name} in DuckDB ({size} bytes)")
+
+        if not header.level_index:
+            raise ValueError(
+                f"No metadata levels found in TacoCat: {path}\n"
+                f"TacoCat appears to be empty or malformed."
+            )
+
+        # Step 7: Convert path to VSI format
         root_path = to_vsi_root(path)
 
-        # Step 9: Setup DuckDB views
-        self.setup_duckdb_views(db, consolidated_files, root_path)
+        # Step 8: Setup DuckDB views with VSI paths
+        self.setup_duckdb_views(db, header.level_index.keys(), root_path)
         logger.debug("Created DuckDB views")
 
-        # Step 10: Create 'data' view
+        # Step 9: Create 'data' view
         db.execute("CREATE VIEW data AS SELECT * FROM level0")
 
-        # Step 11: Extract PIT schema
+        # Step 10: Extract PIT schema
         schema = PITSchema(collection["taco:pit_schema"])
 
-        # Step 12: Construct TacoDataset
+        # Step 11: Construct TacoDataset
         dataset = TacoDataset.model_construct(
             id=collection["id"],
             version=collection.get("dataset_version", "unknown"),
@@ -365,7 +355,6 @@ class TacoCatBackend(TacoBackend):
             _path=path,
             _format=self.format_name,
             _collection=collection,
-            _consolidated_files=consolidated_files,
             _duckdb=db,
             _view_name="data",
             _root_path=root_path,
@@ -423,80 +412,18 @@ class TacoCatBackend(TacoBackend):
                 f"Invalid COLLECTION.json in TacoCat {path}: {e.msg}", e.doc, e.pos
             )
 
-    def cache_metadata_files(self, path: str, cache_dir: Path) -> dict[str, str]:
-        """
-        Extract and cache consolidated Parquet metadata files from TacoCat.
-
-        Reads consolidated Parquet files for each hierarchy level from
-        TacoCat and writes them to cache directory. Each Parquet file
-        contains metadata from ALL source ZIPs with internal:source_file
-        column identifying the origin ZIP.
-
-        Args:
-            path: Path to __TACOCAT__ file (local or remote)
-            cache_dir: Directory to write cached files
-
-        Returns:
-            Dictionary mapping level names to cached file paths
-            Example: {"level0": "/tmp/level0.parquet", "level1": ...}
-
-        Raises:
-            ValueError: If TacoCat header cannot be read
-            IOError: If cache directory cannot be created
-
-        Example:
-            >>> backend = TacoCatBackend()
-            >>> cache_dir = Path("/tmp/cache")
-            >>> files = backend.cache_metadata_files("__TACOCAT__", cache_dir)
-            >>> print(files.keys())
-            dict_keys(['level0', 'level1', 'level2'])
-            >>>
-            >>> # Check source files column
-            >>> import polars as pl
-            >>> df = pl.read_parquet(files["level0"])
-            >>> print(df["internal:source_file"].unique())
-            ['part0001.tacozip', 'part0002.tacozip', ...]
-        """
-        # Get full file
-        full_bytes = self._get_full_file(path)
-
-        # Parse header
-        header = TacoCatHeader(full_bytes[0:TACOCAT_TOTAL_HEADER_SIZE])
-
-        # Extract levels from memory
-        consolidated_files = {}
-        for level_id, (offset, size) in header.level_index.items():
-            if size == 0:
-                continue
-
-            # Extract parquet bytes
-            parquet_bytes = full_bytes[offset : offset + size]
-
-            # Write to cache
-            cache_file = cache_dir / f"level{level_id}.parquet"
-            cache_file.write_bytes(parquet_bytes)
-
-            consolidated_files[f"level{level_id}"] = str(cache_file)
-
-        if not consolidated_files:
-            raise ValueError(
-                f"No metadata levels found in TacoCat: {path}\n"
-                f"TacoCat appears to be empty or malformed."
-            )
-
-        return consolidated_files
-
     def setup_duckdb_views(
         self,
         db: duckdb.DuckDBPyConnection,
-        consolidated_files: dict[str, str],
+        level_ids: list[int],
         root_path: str,
     ) -> None:
         """
         Create DuckDB views with GDAL VSI paths for TacoCat format.
 
-        Each view includes a computed 'internal:gdal_vsi' column that
-        constructs /vsisubfile/ paths using internal:source_file column:
+        Each view references a table already registered in DuckDB and adds
+        a computed 'internal:gdal_vsi' column that constructs /vsisubfile/
+        paths using internal:source_file column:
 
             /vsisubfile/{offset}_{size},{base_path}{source_file}
 
@@ -504,15 +431,16 @@ class TacoCatBackend(TacoBackend):
         while querying across all consolidated metadata.
 
         Args:
-            db: DuckDB connection for creating views
-            consolidated_files: Cached metadata file paths
+            db: DuckDB connection with tables already registered
+            level_ids: List of level IDs that have tables registered
             root_path: VSI root path to TacoCat file (e.g., /vsis3/bucket/datasets/__TACOCAT__)
 
         Example:
             >>> import duckdb
             >>> db = duckdb.connect(":memory:")
+            >>> # ... register tables ...
             >>> backend = TacoCatBackend()
-            >>> backend.setup_duckdb_views(db, files, "/vsis3/bucket/data/__TACOCAT__")
+            >>> backend.setup_duckdb_views(db, [0, 1, 2], "/vsis3/bucket/data/__TACOCAT__")
             >>>
             >>> # Query shows VSI paths to individual ZIPs
             >>> result = db.execute('''
@@ -524,15 +452,18 @@ class TacoCatBackend(TacoBackend):
         """
         base_path = self._extract_base_path(root_path)
 
-        for level_key, file_path in consolidated_files.items():
+        for level_id in level_ids:
+            table_name = f"level{level_id}_table"
+            view_name = f"level{level_id}"
+            
             db.execute(
                 f"""
-                CREATE VIEW {level_key} AS 
+                CREATE VIEW {view_name} AS 
                 SELECT *,
                   '/vsisubfile/' || "internal:offset" || '_' || 
                   "internal:size" || ',{base_path}' || "internal:source_file"
                   as "internal:gdal_vsi"
-                FROM read_parquet('{file_path}')
+                FROM {table_name}
                 WHERE id NOT LIKE '__TACOPAD__%'
             """
             )
@@ -543,10 +474,10 @@ class TacoCatBackend(TacoBackend):
 
     def _get_full_file(self, path: str) -> bytes:
         """
-        Get entire TacoCat file as bytes (synchronous).
+        Get entire TacoCat file as bytes.
         
         Local: Read with mmap for efficiency
-        Remote: Simple download with obs.get()
+        Remote: Simple download with download_bytes()
         
         Args:
             path: Path to __TACOCAT__ file (local or remote)
@@ -561,14 +492,10 @@ class TacoCatBackend(TacoBackend):
                 with mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as mm:
                     return bytes(mm[:])
         else:
-            # Remote file: simple download with obstore
+            # Remote file: simple download
             try:
                 logger.debug(f"Downloading remote TacoCat file: {path}")
-                    
-                store = from_url(path)
-                result = obs.get(store, "")
-                return bytes(result.bytes())
-                
+                return download_bytes(path)
             except Exception as e:
                 raise OSError(f"Failed to download TacoCat from {path}: {e}")
 

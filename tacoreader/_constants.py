@@ -9,8 +9,13 @@ Organization:
 - DUCKDB_*      : DuckDB configuration (tacoreader-specific)
 - STAC_*        : STAC/spatial filtering (tacoreader-specific)
 - DATAFRAME_*   : DataFrame operations (tacoreader-specific)
-- CACHE_*       : Cache and temporary files (tacoreader-specific)
 """
+
+# =============================================================================
+# Network Constants for ZIP Format (tacoreader-specific)
+# =============================================================================
+ZIP_MAX_GAP_SIZE = 4 * 1024 * 1024  # 4 MB
+"""Maximum allowed gap size between files in ZIP format."""
 
 # =============================================================================
 # METADATA COLUMNS (SHARED with tacotoolbox)
@@ -37,7 +42,6 @@ METADATA_SOURCE_FILE = "internal:source_file"
 # =============================================================================
 # PROTECTED COLUMNS (tacoreader navigation)
 # =============================================================================
-
 PROTECTED_COLUMNS = frozenset({
     # Core columns (modifying breaks references and navigation)
     "id",
@@ -51,6 +55,14 @@ PROTECTED_COLUMNS = frozenset({
     METADATA_RELATIVE_PATH,
 })
 """Columns that cannot be modified without breaking navigation in tacoreader."""
+
+
+NAVIGATION_REQUIRED_COLUMNS = frozenset({
+    "id",
+    "type", 
+    "internal:gdal_vsi"
+})
+"""Columns required for hierarchical navigation in tacoreader."""
 
 # =============================================================================
 # HIERARCHY LIMITS (SHARED with tacotoolbox)
@@ -101,16 +113,6 @@ TACOCAT_TOTAL_HEADER_SIZE = TACOCAT_HEADER_SIZE + TACOCAT_INDEX_SIZE  # 128
 
 TACOCAT_FILENAME = "__TACOCAT__"
 """Fixed filename for TacoCat consolidated files."""
-
-# =============================================================================
-# CACHE & TEMPORARY FILES (tacoreader-specific)
-# =============================================================================
-
-CACHE_DIR_PREFIX = "tacoreader-"
-"""Prefix for temporary cache directories."""
-
-CACHE_CONCAT_PREFIX = "tacoreader-concat-"
-"""Prefix for concat() operation cache directories."""
 
 # =============================================================================
 # DUCKDB CONFIGURATION (tacoreader-specific)

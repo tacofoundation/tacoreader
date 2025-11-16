@@ -1,26 +1,231 @@
 from typing import TYPE_CHECKING
 from pathlib import Path
+import warnings
 
 import duckdb
-import polars as pl
 
-from tacoreader._constants import CACHE_CONCAT_PREFIX
+from tacoreader._constants import PROTECTED_COLUMNS
+from tacoreader._logging import get_logger
 
 if TYPE_CHECKING:
     from tacoreader.dataset import TacoDataset
     from tacoreader.schema import PITSchema
 
+logger = get_logger(__name__)
 
-def concat(datasets: list["TacoDataset"], verbose: bool = False) -> "TacoDataset":
+
+def _get_available_levels(dataset: "TacoDataset") -> list[str]:
+    """
+    Get list of available level views from dataset.
+    
+    Uses pit_schema.max_depth() to determine which levels exist.
+    
+    Args:
+        dataset: TacoDataset instance
+        
+    Returns:
+        List of level names (e.g., ["level0", "level1", "level2"])
+    """
+    max_depth = dataset.pit_schema.max_depth()
+    return [f"level{i}" for i in range(max_depth + 1)]
+
+
+def _validate_column_compatibility(
+    datasets: list["TacoDataset"],
+    mode: str = "intersection"
+) -> dict[str, set[str]]:
+    """
+    Valida compatibilidad de columnas entre datasets.
+    
+    Args:
+        datasets: Lista de datasets a concatenar
+        mode: Estrategia de manejo de columnas diferentes:
+            - "intersection": Solo mantiene columnas comunes (DEFAULT)
+            - "fill_missing": Rellena columnas faltantes con NULL
+            - "strict": Falla si columnas no son idénticas
+    
+    Returns:
+        Dict mapeando level_key a set de columnas finales
+        
+    Raises:
+        ValueError: Si columnas críticas faltan o si mode="strict" y difieren
+    """
+    all_levels = set()
+    for ds in datasets:
+        all_levels.update(_get_available_levels(ds))
+    
+    level_columns = {}
+    
+    for level_key in sorted(all_levels):
+        level_columns[level_key] = []
+        
+        for ds in datasets:
+            available_levels = _get_available_levels(ds)
+            if level_key in available_levels:
+                df = ds._duckdb.execute(f"SELECT * FROM {level_key}").pl()
+                level_columns[level_key].append(set(df.columns))
+    
+    final_columns = {}
+    
+    for level_key, column_sets in level_columns.items():
+        common_cols = set.intersection(*column_sets)
+        all_cols = set.union(*column_sets)
+        
+        # Columnas críticas dependen del nivel
+        if level_key == "level0":
+            # Level0 no tiene internal:relative_path
+            critical_cols = PROTECTED_COLUMNS - {"internal:source_file", "internal:relative_path"}
+        else:
+            # Level1+ tiene todas las columnas críticas
+            critical_cols = PROTECTED_COLUMNS - {"internal:source_file"}
+        
+        missing_critical = critical_cols - common_cols
+        if missing_critical:
+            problematic = []
+            for i, cols in enumerate(column_sets):
+                missing = critical_cols - cols
+                if missing:
+                    problematic.append(f"  - Dataset {i}: missing {sorted(missing)}")
+            
+            raise ValueError(
+                f"Cannot concat: Critical columns missing in {level_key}\n"
+                f"\n"
+                f"Required columns for navigation:\n"
+                f"  {sorted(critical_cols)}\n"
+                f"\n"
+                f"Missing in some datasets:\n"
+                f"  {sorted(missing_critical)}\n"
+                f"\n"
+                f"Problems found:\n" + 
+                "\n".join(problematic) +
+                f"\n"
+                f"These columns are required for .read() and hierarchical navigation."
+            )
+        
+        if mode == "strict":
+            if len(set(map(frozenset, column_sets))) > 1:
+                all_unique_cols = []
+                for i, cols in enumerate(column_sets):
+                    all_unique_cols.append(f"  Dataset {i}: {sorted(cols)}")
+                
+                raise ValueError(
+                    f"Cannot concat in strict mode: Column mismatch in {level_key}\n"
+                    f"\n"
+                    f"Columns per dataset:\n" +
+                    "\n".join(all_unique_cols) +
+                    f"\n"
+                    f"\n"
+                    f"Only in some datasets: {sorted(all_cols - common_cols)}\n"
+                    f"Common to all: {sorted(common_cols)}\n"
+                    f"\n"
+                    f"Solutions:\n"
+                    f"  1. Use column_mode='intersection' (default) to keep only common columns\n"
+                    f"  2. Use column_mode='fill_missing' to fill missing columns with NULL\n"
+                    f"  3. Align columns with SQL before concat:\n"
+                    f"     ds1 = ds1.sql('SELECT {', '.join(sorted(common_cols)[:3])} ... FROM data')"
+                )
+            final_columns[level_key] = common_cols
+            
+        elif mode == "intersection":
+            final_columns[level_key] = common_cols
+            
+            if all_cols != common_cols:
+                dropped = all_cols - common_cols
+                column_sources = {}
+                for col in dropped:
+                    sources = []
+                    for i, cols in enumerate(column_sets):
+                        if col in cols:
+                            sources.append(i)
+                    column_sources[col] = sources
+                
+                details = []
+                for col, sources in sorted(column_sources.items()):
+                    if len(sources) < len(column_sets):
+                        details.append(f"  - '{col}' (only in dataset(s) {sources})")
+                
+                warnings.warn(
+                    f"\n"
+                    f"concat() dropped {len(dropped)} column(s) from {level_key}\n"
+                    f"\n"
+                    f"Reason: Using column_mode='intersection' (default behavior)\n"
+                    f"        Only columns present in ALL datasets are kept.\n"
+                    f"\n"
+                    f"Dropped columns:\n" +
+                    "\n".join(details) +
+                    f"\n"
+                    f"\n"
+                    f"Kept columns ({len(common_cols)}): {sorted(common_cols)}\n"
+                    f"\n"
+                    f"To keep all columns (fill missing with NULL):\n"
+                    f"   concat([ds1, ds2], column_mode='fill_missing')",
+                    UserWarning,
+                    stacklevel=3
+                )
+        
+        elif mode == "fill_missing":
+            final_columns[level_key] = all_cols
+            
+            if all_cols != common_cols:
+                missing = all_cols - common_cols
+                column_gaps = {}
+                for col in missing:
+                    gaps = []
+                    for i, cols in enumerate(column_sets):
+                        if col not in cols:
+                            gaps.append(i)
+                    column_gaps[col] = gaps
+                
+                details = []
+                for col, gaps in sorted(column_gaps.items()):
+                    details.append(f"  - '{col}' (missing in dataset(s) {gaps}, will fill with NULL)")
+                
+                warnings.warn(
+                    f"\n"
+                    f"concat() filling missing columns in {level_key} with NULL\n"
+                    f"\n"
+                    f"Reason: Using column_mode='fill_missing'\n"
+                    f"        All columns from all datasets are kept.\n"
+                    f"\n"
+                    f"Columns being filled:\n" +
+                    "\n".join(details) +
+                    f"\n"
+                    f"\n"
+                    f"Total columns: {len(all_cols)} (common: {len(common_cols)}, filled: {len(missing)})\n"
+                    f"\n"
+                    f"To avoid NULLs, use column_mode='intersection' (drops columns not in all datasets)",
+                    UserWarning,
+                    stacklevel=3
+                )
+        
+        else:
+            raise ValueError(
+                f"Invalid column_mode: '{mode}'\n"
+                f"Valid options: 'intersection' (default), 'fill_missing', 'strict'"
+            )
+    
+    return final_columns
+
+
+def concat(
+    datasets: list["TacoDataset"], 
+    column_mode: str = "intersection"
+) -> "TacoDataset":
     """
     Concatenate multiple TACODatasets into single TacoDataset with lazy SQL interface.
 
-    Creates in-memory DuckDB database with consolidated metadata files.
-    All operations are lazy until .collect() or .data.collect() is called.
+    Creates in-memory DuckDB database with consolidated metadata using UNION ALL views.
+    All operations remain lazy - no temporary files or materialization to disk.
+
+    By default, only keeps columns present in ALL datasets (intersection mode).
+    Columns not present in all datasets are dropped with a warning.
 
     Args:
         datasets: List of TacoDataset instances (minimum 2)
-        verbose: Show loading progress (default False)
+        column_mode: How to handle column differences (default "intersection")
+            - "intersection": Keep only common columns (DEFAULT, safest)
+            - "fill_missing": Keep all columns, fill missing with NULL
+            - "strict": Fail if columns differ
 
     Returns:
         TacoDataset with consolidated data and lazy SQL query capability
@@ -28,26 +233,33 @@ def concat(datasets: list["TacoDataset"], verbose: bool = False) -> "TacoDataset
     Raises:
         ValueError: If fewer than 2 datasets
         ValueError: If schemas are incompatible
+        ValueError: If critical columns missing
 
     Examples:
         >>> ds1 = load("taco_001.zip")
         >>> ds2 = load("taco_002.zip")
         >>> ds3 = load("taco_003.zip")
         >>>
+        >>> # Default: intersection mode (keeps only common columns)
         >>> dataset = concat([ds1, ds2, ds3])
         >>>
-        >>> peru = dataset.sql("SELECT * FROM data WHERE country = 'Peru'")
-        >>> df = peru.data.collect()
+        >>> # Fill missing: keeps all columns, fills with NULL
+        >>> dataset = concat([ds1, ds2, ds3], column_mode="fill_missing")
+        >>>
+        >>> # Strict: fails if columns differ
+        >>> dataset = concat([ds1, ds2, ds3], column_mode="strict")
+        >>>
+        >>> # Manual alignment with SQL (most control)
+        >>> common = "id, type, cloud_cover, internal:offset, internal:size"
+        >>> ds1_aligned = ds1.sql(f"SELECT {common} FROM data")
+        >>> dataset = concat([ds1_aligned, ds2, ds3])
     """
-    import tempfile
-    import uuid
-
     if len(datasets) < 2:
         raise ValueError(f"Need at least 2 datasets to concat, got {len(datasets)}")
 
-    if verbose:
-        print(f"Validating {len(datasets)} datasets...")
+    logger.info(f"Concatenating {len(datasets)} datasets...")
 
+    # 1. Validar PIT schemas
     reference_schema = datasets[0].pit_schema
     for i, ds in enumerate(datasets[1:], 1):
         if not reference_schema.is_compatible(ds.pit_schema):
@@ -58,66 +270,109 @@ def concat(datasets: list["TacoDataset"], verbose: bool = False) -> "TacoDataset
                 f"Dataset {i}: {ds.pit_schema}"
             )
 
-    if verbose:
-        print("All schemas compatible")
+    logger.debug("All schemas compatible")
 
+    # 2. Validar columnas y obtener target columns
+    logger.debug(f"Validating columns (mode={column_mode})...")
+    
+    target_columns_by_level = _validate_column_compatibility(
+        datasets, 
+        mode=column_mode
+    )
+    
+    for level_key, cols in target_columns_by_level.items():
+        logger.debug(f"  {level_key}: {len(cols)} columns")
+
+    # 3. Consolidar schemas
     consolidated_schema = _merge_schemas([ds.pit_schema for ds in datasets])
 
-    if verbose:
-        print("\nConsolidating levels...")
+    logger.debug("Consolidating levels in-memory...")
 
-    cache_dir = Path(tempfile.gettempdir()) / f"{CACHE_CONCAT_PREFIX}{uuid.uuid4()}"
-    cache_dir.mkdir(parents=True, exist_ok=True)
-
-    all_levels = set()
-    for ds in datasets:
-        all_levels.update(ds._consolidated_files.keys())
-
-    consolidated_files = {}
-
-    for level_key in sorted(all_levels):
-        if verbose:
-            print(f"  Consolidating {level_key}...")
-
-        level_dfs = []
-        for ds in datasets:
-            if level_key in ds._consolidated_files:
-                file_path = ds._consolidated_files[level_key]
-
-                # All metadata files are now Parquet
-                df = pl.read_parquet(file_path)
-
-                # Add internal:source_file to track original dataset
-                df = df.with_columns(
-                    pl.lit(Path(ds._path).name).alias("internal:source_file")
-                )
-
-                level_dfs.append(df)
-
-        if level_dfs:
-            consolidated_level = pl.concat(level_dfs)
-            output_path = cache_dir / f"{level_key}.parquet"
-            consolidated_level.write_parquet(output_path)
-            consolidated_files[level_key] = str(output_path)
-
-            if verbose:
-                print(f"    {level_key}: {len(consolidated_level):,} rows")
-
+    # 4. Crear nueva conexión DuckDB
     db = duckdb.connect(":memory:")
 
-    first_format = datasets[0]._format
+    # 5. Cargar extensión espacial
+    try:
+        db.execute("INSTALL spatial")
+        db.execute("LOAD spatial")
+        logger.debug("Loaded DuckDB spatial extension")
+    except Exception as e:
+        logger.debug(f"Spatial extension not available: {e}")
 
+    # 6. Obtener todos los levels disponibles
+    all_levels = set()
+    for ds in datasets:
+        all_levels.update(_get_available_levels(ds))
+
+    # 7. Para cada level, registrar tablas de cada dataset y crear UNION ALL view
+    first_format = datasets[0]._format
+    
+    for level_key in sorted(all_levels):
+        logger.debug(f"  Consolidating {level_key}...")
+        
+        target_cols = target_columns_by_level[level_key]
+        union_parts = []
+        
+        for ds_idx, ds in enumerate(datasets):
+            available_levels = _get_available_levels(ds)
+            if level_key not in available_levels:
+                continue
+            
+            # Extraer PyArrow table del dataset original
+            arrow_table = ds._duckdb.execute(f"SELECT * FROM {level_key}_table").fetch_arrow_table()
+            
+            # Registrar en nueva conexión con nombre único
+            table_name = f"ds{ds_idx}_{level_key}_table"
+            db.register(table_name, arrow_table)
+            
+            # Construir SELECT con columnas alineadas + internal:source_file
+            source_file = Path(ds._path).name
+            
+            # Obtener columnas actuales de esta tabla
+            current_cols = set(arrow_table.column_names)
+            
+            # Construir lista de columnas con alineación
+            select_parts = []
+            for col in sorted(target_cols):
+                if col in current_cols:
+                    # Escapar nombres de columna con caracteres especiales
+                    escaped_col = f'"{col}"' if ':' in col or ' ' in col else col
+                    select_parts.append(escaped_col)
+                else:
+                    # Columna faltante - rellenar con NULL
+                    select_parts.append(f"NULL AS \"{col}\"")
+            
+            # Agregar internal:source_file
+            select_parts.append(f"'{source_file}' AS \"internal:source_file\"")
+            
+            union_parts.append(
+                f"SELECT {', '.join(select_parts)} FROM {table_name}"
+            )
+        
+        if not union_parts:
+            continue
+        
+        # Crear view consolidada con UNION ALL
+        union_query = " UNION ALL ".join(union_parts)
+        db.execute(f"CREATE VIEW {level_key}_union AS {union_query}")
+        
+        logger.debug(f"    {level_key}: {len(union_parts)} dataset(s), {len(target_cols)} columns")
+
+    # 8. Crear views finales con internal:gdal_vsi según formato
     if first_format == "zip":
         root_path = datasets[0]._root_path
-
-        for level_key, file_path in consolidated_files.items():
+        
+        for level_key in sorted(all_levels):
+            if not db.execute(f"SELECT 1 FROM information_schema.tables WHERE table_name = '{level_key}_union'").fetchone():
+                continue
+            
             db.execute(
                 f"""
                 CREATE VIEW {level_key} AS 
                 SELECT *,
                   '/vsisubfile/' || "internal:offset" || '_' || 
                   "internal:size" || ',{root_path}' as "internal:gdal_vsi"
-                FROM read_parquet('{file_path}')
+                FROM {level_key}_union
                 WHERE id NOT LIKE '__TACOPAD__%'
             """
             )
@@ -125,8 +380,11 @@ def concat(datasets: list["TacoDataset"], verbose: bool = False) -> "TacoDataset
     elif first_format == "folder":
         root_path = datasets[0]._root_path
         root = root_path if root_path.endswith("/") else root_path + "/"
-
-        for level_key, file_path in consolidated_files.items():
+        
+        for level_key in sorted(all_levels):
+            if not db.execute(f"SELECT 1 FROM information_schema.tables WHERE table_name = '{level_key}_union'").fetchone():
+                continue
+            
             if level_key == "level0":
                 db.execute(
                     f"""
@@ -137,7 +395,7 @@ def concat(datasets: list["TacoDataset"], verbose: bool = False) -> "TacoDataset
                         WHEN type = 'FILE' THEN '{root}DATA/' || id
                         ELSE NULL
                       END as "internal:gdal_vsi"
-                    FROM read_parquet('{file_path}')
+                    FROM {level_key}_union
                     WHERE id NOT LIKE '__TACOPAD__%'
                 """
                 )
@@ -151,15 +409,18 @@ def concat(datasets: list["TacoDataset"], verbose: bool = False) -> "TacoDataset
                         WHEN type = 'FILE' THEN '{root}DATA/' || "internal:relative_path"
                         ELSE NULL
                       END as "internal:gdal_vsi"
-                    FROM read_parquet('{file_path}')
+                    FROM {level_key}_union
                     WHERE id NOT LIKE '__TACOPAD__%'
                 """
                 )
 
     elif first_format == "tacocat":
         base_path = datasets[0]._root_path
-
-        for level_key, file_path in consolidated_files.items():
+        
+        for level_key in sorted(all_levels):
+            if not db.execute(f"SELECT 1 FROM information_schema.tables WHERE table_name = '{level_key}_union'").fetchone():
+                continue
+            
             db.execute(
                 f"""
                 CREATE VIEW {level_key} AS 
@@ -167,19 +428,18 @@ def concat(datasets: list["TacoDataset"], verbose: bool = False) -> "TacoDataset
                   '/vsisubfile/' || "internal:offset" || '_' || 
                   "internal:size" || ',{base_path}' || "internal:source_file"
                   as "internal:gdal_vsi"
-                FROM read_parquet('{file_path}')
+                FROM {level_key}_union
                 WHERE id NOT LIKE '__TACOPAD__%'
             """
             )
 
+    # 9. Crear 'data' view
     db.execute("CREATE VIEW data AS SELECT * FROM level0")
 
-    if verbose:
-        total_samples = consolidated_schema.root["n"]
-        print(
-            f"\nConcatenated {len(datasets)} datasets ({total_samples:,} total samples)\n"
-        )
+    total_samples = consolidated_schema.root["n"]
+    logger.info(f"Concatenated {len(datasets)} datasets ({total_samples:,} total samples)")
 
+    # 10. Construir TacoDataset
     from tacoreader.dataset import TacoDataset
 
     dataset = TacoDataset.model_construct(
@@ -197,7 +457,6 @@ def concat(datasets: list["TacoDataset"], verbose: bool = False) -> "TacoDataset
         _path="<concatenated>",
         _format=first_format,
         _collection=datasets[0]._collection,
-        _consolidated_files=consolidated_files,
         _duckdb=db,
         _view_name="data",
         _root_path=datasets[0]._root_path,

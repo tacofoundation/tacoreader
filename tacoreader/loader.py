@@ -6,6 +6,7 @@ and dispatches to appropriate backend. Supports loading single files
 or lists of files (automatically concatenated).
 """
 
+import re
 from pathlib import Path
 
 from tacoreader.backends import create_backend, load_dataset
@@ -20,7 +21,6 @@ from tacoreader.utils.vsi import to_vsi_root
 
 def load(
     path: str | list[str],
-    cache_dir: Path | None = None,
     base_path: str | None = None,
 ) -> TacoDataset:
     """
@@ -39,7 +39,6 @@ def load(
             - Single path: "data.tacozip" or "s3://bucket/data.tacozip"
             - List of paths: ["data1.tacozip", "data2.tacozip", ...]
             Formats: ZIP (.tacozip), FOLDER (directory), TacoCat (__TACOCAT__)
-        cache_dir: Cache directory for metadata files (optional)
         base_path: Override base path for TacoCat ZIP files (optional, TacoCat only)
             Used when __TACOCAT__ and .tacozip files are in different locations
 
@@ -101,10 +100,10 @@ def load(
 
         if len(path) == 1:
             # Single file in list - unwrap and load normally
-            return load(path[0], cache_dir, base_path)
+            return load(path[0], base_path)
 
         # Multiple files - load sequentially and concatenate
-        datasets = [load(p, cache_dir, base_path) for p in path]
+        datasets = [load(p, base_path) for p in path]
 
         from tacoreader.concat import concat
 
@@ -116,17 +115,25 @@ def load(
     # Special handling for TacoCat with base_path override
     if format_type == "tacocat" and base_path is not None:
         backend = create_backend("tacocat")
-        dataset = backend.load(path, cache_dir)
+        dataset = backend.load(path)
         
         # Rebuild views with new base_path
         base_vsi = to_vsi_root(base_path)
 
-        # Drop existing views
-        for level_key in dataset._consolidated_files.keys():
-            dataset._duckdb.execute(f"DROP VIEW IF EXISTS {level_key}")
+        # Get available levels from pit_schema
+        max_depth = dataset.pit_schema.max_depth()
 
-        # Recreate views with new base_path
-        for level_key, file_path in dataset._consolidated_files.items():
+        # Drop 'data' view FIRST (depends on level0)
+        dataset._duckdb.execute("DROP VIEW IF EXISTS data")
+
+        # Drop and recreate level views with new base_path
+        for i in range(max_depth + 1):
+            level_key = f"level{i}"
+            
+            # Drop old view
+            dataset._duckdb.execute(f"DROP VIEW IF EXISTS {level_key}")
+            
+            # Recreate view using existing TABLE with new base_path
             dataset._duckdb.execute(
                 f"""
                 CREATE VIEW {level_key} AS 
@@ -134,12 +141,12 @@ def load(
                   '/vsisubfile/' || "internal:offset" || '_' || 
                   "internal:size" || ',{base_vsi}' || "internal:source_file"
                   as "internal:gdal_vsi"
-                FROM read_parquet('{file_path}')
+                FROM {level_key}_table
+                WHERE id NOT LIKE '__TACOPAD__%'
             """
             )
 
-        # Recreate 'data' view
-        dataset._duckdb.execute("DROP VIEW IF EXISTS data")
+        # Finally recreate 'data' view
         dataset._duckdb.execute("CREATE VIEW data AS SELECT * FROM level0")
         dataset._root_path = base_vsi
 
@@ -147,4 +154,4 @@ def load(
 
     # Standard loading path
     backend = create_backend(format_type)
-    return backend.load(path, cache_dir) if format_type == "tacocat" else load_dataset(path, format_type, cache_dir)
+    return backend.load(path) if format_type == "tacocat" else load_dataset(path, format_type)

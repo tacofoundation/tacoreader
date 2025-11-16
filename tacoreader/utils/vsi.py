@@ -1,3 +1,11 @@
+"""
+GDAL VSI path utilities.
+
+Pure functions for converting between standard paths and GDAL's Virtual File System (VSI) paths.
+No I/O operations - only string transformations.
+"""
+
+
 def to_vsi_root(path: str) -> str:
     """
     Convert any storage path to GDAL VSI-compatible root path.
@@ -14,6 +22,10 @@ def to_vsi_root(path: str) -> str:
     Examples:
         >>> to_vsi_root("s3://bucket/data.tacozip")
         '/vsis3/bucket/data.tacozip'
+        >>> to_vsi_root("gs://bucket/data.tacozip")
+        '/vsigs/bucket/data.tacozip'
+        >>> to_vsi_root("https://example.com/data.zip")
+        '/vsicurl/https://example.com/data.zip'
         >>> to_vsi_root("dataset.tacozip")
         'dataset.tacozip'
     """
@@ -51,6 +63,8 @@ def is_vsi_path(path: str) -> bool:
     Examples:
         >>> is_vsi_path("/vsis3/bucket/data.tacozip")
         True
+        >>> is_vsi_path("/vsicurl/https://example.com/data.zip")
+        True
         >>> is_vsi_path("dataset.tacozip")
         False
     """
@@ -80,8 +94,12 @@ def strip_vsi_prefix(path: str) -> str:
     Examples:
         >>> strip_vsi_prefix("/vsis3/bucket/data.tacozip")
         's3://bucket/data.tacozip'
+        >>> strip_vsi_prefix("/vsigs/bucket/data.tacozip")
+        'gs://bucket/data.tacozip'
         >>> strip_vsi_prefix("/vsicurl/https://example.com/data.zip")
         'https://example.com/data.zip'
+        >>> strip_vsi_prefix("dataset.tacozip")
+        'dataset.tacozip'
     """
     if path.startswith("/vsicurl/"):
         return path.replace("/vsicurl/", "", 1)
@@ -149,109 +167,3 @@ def parse_vsi_subfile(vsi_path: str) -> tuple[str, int, int]:
         ) from e
 
     return root_path, offset, size
-
-
-def create_obstore_from_url(url: str):
-    """
-    Create obstore ObjectStore from URL.
-
-    Handles different cloud storage protocols and HTTP(S) URLs by creating
-    the appropriate obstore backend. For HTTP URLs, the entire URL is used
-    as the store base since HTTPStore.from_url() handles the full path.
-
-    Args:
-        url: Cloud storage URL (s3://, gs://, az://, https://)
-            - S3: "s3://bucket/path/to/file"
-            - GCS: "gs://bucket/path/to/file"
-            - Azure: "az://container/path/to/file"
-            - HTTP: "https://example.com/path/to/file"
-
-    Returns:
-        obstore ObjectStore instance configured for the URL protocol
-
-    Raises:
-        ValueError: If URL scheme is not supported
-
-    Examples:
-        >>> store = create_obstore_from_url("s3://bucket/data.zip")
-        >>> store = create_obstore_from_url("gs://bucket/data.zip")
-        >>> store = create_obstore_from_url("https://example.com/data.zip")
-    """
-    import obstore as obs
-
-    # S3 protocol
-    if url.startswith("s3://"):
-        return obs.store.S3Store.from_url(url)
-
-    # Google Cloud Storage protocol
-    elif url.startswith("gs://"):
-        return obs.store.GCSStore.from_url(url)
-
-    # Azure Blob Storage protocol
-    elif url.startswith("az://") or url.startswith("azure://"):
-        return obs.store.AzureStore.from_url(url)
-
-    # HTTP/HTTPS protocol
-    # HTTPStore.from_url() accepts the full file URL, not just base path
-    elif url.startswith("http://") or url.startswith("https://"):
-        return obs.store.HTTPStore.from_url(url)
-
-    else:
-        raise ValueError(
-            f"Unsupported URL scheme: {url}\n"
-            f"Supported schemes: s3://, gs://, az://, http://, https://"
-        )
-
-
-def extract_path_from_url(url: str) -> str:
-    """
-    Extract object path from full URL.
-
-    Converts full cloud storage URLs into the relative path within the bucket
-    or container. For HTTP URLs, returns empty string since HTTPStore.from_url()
-    already handles the complete file path internally.
-
-    Different cloud providers structure URLs differently:
-    - S3/GCS: {protocol}://{bucket}/{path}
-    - Azure: {protocol}://{container}/{path}
-    - HTTP: Full URL is handled by store, no path extraction needed
-
-    Args:
-        url: Full URL like "s3://bucket/path/to/file.zip"
-
-    Returns:
-        Path within bucket/container, or empty string for HTTP URLs
-        - S3/GCS: "path/to/file.zip"
-        - Azure: "path/to/file.zip"
-        - HTTP: "" (empty string)
-
-    Examples:
-        >>> extract_path_from_url("s3://bucket/path/to/file.zip")
-        'path/to/file.zip'
-        >>> extract_path_from_url("gs://my-bucket/data/archive.zip")
-        'data/archive.zip'
-        >>> extract_path_from_url("https://example.com/file.zip")
-        ''
-    """
-    # S3 protocol: extract path after bucket name
-    if url.startswith("s3://") or url.startswith("gs://"):
-        parts = url[5:].split("/", 1)
-        return parts[1] if len(parts) > 1 else ""
-
-    # Azure Blob Storage protocol: extract path after container name
-    elif url.startswith("az://") or url.startswith("azure://"):
-        prefix_len = 5 if url.startswith("az://") else 8
-        parts = url[prefix_len:].split("/", 1)
-        return parts[1] if len(parts) > 1 else ""
-
-    # HTTP/HTTPS protocol: return empty string
-    # HTTPStore.from_url() already captures the full file URL,
-    # so no additional path is needed for get_range() operations
-    elif url.startswith("http://") or url.startswith("https://"):
-        return ""
-
-    else:
-        raise ValueError(
-            f"Unsupported URL scheme: {url}\n"
-            f"Supported schemes: s3://, gs://, az://, http://, https://"
-        )

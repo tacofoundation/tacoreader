@@ -37,7 +37,7 @@ def validate_level_exists(dataset: "TacoDataset", level: int) -> None:
     """
     Validate that a specific level exists in the dataset.
 
-    Checks if the levelN view exists in consolidated_files.
+    Uses pit_schema.max_depth() to check valid level range.
     Level 0 always exists by definition.
 
     Args:
@@ -51,18 +51,12 @@ def validate_level_exists(dataset: "TacoDataset", level: int) -> None:
         >>> validate_level_exists(dataset, 1)  # OK if level1 exists
         >>> validate_level_exists(dataset, 5)  # ValueError if max level is 2
     """
-    # Level 0 always exists
-    if level == 0:
-        return
-
-    level_key = f"level{level}"
-
-    if level_key not in dataset._consolidated_files:
-        max_level = dataset.pit_schema.max_depth()
+    max_level = dataset.pit_schema.max_depth()
+    
+    if level < 0 or level > max_level:
         raise ValueError(
             f"Level {level} does not exist in dataset.\n"
-            f"Available levels: 0 to {max_level}\n"
-            f"Available views: {list(dataset._consolidated_files.keys())}"
+            f"Available levels: 0 to {max_level}"
         )
 
 
@@ -590,13 +584,35 @@ def _get_column_type(dataset: "TacoDataset", col: str, level: int) -> str:
         >>> _get_column_type(dataset, "stac:time_start", 1)
         'VARCHAR'
     """
+    # Validate column name for SQL safety
+    if "'" in col or '"' in col:
+        raise ValueError(
+            f"Invalid column name: {col}\n"
+            f"Column names cannot contain quotes."
+        )
+    
+    # Additional safety: check for suspicious SQL keywords
+    suspicious = [';', '--', '/*', '*/', 'DROP', 'DELETE', 'INSERT', 'UPDATE']
+    col_upper = col.upper()
+    if any(s in col_upper for s in suspicious):
+        raise ValueError(
+            f"Invalid column name: {col}\n"
+            f"Column name contains suspicious SQL keywords."
+        )
+    
     level_view = f"level{level}" if level > 0 else "data"
 
-    # Query DuckDB for column type
+    # Query DuckDB for column type using parameterized query
     # Note: DuckDB returns 'column_type' not 'data_type'
-    result = dataset._duckdb.execute(
-        f"SELECT column_type FROM (DESCRIBE {level_view}) WHERE column_name = '{col}'"
-    ).fetchone()
+    query = f'SELECT column_type FROM (DESCRIBE {level_view}) WHERE column_name = ?'
+    
+    try:
+        result = dataset._duckdb.execute(query, [col]).fetchone()
+    except Exception as e:
+        raise ValueError(
+            f"Failed to get column type for '{col}' in {level_view}: {e}\n"
+            f"The column may not exist or the view may be invalid."
+        )
 
     if result:
         return result[0].upper()
@@ -657,12 +673,6 @@ def build_bbox_sql(
     """
     Build SQL for bounding box filter.
 
-    Uses ST_Within to check if geometry is completely within bbox.
-    Geometry column is WKB format, converted with ST_GeomFromWKB.
-
-    Note: DuckDB's ST_MakeEnvelope only accepts 4 coordinates (no SRID parameter).
-    The crs parameter is kept for API compatibility but currently not used.
-    TACO geometries are stored in EPSG:4326 (WGS84) by default.
 
     Args:
         minx: Minimum longitude/X coordinate
@@ -738,9 +748,6 @@ def build_intersects_sql(geometry: Any, geometry_col: str, level: int = 0) -> st
 def build_within_sql(geometry: Any, geometry_col: str, level: int = 0) -> str:
     """
     Build SQL for within filter.
-
-    Uses ST_Within to check if geometry is completely within user polygon.
-    Geometry column is WKB format, converted with ST_GeomFromWKB.
 
     Args:
         geometry: User geometry (WKT string, GeoJSON dict, or shapely object)

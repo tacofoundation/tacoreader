@@ -42,7 +42,6 @@ class TacoDataset(BaseModel):
         _path: Original dataset path
         _format: Backend format type ("zip", "folder", "tacocat")
         _collection: Full COLLECTION.json content
-        _consolidated_files: Cached metadata file paths
         _duckdb: DuckDB in-memory connection
         _view_name: Current view name for queries
         _root_path: VSI root path for file access
@@ -80,7 +79,6 @@ class TacoDataset(BaseModel):
     _path: str = PrivateAttr()
     _format: Literal["zip", "folder", "tacocat"] = PrivateAttr()
     _collection: dict[str, Any] = PrivateAttr()
-    _consolidated_files: dict[str, str] = PrivateAttr()
     _duckdb: Any = PrivateAttr(default=None)
     _view_name: str = PrivateAttr(default="data")
     _root_path: str = PrivateAttr(default="")
@@ -121,7 +119,6 @@ class TacoDataset(BaseModel):
         return TacoDataFrame(
             data=pdf,
             format_type=self._format,
-            consolidated_files=self._consolidated_files,
         )
 
     @property
@@ -141,8 +138,7 @@ class TacoDataset(BaseModel):
         Full COLLECTION.json content.
 
         Exposes complete collection metadata including STAC-like fields,
-        TACO extensions, and all custom metadata. This is used by migrate()
-        to reconstruct metadata when creating dataset subsets.
+        TACO extensions, and all custom metadata.
 
         Returns:
             Dictionary containing complete COLLECTION.json with all metadata,
@@ -154,42 +150,8 @@ class TacoDataset(BaseModel):
             '0.5.0'
             >>> print(collection["extent"])
             {'spatial': {...}, 'temporal': {...}}
-            >>>
-            >>> # Used by migrate() to preserve metadata
-            >>> from tacotoolbox import migrate
-            >>> filtered = dataset.sql("SELECT * FROM data WHERE country = 'Peru'")
-            >>> migrate(filtered, "peru_subset/")
         """
         return self._collection.copy()
-
-    @property
-    def consolidated_files(self) -> dict[str, str]:
-        """
-        Paths to cached metadata files.
-
-        Returns dictionary mapping level names (level0, level1, etc.) to
-        their cached file paths. These files contain the consolidated metadata
-        in Parquet or Avro format that DuckDB queries.
-
-        Used internally by migrate() to read level1+ metadata when extracting
-        hierarchical structures from FOLDER samples.
-
-        Returns:
-            Dictionary mapping level names to file paths.
-            Example: {"level0": "/tmp/level0.parquet", "level1": ...}
-
-        Example:
-            >>> files = dataset.consolidated_files
-            >>> print(files)
-            {'level0': '/tmp/cache/level0.parquet', 'level1': '/tmp/cache/level1.parquet'}
-            >>>
-            >>> # Check metadata format
-            >>> import polars as pl
-            >>> level0 = pl.read_parquet(files["level0"])
-            >>> print(level0.columns)
-            ['id', 'type', 'internal:offset', 'internal:size', ...]
-        """
-        return self._consolidated_files.copy()
 
     # ========================================================================
     # LAZY SQL INTERFACE
@@ -280,7 +242,6 @@ class TacoDataset(BaseModel):
             _path=self._path,
             _format=self._format,
             _collection=self._collection,
-            _consolidated_files=self._consolidated_files,
             _duckdb=self._duckdb,  # Shared connection
             _view_name=new_view_name,  # New view
             _root_path=self._root_path,

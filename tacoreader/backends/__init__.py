@@ -4,8 +4,6 @@ TACO format backends.
 Factory functions for creating backend instances.
 """
 
-from pathlib import Path
-
 from tacoreader.backends.base import TacoBackend
 from tacoreader.backends.folder import FolderBackend
 from tacoreader.backends.tacocat import TacoCatBackend
@@ -50,16 +48,13 @@ def create_backend(format_type: str) -> TacoBackend:
     return backend_class()
 
 
-def load_dataset(
-    path: str, format_type: str, cache_dir: Path | None = None
-) -> TacoDataset:
+def load_dataset(path: str, format_type: str) -> TacoDataset:
     """
     Load dataset using specified backend.
 
     Args:
         path: Dataset path
         format_type: Format identifier ('zip', 'folder', or 'tacocat')
-        cache_dir: Optional cache directory
 
     Returns:
         TacoDataset with lazy SQL interface
@@ -70,7 +65,7 @@ def load_dataset(
         >>> ds = load_dataset("__tacocat__", "tacocat")
     """
     backend = create_backend(format_type)
-    return backend.load(path, cache_dir)
+    return backend.load(path)
 
 
 __all__ = [

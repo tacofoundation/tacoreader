@@ -20,13 +20,6 @@ ZIP Structure:
     │   └── level1.parquet (with internal:parent_id, offset, size)
     └── COLLECTION.json
 
-Key features:
-- Single compressed file for easy distribution
-- TACO_HEADER enables direct offset-based access
-- GDAL VSI paths via /vsisubfile/ for embedded files
-- Cloud-optimized with obstore range requests
-- Memory-mapped reads for local files
-
 Main class:
     ZipBackend: Backend implementation for .tacozip format
 
@@ -40,18 +33,24 @@ Example:
 
 import json
 import mmap
+import time
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import duckdb
-import obstore as obs
-import polars as pl
 import pyarrow as pa
 import pyarrow.parquet as pq
 import tacozip
-from obstore.store import from_url
 
 from tacoreader.backends.base import TacoBackend
+from tacoreader.io import download_range
+from tacoreader._constants import ZIP_MAX_GAP_SIZE
+from tacoreader._logging import get_logger
+from tacoreader.dataset import TacoDataset
+from tacoreader.schema import PITSchema
+from tacoreader.utils.vsi import to_vsi_root
+
+logger = get_logger(__name__)
 
 # ============================================================================
 # ZIP BACKEND
@@ -69,6 +68,9 @@ class ZipBackend(TacoBackend):
     The ZIP format stores all metadata as Parquet files and data files
     with byte offsets, enabling efficient random access via GDAL's
     /vsisubfile/ virtual file system.
+
+    All metadata is loaded directly into memory without creating temporary
+    files, making it efficient for typical datasets.
 
     Attributes:
         format_name: Returns "zip"
@@ -93,6 +95,170 @@ class ZipBackend(TacoBackend):
     # ========================================================================
     # ABSTRACT METHOD IMPLEMENTATIONS
     # ========================================================================
+
+    def load(self, path: str) -> TacoDataset:
+        """
+        Load ZIP dataset efficiently with grouped requests.
+
+        For remote ZIPs, groups consecutive metadata files into batches to
+        minimize HTTP requests. Files separated by gaps larger than 4MB are
+        fetched separately to avoid downloading unnecessary data.
+
+        Args:
+            path: Path to .tacozip file (local or remote)
+
+        Returns:
+            TacoDataset with lazy SQL interface
+
+        Raises:
+            ValueError: If ZIP is invalid or corrupted
+            IOError: If file cannot be read
+
+        Example:
+            >>> backend = ZipBackend()
+            >>> dataset = backend.load("s3://bucket/data.tacozip")
+            >>> print(dataset.id)
+            'sentinel2-l2a'
+        """
+        t_start = time.time()
+        
+        logger.debug(f"Loading ZIP from {path}")
+
+        # Step 1: Read TACO_HEADER to get offsets
+        header = self._read_taco_header(path)
+        
+        if not header:
+            raise ValueError(f"Empty TACO_HEADER in {path}")
+        
+        logger.debug(f"Read TACO_HEADER with {len(header)} entries")
+
+        is_local = Path(path).exists()
+
+        # Step 2: Group files by proximity for efficient batch downloading
+        if is_local:
+            # Local files: no grouping needed, read individually
+            file_groups = [[(i, offset, size)] for i, (offset, size) in enumerate(header)]
+        else:
+            # Remote files: group consecutive files with small gaps
+            file_groups = self._group_files_by_proximity(header)
+            logger.debug(f"Grouped {len(header)} files into {len(file_groups)} request(s)")
+
+        # Step 3: Download and parse all files
+        all_files_data = {}  # {index: bytes}
+        
+        for group in file_groups:
+            if not group:
+                continue
+            
+            # Calculate range for this group
+            first_idx, first_offset, first_size = group[0]
+            last_idx, last_offset, last_size = group[-1]
+            
+            range_start = first_offset
+            range_end = last_offset + last_size
+            range_size = range_end - range_start
+            
+            logger.debug(f"Downloading group: {len(group)} files, {range_size/1024:.1f}KB")
+            
+            # Download entire group as single blob
+            if is_local:
+                blob = self._read_blob_local(path, range_start, range_size)
+            else:
+                blob = self._read_blob_remote(path, range_start, range_size)
+            
+            # Extract individual files from blob
+            for idx, offset, size in group:
+                relative_offset = offset - range_start
+                file_bytes = blob[relative_offset:relative_offset + size]
+                all_files_data[idx] = file_bytes
+
+        # Step 4: Parse COLLECTION.json (last file)
+        collection_bytes = all_files_data[len(header) - 1]
+        
+        try:
+            collection = json.loads(collection_bytes)
+        except json.JSONDecodeError as e:
+            raise json.JSONDecodeError(
+                f"Invalid COLLECTION.json in {path}: {e.msg}", e.doc, e.pos
+            )
+        
+        logger.debug("Parsed COLLECTION.json")
+
+        # Step 5: Create DuckDB connection
+        db = duckdb.connect(":memory:")
+
+        # Step 6: Load spatial extension
+        try:
+            db.execute("INSTALL spatial")
+            db.execute("LOAD spatial")
+            logger.debug("Loaded DuckDB spatial extension")
+        except Exception as e:
+            logger.debug(f"Spatial extension not available: {e}")
+
+        # Step 7: Register Parquet tables from parsed bytes
+        level_ids = []
+        
+        for i in range(len(header) - 1):  # All except last (COLLECTION.json)
+            if i not in all_files_data:
+                continue
+            
+            parquet_bytes = all_files_data[i]
+            
+            if len(parquet_bytes) == 0:
+                continue
+            
+            # Load directly to PyArrow
+            reader = pa.BufferReader(parquet_bytes)
+            arrow_table = pq.read_table(reader)
+            
+            # Register in DuckDB
+            table_name = f"level{i}_table"
+            db.register(table_name, arrow_table)
+            level_ids.append(i)
+            
+            logger.debug(f"Registered {table_name} in DuckDB ({len(parquet_bytes)} bytes)")
+
+        if not level_ids:
+            raise ValueError(f"No metadata levels found in ZIP: {path}")
+
+        # Step 8: Convert path to VSI format
+        root_path = to_vsi_root(path)
+
+        # Step 9: Setup DuckDB views with VSI paths
+        self.setup_duckdb_views(db, level_ids, root_path)
+        logger.debug("Created DuckDB views")
+
+        # Step 10: Create 'data' view
+        db.execute("CREATE VIEW data AS SELECT * FROM level0")
+
+        # Step 11: Extract PIT schema
+        schema = PITSchema(collection["taco:pit_schema"])
+
+        # Step 12: Construct TacoDataset
+        dataset = TacoDataset.model_construct(
+            id=collection["id"],
+            version=collection.get("dataset_version", "unknown"),
+            description=collection.get("description", ""),
+            tasks=collection.get("tasks", []),
+            extent=collection.get("extent", {}),
+            providers=collection.get("providers", []),
+            licenses=collection.get("licenses", []),
+            title=collection.get("title"),
+            curators=collection.get("curators"),
+            keywords=collection.get("keywords"),
+            pit_schema=schema,
+            _path=path,
+            _format=self.format_name,
+            _collection=collection,
+            _duckdb=db,
+            _view_name="data",
+            _root_path=root_path,
+        )
+        
+        total_time = time.time() - t_start
+        logger.info(f"Loaded ZIP in {total_time:.2f}s")
+        
+        return dataset
 
     def read_collection(self, path: str) -> dict[str, Any]:
         """
@@ -135,11 +301,7 @@ class ZipBackend(TacoBackend):
                 f.seek(collection_offset)
                 collection_bytes = f.read(collection_size)
         else:
-            store = from_url(path)
-            collection_bytes = obs.get_range(
-                store, "", start=collection_offset, length=collection_size
-            )
-            collection_bytes = bytes(collection_bytes)
+            collection_bytes = download_range(path, collection_offset, collection_size)
 
         try:
             return json.loads(collection_bytes)
@@ -148,95 +310,47 @@ class ZipBackend(TacoBackend):
                 f"Invalid COLLECTION.json in {path}: {e.msg}", e.doc, e.pos
             )
 
-    def cache_metadata_files(self, path: str, cache_dir: Path) -> dict[str, str]:
-        """
-        Extract and cache metadata Parquet files from ZIP.
-
-        Reads level0.parquet through level5.parquet (up to 6 levels)
-        from TACO_HEADER and writes them to cache directory. Uses
-        memory-mapped reads for local files and range requests for
-        remote files.
-
-        Args:
-            path: Path to .tacozip file (local or remote)
-            cache_dir: Directory to write cached files
-
-        Returns:
-            Dictionary mapping level names to cached file paths
-            Example: {"level0": "/tmp/level0.parquet", "level1": ...}
-
-        Raises:
-            ValueError: If TACO_HEADER cannot be read
-            IOError: If cache directory cannot be created
-
-        Example:
-            >>> backend = ZipBackend()
-            >>> cache_dir = Path("/tmp/cache")
-            >>> files = backend.cache_metadata_files("data.tacozip", cache_dir)
-            >>> print(files.keys())
-            dict_keys(['level0', 'level1'])
-        """
-        header = self._read_taco_header(path)
-
-        if not header:
-            raise ValueError(f"Empty TACO_HEADER in {path}")
-
-        is_local = Path(path).exists()
-        consolidated_files = {}
-
-        # All entries except last (which is COLLECTION.json)
-        for i, (offset, size) in enumerate(header[:-1]):
-            if size == 0:
-                # Skip empty entries
-                continue
-
-            if is_local:
-                df = self._read_parquet_mmap(path, offset, size)
-            else:
-                df = self._read_parquet_remote(path, offset, size)
-
-            level_file = cache_dir / f"level{i}.parquet"
-            df.write_parquet(level_file)
-            consolidated_files[f"level{i}"] = str(level_file)
-
-        return consolidated_files
-
     def setup_duckdb_views(
         self,
         db: duckdb.DuckDBPyConnection,
-        consolidated_files: dict[str, str],
+        level_ids: list[int],
         root_path: str,
     ) -> None:
         """
         Create DuckDB views with GDAL VSI paths for ZIP format.
 
-        Each view includes a computed 'internal:gdal_vsi' column that
-        constructs /vsisubfile/ paths using offset and size columns:
+        Each view references a table already registered in DuckDB and adds
+        a computed 'internal:gdal_vsi' column that constructs /vsisubfile/
+        paths using offset and size columns:
 
             /vsisubfile/{offset}_{size},{zip_path}
 
         This enables GDAL to read embedded files without extraction.
 
         Args:
-            db: DuckDB connection for creating views
-            consolidated_files: Cached metadata file paths
+            db: DuckDB connection with tables already registered
+            level_ids: List of level IDs that have tables registered
             root_path: VSI root path to ZIP file (e.g., /vsis3/bucket/data.tacozip)
 
         Example:
             >>> import duckdb
             >>> db = duckdb.connect(":memory:")
+            >>> # ... register tables ...
             >>> backend = ZipBackend()
-            >>> backend.setup_duckdb_views(db, files, "/vsis3/bucket/data.tacozip")
+            >>> backend.setup_duckdb_views(db, [0, 1], "/vsis3/bucket/data.tacozip")
             >>> result = db.execute("SELECT * FROM level0 LIMIT 1").fetchone()
         """
-        for level_key, file_path in consolidated_files.items():
+        for level_id in level_ids:
+            table_name = f"level{level_id}_table"
+            view_name = f"level{level_id}"
+            
             db.execute(
                 f"""
-                CREATE VIEW {level_key} AS 
+                CREATE VIEW {view_name} AS 
                 SELECT *,
                   '/vsisubfile/' || "internal:offset" || '_' || 
                   "internal:size" || ',{root_path}' as "internal:gdal_vsi"
-                FROM read_parquet('{file_path}')
+                FROM {table_name}
                 WHERE id NOT LIKE '__TACOPAD__%'
             """
             )
@@ -244,6 +358,103 @@ class ZipBackend(TacoBackend):
     # ========================================================================
     # INTERNAL HELPERS
     # ========================================================================
+
+    def _group_files_by_proximity(
+        self, header: list[tuple[int, int]]
+    ) -> list[list[tuple[int, int, int]]]:
+        """
+        Group files by proximity to minimize HTTP requests.
+
+        Files are grouped together if the gap between them is smaller than
+        ZIP_MAX_GAP_SIZE (4MB). This reduces the number of HTTP range requests
+        for remote ZIPs while avoiding downloading large amounts of unused data.
+
+        Args:
+            header: List of (offset, size) tuples from TACO_HEADER
+
+        Returns:
+            List of groups, where each group is a list of (index, offset, size) tuples
+
+        Example:
+            >>> header = [(1000, 50000), (51000, 30000), (5000000, 20000)]
+            >>> groups = backend._group_files_by_proximity(header)
+            >>> # Returns: [[(0, 1000, 50000), (1, 51000, 30000)], [(2, 5000000, 20000)]]
+            >>> # First two files grouped (gap=0), third separate (gap=4.9MB)
+        """
+        if not header:
+            return []
+
+        groups = []
+        current_group = []
+
+        for i, (offset, size) in enumerate(header):
+            if size == 0:
+                continue
+
+            if not current_group:
+                # Start new group
+                current_group.append((i, offset, size))
+            else:
+                # Check gap from last file in current group
+                last_idx, last_offset, last_size = current_group[-1]
+                last_end = last_offset + last_size
+                gap = offset - last_end
+
+                if gap < ZIP_MAX_GAP_SIZE:
+                    # Small gap: add to current group
+                    current_group.append((i, offset, size))
+                else:
+                    # Large gap: start new group
+                    groups.append(current_group)
+                    current_group = [(i, offset, size)]
+
+        # Add last group
+        if current_group:
+            groups.append(current_group)
+
+        return groups
+
+    def _read_blob_local(self, path: str, offset: int, size: int) -> bytes:
+        """
+        Read blob of bytes from local ZIP file.
+
+        Uses memory mapping for efficient reading without loading entire file.
+
+        Args:
+            path: Path to local .tacozip file
+            offset: Starting byte offset
+            size: Number of bytes to read
+
+        Returns:
+            Blob of bytes
+
+        Raises:
+            IOError: If file cannot be read
+        """
+        with (
+            open(path, "rb") as f,
+            mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as mm,
+        ):
+            return bytes(mm[offset : offset + size])
+
+    def _read_blob_remote(self, path: str, offset: int, size: int) -> bytes:
+        """
+        Read blob of bytes from remote ZIP file.
+
+        Uses HTTP range request to download only the specified byte range.
+
+        Args:
+            path: Remote path to .tacozip file (s3://, gs://, http://)
+            offset: Starting byte offset
+            size: Number of bytes to read
+
+        Returns:
+            Blob of bytes
+
+        Raises:
+            IOError: If remote read fails
+        """
+        return download_range(path, offset, size)
 
     def _read_taco_header(self, path: str) -> list[tuple[int, int]]:
         """
@@ -274,77 +485,5 @@ class ZipBackend(TacoBackend):
             return tacozip.read_header(path)
 
         # Remote file - read first 256 bytes
-        store = from_url(path)
-        header_bytes = obs.get_range(store, "", start=0, length=256)
-        return tacozip.read_header(bytes(header_bytes))
-
-    def _read_parquet_mmap(self, path: str, offset: int, length: int) -> pl.DataFrame:
-        """
-        Read Parquet file from local ZIP using memory mapping.
-
-        Uses memory-mapped I/O for efficient reading without loading
-        entire ZIP into memory. Extracts Parquet bytes using offset
-        and size from TACO_HEADER.
-
-        Args:
-            path: Path to local .tacozip file
-            offset: Byte offset of Parquet file in ZIP
-            length: Size of Parquet file in bytes
-
-        Returns:
-            Polars DataFrame with metadata
-
-        Raises:
-            IOError: If file cannot be opened or mapped
-            pyarrow.lib.ArrowInvalid: If Parquet is corrupted
-
-        Example:
-            >>> backend = ZipBackend()
-            >>> df = backend._read_parquet_mmap("data.tacozip", 1000, 5000)
-            >>> print(df.columns)
-            ['id', 'type', 'internal:offset', ...]
-        """
-        with (
-            open(path, "rb") as f,
-            mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as mm,
-        ):
-            parquet_bytes = bytes(mm[offset : offset + length])
-            reader = pa.BufferReader(parquet_bytes)
-            table = pq.read_table(reader)
-            return cast(pl.DataFrame, pl.from_arrow(table))
-
-    def _read_parquet_remote(self, path: str, offset: int, length: int) -> pl.DataFrame:
-        """
-        Read Parquet file from remote ZIP using range requests.
-
-        Uses obstore to perform HTTP range request, fetching only the
-        bytes needed for the specific Parquet file without downloading
-        the entire ZIP.
-
-        Args:
-            path: Remote path to .tacozip file (s3://, gs://, http://)
-            offset: Byte offset of Parquet file in ZIP
-            length: Size of Parquet file in bytes
-
-        Returns:
-            Polars DataFrame with metadata
-
-        Raises:
-            IOError: If remote read fails
-            pyarrow.lib.ArrowInvalid: If Parquet is corrupted
-
-        Example:
-            >>> backend = ZipBackend()
-            >>> df = backend._read_parquet_remote(
-            ...     "s3://bucket/data.tacozip",
-            ...     1000,
-            ...     5000
-            ... )
-            >>> print(len(df))
-            1000
-        """
-        store = from_url(path)
-        parquet_bytes = obs.get_range(store, "", start=offset, length=length)
-        reader = pa.BufferReader(bytes(parquet_bytes))
-        table = pq.read_table(reader)
-        return cast(pl.DataFrame, pl.from_arrow(table))
+        header_bytes = download_range(path, 0, 256)
+        return tacozip.read_header(header_bytes)

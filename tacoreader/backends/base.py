@@ -9,9 +9,7 @@ Main class:
     TacoBackend: Abstract base class with template method load()
 """
 
-import tempfile
 from abc import ABC, abstractmethod
-from pathlib import Path
 from typing import Any
 
 import duckdb
@@ -31,19 +29,22 @@ class TacoBackend(ABC):
 
     Implements the Template Method pattern: load() orchestrates the complete
     loading workflow while subclasses provide format-specific implementations
-    for reading, caching, and setting up views.
+    for reading and setting up views.
 
     The template method guarantees consistent behavior across all formats:
     1. Read collection metadata
-    2. Cache metadata files locally
-    3. Setup DuckDB connection with views
-    4. Create TacoDataset with lazy SQL interface
+    2. Setup DuckDB connection with views
+    3. Create TacoDataset with lazy SQL interface
 
     Subclasses must implement:
     - read_collection(): Format-specific COLLECTION.json reading
-    - cache_metadata_files(): Extract/cache metadata to local disk
-    - setup_duckdb_views(): Create views with internal:gdal_vsi column
+    - setup_duckdb_views(): Create views for querying metadata
     - format_name: Property returning format identifier string
+
+    Note:
+        ZIP and TacoCat backends override load() completely for in-memory
+        loading. FOLDER backend uses the template method since files are
+        already on disk.
 
     Example:
         >>> class MyBackend(TacoBackend):
@@ -55,11 +56,7 @@ class TacoBackend(ABC):
         ...         # Custom implementation
         ...         pass
         ...
-        ...     def cache_metadata_files(self, path: str, cache_dir: Path) -> dict:
-        ...         # Custom implementation
-        ...         pass
-        ...
-        ...     def setup_duckdb_views(self, db, files, root) -> None:
+        ...     def setup_duckdb_views(self, db, root) -> None:
         ...         # Custom implementation
         ...         pass
     """
@@ -100,37 +97,9 @@ class TacoBackend(ABC):
         pass
 
     @abstractmethod
-    def cache_metadata_files(self, path: str, cache_dir: Path) -> dict[str, str]:
-        """
-        Cache all metadata files to local disk.
-
-        Extracts metadata from the dataset and writes it to cache directory
-        for DuckDB to query. Each level (0-5) gets its own file.
-
-        Args:
-            path: Dataset path (format-specific)
-            cache_dir: Directory for cached files
-
-        Returns:
-            Dictionary mapping level names to cached file paths
-            Example: {"level0": "/tmp/level0.parquet", "level1": ...}
-
-        Raises:
-            ValueError: If metadata cannot be extracted
-            IOError: If cache directory cannot be written
-
-        Example:
-            >>> files = backend.cache_metadata_files("data.tacozip", Path("/tmp/cache"))
-            >>> print(files)
-            {'level0': '/tmp/cache/level0.parquet', 'level1': '/tmp/cache/level1.parquet'}
-        """
-        pass
-
-    @abstractmethod
     def setup_duckdb_views(
         self,
         db: duckdb.DuckDBPyConnection,
-        consolidated_files: dict[str, str],
         root_path: str,
     ) -> None:
         """
@@ -149,13 +118,12 @@ class TacoBackend(ABC):
 
         Args:
             db: DuckDB in-memory connection
-            consolidated_files: Cached metadata file paths (from cache_metadata_files)
             root_path: VSI root path for constructing file paths
 
         Example:
             >>> import duckdb
             >>> db = duckdb.connect(":memory:")
-            >>> backend.setup_duckdb_views(db, files, "/vsis3/bucket/data.tacozip")
+            >>> backend.setup_duckdb_views(db, "/vsis3/bucket/data.tacozip")
             >>> # Views created: level0, level1, etc.
             >>> result = db.execute("SELECT * FROM level0 LIMIT 1").fetchone()
         """
@@ -184,7 +152,7 @@ class TacoBackend(ABC):
     # TEMPLATE METHOD (COORDINATES LOADING PROCESS)
     # ========================================================================
 
-    def load(self, path: str, cache_dir: Path | None = None) -> TacoDataset:
+    def load(self, path: str) -> TacoDataset:
         """
         Template method: coordinates complete loading process.
 
@@ -192,28 +160,30 @@ class TacoBackend(ABC):
         of abstract methods. This ensures all formats follow the same process:
 
         1. Read collection metadata (format-specific)
-        2. Cache metadata files to local disk (format-specific)
-        3. Create DuckDB in-memory connection
-        4. Load spatial extension for WKB geometry support
-        5. Convert path to VSI format for GDAL
-        6. Setup DuckDB views with internal:gdal_vsi column (format-specific)
-        7. Create 'data' view pointing to level0
-        8. Construct TacoDataset with lazy SQL interface
+        2. Create DuckDB in-memory connection
+        3. Load spatial extension for WKB geometry support
+        4. Convert path to VSI format for GDAL
+        5. Setup DuckDB views with internal:gdal_vsi column (format-specific)
+        6. Create 'data' view pointing to level0
+        7. Construct TacoDataset with lazy SQL interface
+
+        Note:
+            ZIP and TacoCat backends override this method completely to handle
+            in-memory loading. Only FOLDER backend uses this template method.
 
         Args:
             path: Dataset path (format-specific)
-            cache_dir: Optional cache directory (defaults to temp directory)
 
         Returns:
             TacoDataset with lazy SQL interface and DuckDB connection
 
         Raises:
-            ValueError: If any step fails (collection read, caching, etc.)
+            ValueError: If any step fails (collection read, setup, etc.)
             IOError: If file access fails
 
         Example:
-            >>> backend = ZipBackend()
-            >>> dataset = backend.load("data.tacozip")
+            >>> backend = FolderBackend()
+            >>> dataset = backend.load("data/")
             >>> print(dataset.id)
             'sentinel2-l2a'
             >>>
@@ -221,20 +191,13 @@ class TacoBackend(ABC):
             >>> peru = dataset.sql("SELECT * FROM data WHERE country = 'Peru'")
             >>> df = peru.data  # Materialization happens here
         """
-        # Step 1: Create cache directory if not provided
-        if cache_dir is None:
-            cache_dir = Path(tempfile.mkdtemp(prefix="tacoreader-"))
-
-        # Step 2: Read collection metadata (format-specific)
+        # Step 1: Read collection metadata (format-specific)
         collection = self.read_collection(path)
 
-        # Step 3: Cache metadata files (format-specific)
-        consolidated_files = self.cache_metadata_files(path, cache_dir)
-
-        # Step 4: Create DuckDB in-memory connection
+        # Step 2: Create DuckDB in-memory connection
         db = duckdb.connect(":memory:")
 
-        # Step 4.5: Try to load spatial extension for WKB geometry support
+        # Step 3: Try to load spatial extension for WKB geometry support
         try:
             db.execute("INSTALL spatial")
             db.execute("LOAD spatial")
@@ -243,19 +206,19 @@ class TacoBackend(ABC):
             # Spatial filtering methods will fail with clear error if used
             pass
 
-        # Step 5: Convert path to VSI format for GDAL
+        # Step 4: Convert path to VSI format for GDAL
         root_path = to_vsi_root(path)
 
-        # Step 6: Setup DuckDB views (format-specific)
-        self.setup_duckdb_views(db, consolidated_files, root_path)
+        # Step 5: Setup DuckDB views (format-specific)
+        self.setup_duckdb_views(db, root_path)
 
-        # Step 7: Create 'data' view as alias for level0
+        # Step 6: Create 'data' view as alias for level0
         db.execute("CREATE VIEW data AS SELECT * FROM level0")
 
-        # Step 8: Extract PIT schema for validation and display
+        # Step 7: Extract PIT schema for validation and display
         schema = PITSchema(collection["taco:pit_schema"])
 
-        # Step 9: Construct TacoDataset with all context
+        # Step 8: Construct TacoDataset with all context
         return TacoDataset.model_construct(
             # Public metadata fields
             id=collection["id"],
@@ -273,7 +236,7 @@ class TacoBackend(ABC):
             _path=path,
             _format=self.format_name,
             _collection=collection,
-            _consolidated_files=consolidated_files,
+            _consolidated_files={},
             _duckdb=db,
             _view_name="data",
             _root_path=root_path,
