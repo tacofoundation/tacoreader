@@ -1,13 +1,14 @@
 """
 STAC-style spatiotemporal filtering for TacoDataset.
 
-PySTAC-like API for filtering by spatial and temporal criteria.
+Simple API for filtering by spatial and temporal criteria.
 All spatial ops use DuckDB Spatial extension with WKB columns.
+All temporal ops use native Parquet TIMESTAMP columns.
 
 Main functions:
     - detect_geometry_column / detect_time_column: Auto-detection
-    - build_bbox_sql / build_intersects_sql / build_within_sql: Spatial filters
-    - build_datetime_sql: Temporal filter with auto type detection
+    - build_bbox_sql: Spatial bounding box filter
+    - build_datetime_sql: Temporal filter (TIMESTAMP native)
     - build_cascade_join_sql: Multi-level filtering with JOINs
 """
 
@@ -148,43 +149,6 @@ def detect_time_column(columns: list[str]) -> str:
 
 
 # ============================================================================
-# VALIDATION
-# ============================================================================
-
-
-def validate_geometry_column(columns: list[str], requested: str, detected: str) -> str:
-    """Validate requested geometry column exists, or use auto-detected."""
-    if requested == "auto":
-        return detected
-
-    if requested not in columns:
-        raise ValueError(
-            f"Requested geometry column '{requested}' not found.\n"
-            f"Auto-detected: {detected}\n"
-            f"Available: {columns}\n"
-            f"Use geometry_col='auto' for auto-detection."
-        )
-
-    return requested
-
-
-def validate_time_column(columns: list[str], requested: str, detected: str) -> str:
-    """Validate requested time column exists, or use auto-detected."""
-    if requested == "auto":
-        return detected
-
-    if requested not in columns:
-        raise ValueError(
-            f"Requested time column '{requested}' not found.\n"
-            f"Auto-detected: {detected}\n"
-            f"Available: {columns}\n"
-            f"Use time_col='auto' for auto-detection."
-        )
-
-    return requested
-
-
-# ============================================================================
 # INPUT CONVERSION
 # ============================================================================
 
@@ -193,14 +157,14 @@ def parse_datetime(
     dt_input: str | datetime | tuple[datetime, datetime]
 ) -> tuple[int, int | None]:
     """
-    Parse datetime to (start_timestamp, end_timestamp).
+    Parse datetime to (start_epoch, end_epoch).
 
     Formats:
     - String range: "2023-01-01/2023-12-31"
     - Single datetime: datetime(2023, 1, 1)
     - Tuple: (start_dt, end_dt)
 
-    Returns end_timestamp=None for single datetime.
+    Returns end_epoch=None for single datetime.
     """
     # String range: "2023-01-01/2023-12-31"
     if isinstance(dt_input, str):
@@ -246,134 +210,7 @@ def parse_datetime(
         )
 
 
-def geometry_to_wkt(geometry: Any) -> str:
-    """
-    Convert geometry to WKT string for DuckDB.
 
-    Accepts:
-    - WKT string: "POLYGON((-81 -18, ...))"
-    - GeoJSON dict: {"type": "Polygon", "coordinates": [...]}
-    - Shapely object: Polygon(...)
-    - Any object with __geo_interface__
-    """
-    # Already WKT
-    if isinstance(geometry, str):
-        return geometry
-
-    # GeoJSON dict
-    elif isinstance(geometry, dict):
-        return geojson_to_wkt(geometry)
-
-    # Shapely object
-    elif hasattr(geometry, "wkt"):
-        return geometry.wkt
-
-    # __geo_interface__ protocol
-    elif hasattr(geometry, "__geo_interface__"):
-        return geojson_to_wkt(geometry.__geo_interface__)
-
-    else:
-        raise ValueError(
-            f"Unsupported geometry type: {type(geometry)}\n"
-            f"Expected: WKT string, GeoJSON dict, shapely, or __geo_interface__"
-        )
-
-
-def geojson_to_wkt(geojson: dict) -> str:
-    """
-    Convert GeoJSON to WKT (pure Python, no dependencies).
-
-    Supports: Point, LineString, Polygon, Multi*.
-    """
-    geom_type = geojson["type"]
-    coords = geojson["coordinates"]
-
-    if geom_type == "Point":
-        return f"POINT({coords[0]} {coords[1]})"
-
-    elif geom_type == "LineString":
-        points = ", ".join(f"{x} {y}" for x, y in coords)
-        return f"LINESTRING({points})"
-
-    elif geom_type == "Polygon":
-        rings = []
-        for ring in coords:
-            points = ", ".join(f"{x} {y}" for x, y in ring)
-            rings.append(f"({points})")
-        return f"POLYGON({', '.join(rings)})"
-
-    elif geom_type == "MultiPoint":
-        points = ", ".join(f"({x} {y})" for x, y in coords)
-        return f"MULTIPOINT({points})"
-
-    elif geom_type == "MultiLineString":
-        lines = []
-        for line in coords:
-            points = ", ".join(f"{x} {y}" for x, y in line)
-            lines.append(f"({points})")
-        return f"MULTILINESTRING({', '.join(lines)})"
-
-    elif geom_type == "MultiPolygon":
-        polygons = []
-        for polygon in coords:
-            rings = []
-            for ring in polygon:
-                points = ", ".join(f"{x} {y}" for x, y in ring)
-                rings.append(f"({points})")
-            polygons.append(f"({', '.join(rings)})")
-        return f"MULTIPOLYGON({', '.join(polygons)})"
-
-    else:
-        raise ValueError(
-            f"Unsupported GeoJSON type: {geom_type}\n"
-            f"Supported: Point, LineString, Polygon, Multi*"
-        )
-
-
-# ============================================================================
-# TYPE DETECTION
-# ============================================================================
-
-
-def _get_column_type(dataset: "TacoDataset", col: str, level: int) -> str:
-    """
-    Detect column type from DuckDB schema for type-aware SQL generation.
-
-    Returns DuckDB type: 'VARCHAR', 'BIGINT', 'TIMESTAMP', etc.
-    """
-    # SQL injection protection
-    if "'" in col or '"' in col:
-        raise ValueError(f"Invalid column name: {col} (contains quotes)")
-
-    suspicious = [";", "--", "/*", "*/", "DROP", "DELETE", "INSERT", "UPDATE"]
-    if any(s in col.upper() for s in suspicious):
-        raise ValueError(f"Invalid column name: {col} (suspicious SQL)")
-
-    level_view = f"level{level}" if level > 0 else "data"
-    query = f"SELECT column_type FROM (DESCRIBE {level_view}) WHERE column_name = ?"
-
-    try:
-        result = dataset._duckdb.execute(query, [col]).fetchone()
-    except Exception as e:
-        raise ValueError(f"Failed to get type for '{col}' in {level_view}: {e}")
-
-    if result:
-        return result[0].upper()
-
-    raise ValueError(
-        f"Column '{col}' not found in {level_view}\n"
-        f"Available: {get_columns_for_level(dataset, level)}"
-    )
-
-
-def _timestamp_to_iso_string(timestamp: int) -> str:
-    """Convert Unix timestamp to ISO 8601 string."""
-    return datetime.fromtimestamp(timestamp).isoformat()
-
-
-def _timestamp_to_date_string(timestamp: int) -> str:
-    """Convert Unix timestamp to DATE string."""
-    return datetime.fromtimestamp(timestamp).date().isoformat()
 
 
 # ============================================================================
@@ -405,101 +242,36 @@ def build_bbox_sql(
     )
 
 
-def build_intersects_sql(geometry: Any, geometry_col: str, level: int = 0) -> str:
-    """
-    Build intersection filter SQL.
-
-    Uses ST_Intersects to check if geometries overlap.
-    """
-    wkt = geometry_to_wkt(geometry)
-    wkt_escaped = wkt.replace("'", "''")  # SQL escape
-
-    col_ref = f'l{level}."{geometry_col}"' if level > 0 else f'"{geometry_col}"'
-
-    return (
-        f"ST_Intersects("
-        f"ST_GeomFromWKB({col_ref}), "
-        f"ST_GeomFromText('{wkt_escaped}')"
-        f")"
-    )
-
-
-def build_within_sql(geometry: Any, geometry_col: str, level: int = 0) -> str:
-    """
-    Build within filter SQL.
-
-    Uses ST_Within to check if dataset geometry is inside user geometry.
-    """
-    wkt = geometry_to_wkt(geometry)
-    wkt_escaped = wkt.replace("'", "''")
-
-    col_ref = f'l{level}."{geometry_col}"' if level > 0 else f'"{geometry_col}"'
-
-    return (
-        f"ST_Within("
-        f"ST_GeomFromWKB({col_ref}), "
-        f"ST_GeomFromText('{wkt_escaped}')"
-        f")"
-    )
-
-
 def build_datetime_sql(
     start: int,
     end: int | None,
     time_col: str,
     level: int,
-    dataset: "TacoDataset",
 ) -> str:
     """
-    Build temporal filter SQL with automatic type detection.
+    Build temporal filter SQL with native TIMESTAMP comparison.
 
-    Detects column type from DuckDB schema and generates appropriate SQL:
-    - INTEGER/BIGINT: Direct timestamp comparison
-    - VARCHAR: ISO string comparison
-    - TIMESTAMP: Timestamp comparison with to_timestamp()
-    - DATE: Date comparison with DATE cast
+    All temporal columns are stored as Parquet TIMESTAMP type.
+    DuckDB automatically parses ISO 8601 strings when comparing with TIMESTAMP columns.
+
+    Args:
+        start: Unix epoch seconds
+        end: Unix epoch seconds (None for point-in-time query)
+        time_col: Column name (e.g., "stac:time_start")
+        level: Level number for multi-level filtering
+
+    Returns:
+        SQL WHERE clause fragment
     """
-    # Auto-detect column type
-    col_type = _get_column_type(dataset, time_col, level)
-
     col_ref = f'l{level}."{time_col}"' if level > 0 else f'"{time_col}"'
 
-    # Generate SQL by detected type
-    if col_type in ("BIGINT", "INTEGER", "HUGEINT"):
-        # Direct timestamp comparison
-        if end is None:
-            return f"({col_ref} = {start})"
-        else:
-            return f"({col_ref} BETWEEN {start} AND {end})"
+    # Convert epoch to ISO string - DuckDB parses it automatically
+    start_str = datetime.fromtimestamp(start).isoformat()
 
-    elif col_type == "VARCHAR":
-        # ISO string comparison
-        start_str = _timestamp_to_iso_string(start)
-        if end is None:
-            return f"({col_ref} = '{start_str}')"
-        else:
-            end_str = _timestamp_to_iso_string(end)
-            return f"({col_ref} BETWEEN '{start_str}' AND '{end_str}')"
-
-    elif col_type in ("TIMESTAMP", "TIMESTAMP WITH TIME ZONE"):
-        # Timestamp comparison
-        if end is None:
-            return f"({col_ref} = to_timestamp({start}))"
-        else:
-            return f"({col_ref} BETWEEN to_timestamp({start}) AND to_timestamp({end}))"
-
-    elif col_type == "DATE":
-        # Date comparison
-        start_date = _timestamp_to_date_string(start)
-        if end is None:
-            return f"({col_ref} = DATE '{start_date}')"
-        else:
-            end_date = _timestamp_to_date_string(end)
-            return f"({col_ref} BETWEEN DATE '{start_date}' AND DATE '{end_date}')"
-
+    if end is None:
+        # Point-in-time query
+        return f"({col_ref} = '{start_str}')"
     else:
-        raise ValueError(
-            f"Unsupported time column type: {col_type}\n"
-            f"Supported: INTEGER, BIGINT, VARCHAR, TIMESTAMP, DATE\n"
-            f"Column '{time_col}' has type '{col_type}'"
-        )
+        # Range query
+        end_str = datetime.fromtimestamp(end).isoformat()
+        return f"({col_ref} BETWEEN '{start_str}' AND '{end_str}')"
