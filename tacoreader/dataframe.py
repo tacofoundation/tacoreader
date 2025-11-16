@@ -18,153 +18,106 @@ import polars as pl
 from tacoreader._constants import (
     NAVIGATION_REQUIRED_COLUMNS,
     DATAFRAME_DEFAULT_HEAD_ROWS,
-    DATAFRAME_DEFAULT_TAIL_ROWS,    
-    is_protected_column,
+    DATAFRAME_DEFAULT_TAIL_ROWS,
+    PROTECTED_COLUMNS,
+    PADDING_PREFIX,
 )
+
+
+def _is_protected_column(column_name: str) -> bool:
+    """
+    Check if column is protected and cannot be modified.
+
+    Protected columns required for hierarchical navigation.
+    Modifying these breaks .read() functionality.
+    """
+    return column_name in PROTECTED_COLUMNS or column_name.startswith("internal:")
 
 
 def _validate_navigation_columns(df: pl.DataFrame, operation: str) -> None:
     """
-    Validate that critical columns required for navigation are present.
+    Validate critical columns for navigation are present.
 
-    After filter/select/sort operations, we need to ensure that the
-    resulting DataFrame still has the minimum columns required for
-    .read() navigation to work.
-
-    Args:
-        df: DataFrame to validate
-        operation: Name of operation (for error message)
-
-    Raises:
-        ValueError: If required columns are missing
+    Required: id, type, internal:gdal_vsi
     """
     current_cols = set(df.columns)
     missing = NAVIGATION_REQUIRED_COLUMNS - current_cols
-    
+
     if missing:
         raise ValueError(
             f"Operation '{operation}' removed required columns: {sorted(missing)}\n"
             f"\n"
-            f"Required columns for navigation:\n"
-            f"  - 'id': Sample identifier\n"
-            f"  - 'type': FOLDER or FILE indicator\n"
-            f"  - 'internal:gdal_vsi': Path for reading files\n"
-            f"\n"
-            f"These columns are required for .read() to work correctly.\n"
-            f"\n"
+            f"Required for navigation: id, type, internal:gdal_vsi\n"
             f"Current columns: {sorted(current_cols)}\n"
             f"\n"
-            f"If you need to drop these columns, convert to Polars first:\n"
-            f"  df = tdf.to_polars()\n"
-            f"  df = df.select(['custom_column'])  # No restrictions"
+            f"To drop these, convert to Polars first:\n"
+            f"  df = tdf.to_polars().select(['custom_column'])"
         )
 
 
 def _validate_not_protected(column_name: str) -> None:
     """
-    Validate that a column is not protected and can be modified.
+    Validate column not protected and can be modified.
 
-    Protected columns are required for hierarchical navigation and cannot
-    be modified without breaking .read() functionality.
-
-    Args:
-        column_name: Column name to validate
-
-    Raises:
-        ValueError: If column is protected
-
-    Example:
-        >>> _validate_not_protected("cloud_cover")  # OK
-        >>> _validate_not_protected("id")  # ValueError
-        >>> _validate_not_protected("internal:offset")  # ValueError
+    Protected: id, type, internal:*
     """
-    if is_protected_column(column_name):
+    if _is_protected_column(column_name):
         raise ValueError(
             f"Cannot modify protected column: '{column_name}'\n"
             f"\n"
-            f"Protected columns are required for hierarchical navigation:\n"
-            f"  - Core: id, type\n"
-            f"  - Internal: internal:parent_id, internal:offset, internal:size, "
-            f"internal:gdal_vsi, internal:source_file, internal:relative_path\n"
-            f"\n"
-            f"To create derived columns, use a different name."
+            f"Protected: id, type, internal:*\n"
+            f"Use a different name for derived columns."
         )
-
-
-# ============================================================================
-# TACODATAFRAME
-# ============================================================================
 
 
 class TacoDataFrame:
     """
     Hierarchical DataFrame wrapper for TACO navigation.
 
-    Wraps a Polars DataFrame and provides TACO-specific functionality:
-    - Hierarchical navigation via read() method
-    - Statistics aggregation via stats_*() methods
-    - Standard DataFrame operations (head, tail, shape, etc.)
+    Wraps Polars DataFrame with TACO-specific functionality:
+    - Hierarchical navigation via read()
+    - Statistics aggregation via stats_*()
+    - Standard DataFrame operations (head, tail, filter, etc.)
     - Column modification with protection for critical columns
 
-    The underlying DataFrame is always materialized in memory (Polars).
-    Navigation to child levels loads child metadata on-demand.
-
     Protected columns (cannot be modified):
-        - id, type: Core columns required for navigation
-        - internal:*: All internal columns used for hierarchical navigation
+        - id, type: Core navigation
+        - internal:*: All internal columns
 
-    Attributes:
-        columns: Column names from underlying DataFrame
-        shape: Tuple of (rows, columns)
+    Examples:
+        tdf = dataset.collect()
 
-    Example:
-        >>> tdf = dataset.collect()
-        >>> print(tdf.shape)
-        (1000, 15)
-        >>>
-        >>> # Navigate to child
-        >>> child = tdf.read(0)  # By position
-        >>> child = tdf.read("sample_001")  # By ID
-        >>>
-        >>> # Get file path
-        >>> vsi_path = tdf.read(5)  # Returns str if FILE type
-        >>>
-        >>> # Modify columns (pandas-style, in-place)
-        >>> tdf["cloud_cover"] = tdf["cloud_cover"] * 100
-        >>>
-        >>> # Modify columns (Polars-style, immutable)
-        >>> tdf = tdf.with_column("timestamp", pl.col("timestamp").cast(pl.Datetime))
-        >>>
-        >>> # Statistics
-        >>> mean_values = tdf.stats_mean()
+        # Navigate
+        child = tdf.read(0)  # By position
+        child = tdf.read("sample_001")  # By ID
+        vsi_path = tdf.read(5)  # Returns str if FILE
+
+        # Modify columns (in-place)
+        tdf["cloud_cover"] = tdf["cloud_cover"] * 100
+
+        # Modify columns (immutable)
+        tdf = tdf.with_column("timestamp", pl.col("timestamp").cast(pl.Datetime))
+
+        # Stats
+        mean_values = tdf.stats_mean()
     """
 
-    def __init__(
-        self,
-        data: pl.DataFrame,
-        format_type: str,
-    ):
-        """
-        Initialize TacoDataFrame.
-
-        Args:
-            data: Materialized Polars DataFrame (in memory)
-            format_type: Backend format ("zip", "folder", or "tacocat")
-        """
+    def __init__(self, data: pl.DataFrame, format_type: str):
+        """Initialize with materialized Polars DataFrame."""
         self._data = data
         self._format_type = format_type
 
     def __len__(self) -> int:
-        """Number of rows in current level."""
+        """Number of rows."""
         return len(self._data)
 
     def __repr__(self) -> str:
         """String representation with format info."""
         display_df = self._data
 
-        # Filter out padding samples for cleaner display
+        # Filter out padding for cleaner display
         if "id" in self._data.columns:
-            display_df = self._data.filter(~pl.col("id").str.contains("__TACOPAD__"))
+            display_df = self._data.filter(~pl.col("id").str.contains(PADDING_PREFIX))
 
         base_repr = display_df.__repr__()
         info = f"\n[TacoDataFrame: {len(self)} rows, format={self._format_type}]"
@@ -172,96 +125,33 @@ class TacoDataFrame:
 
     def __getitem__(self, key):
         """
-        Enable subscripting like Polars DataFrame.
+        Subscripting like Polars DataFrame.
 
-        Delegates to underlying Polars DataFrame for all indexing operations.
-        Supports all Polars indexing patterns: row selection, column selection,
-        boolean masks, slicing, and tuple indexing.
-
-        Args:
-            key: Index, column name, slice, tuple, or expression
-                - Integer: row by position
-                - String: column by name
-                - Slice: multiple rows
-                - Tuple: (row, column) indexing
-                - Expression: Polars expression for filtering
-
-        Returns:
-            Selected data (scalar, Series, or DataFrame depending on key)
-
-        Examples:
-            >>> # Single cell access
-            >>> tdf[0, "type"]
-            'FOLDER'
-            >>>
-            >>> # Row access
-            >>> tdf[0]
-            {'id': 'sample_001', 'type': 'FOLDER', ...}
-            >>>
-            >>> # Column access
-            >>> tdf["type"]
-            Series(['FOLDER', 'FILE', 'FILE', ...])
-            >>>
-            >>> # Slicing
-            >>> tdf[0:5]
-            DataFrame(...)
-            >>>
-            >>> # Multiple columns
-            >>> tdf[["id", "type"]]
-            DataFrame(...)
+        Supports: row/column selection, boolean masks, slicing, tuple indexing.
         """
         return self._data[key]
 
     def __setitem__(self, key: str, value):
         """
-        Modify column (in-place mutation, pandas-style).
+        Modify column in-place (pandas-style).
 
-        Allows modifying metadata columns but protects critical columns
-        required for hierarchical navigation. For immutable operations,
-        use .with_column() instead.
-
-        Protected columns (cannot be modified):
-            - id, type: Core navigation columns
-            - internal:*: All internal columns
-
-        Args:
-            key: Column name to modify
-            value: New values (Polars Series, list, numpy array, etc.)
-
-        Raises:
-            ValueError: If attempting to modify protected column
-
-        Examples:
-            >>> # Convert timestamp string to datetime
-            >>> tdf["timestamp"] = pd.to_datetime(tdf["timestamp"])
-            >>>
-            >>> # Scale values
-            >>> tdf["cloud_cover"] = tdf["cloud_cover"] * 100
-            >>>
-            >>> # Add new column
-            >>> tdf["normalized"] = tdf["value"] / tdf["value"].max()
-            >>>
-            >>> # PROTECTED: Cannot modify critical columns
-            >>> tdf["id"] = "new_id"  # ValueError!
-            >>> tdf["internal:offset"] = 0  # ValueError!
+        Protected columns (id, type, internal:*) cannot be modified.
+        For immutable ops, use .with_column().
         """
-        # Validate column is not protected
         _validate_not_protected(key)
 
-        # Convert to Polars Series if needed
         if isinstance(value, pl.Series):
             self._data = self._data.with_columns(value.alias(key))
         else:
-            # Handle pandas Series, numpy arrays, lists, etc.
             self._data = self._data.with_columns(pl.Series(key, value))
 
     # ========================================================================
-    # DATAFRAME PROPERTIES
+    # PROPERTIES
     # ========================================================================
 
     @property
     def columns(self):
-        """Column names from underlying DataFrame."""
+        """Column names."""
         return self._data.columns
 
     @property
@@ -270,92 +160,34 @@ class TacoDataFrame:
         return self._data.shape
 
     def head(self, n: int = DATAFRAME_DEFAULT_HEAD_ROWS) -> pl.DataFrame:
-        """
-        First n rows as Polars DataFrame.
-
-        Args:
-            n: Number of rows (default: 5)
-
-        Returns:
-            Polars DataFrame with first n rows
-        """
+        """First n rows as Polars DataFrame."""
         return self._data.head(n)
 
     def tail(self, n: int = DATAFRAME_DEFAULT_TAIL_ROWS) -> pl.DataFrame:
-        """
-        Last n rows as Polars DataFrame.
-
-        Args:
-            n: Number of rows (default: 5)
-
-        Returns:
-            Polars DataFrame with last n rows
-        """
+        """Last n rows as Polars DataFrame."""
         return self._data.tail(n)
 
     def to_polars(self) -> pl.DataFrame:
-        """
-        Export as Polars DataFrame.
-
-        Returns:
-            Clone of underlying Polars DataFrame
-        """
+        """Export as Polars DataFrame."""
         return self._data.clone()
 
     def to_pandas(self) -> Any:
-        """
-        Export as pandas DataFrame.
-
-        Requires pandas installed.
-
-        Returns:
-            pandas DataFrame
-
-        Raises:
-            ImportError: If pandas not installed
-        """
+        """Export as pandas DataFrame (requires pandas)."""
         return self._data.to_pandas()
 
     # ========================================================================
-    # DATAFRAME OPERATIONS (return TacoDataFrame for chaining)
+    # DATAFRAME OPERATIONS
     # ========================================================================
 
     def filter(self, *args, **kwargs) -> TacoDataFrame:
         """
         Filter rows using Polars expressions.
 
-        Returns new TacoDataFrame preserving navigation capabilities.
-        All filtered rows can still use .read() for hierarchical navigation.
-
-        Args:
-            *args: Polars expressions or predicates
-            **kwargs: Additional Polars filter arguments
-
-        Returns:
-            New TacoDataFrame with filtered rows
-
-        Raises:
-            ValueError: If filter removes required navigation columns
-
-        Examples:
-            >>> # Filter by column value
-            >>> large = tdf.filter(pl.col("internal:size") > 1000000)
-            >>> large.read(0)
-
-            >>> # Multiple conditions
-            >>> filtered = tdf.filter(
-            ...     (pl.col("type") == "FILE") &
-            ...     (pl.col("internal:size") < 5000)
-            ... )
-
-            >>> # Chain operations
-            >>> tdf.filter(pl.col("type") == "FOLDER").limit(10).read(0)
+        Returns new TacoDataFrame preserving navigation.
         """
         filtered_df = self._data.filter(*args, **kwargs)
-        
-        # Validate critical columns still exist
         _validate_navigation_columns(filtered_df, "filter")
-        
+
         return TacoDataFrame(
             data=filtered_df,
             format_type=self._format_type,
@@ -365,110 +197,31 @@ class TacoDataFrame:
         """
         Select columns using Polars expressions.
 
-        Returns new TacoDataFrame with selected columns.
-        Navigation with .read() still works if required columns present.
-
-        Args:
-            *args: Column names or Polars expressions
-            **kwargs: Additional Polars select arguments
-
-        Returns:
-            New TacoDataFrame with selected columns
-
-        Raises:
-            ValueError: If selection excludes required navigation columns
-
-        Examples:
-            >>> # Select specific columns
-            >>> subset = tdf.select(["id", "type", "internal:gdal_vsi"])
-            >>>
-            >>> # Using expressions
-            >>> tdf.select(pl.col("id"), pl.col("type"))
-            >>>
-            >>> # Chain with filter
-            >>> tdf.filter(pl.col("type") == "FILE").select(["id", "internal:size"])
+        Navigation works if required columns present.
         """
         selected_df = self._data.select(*args, **kwargs)
-        
-        # Validate critical columns still exist
         _validate_navigation_columns(selected_df, "select")
-        
+
         return TacoDataFrame(
             data=selected_df,
             format_type=self._format_type,
         )
 
     def limit(self, n: int) -> TacoDataFrame:
-        """
-        Limit to first n rows.
-
-        Returns new TacoDataFrame with at most n rows.
-        Alias for head() that returns TacoDataFrame instead of pl.DataFrame.
-
-        Args:
-            n: Maximum number of rows
-
-        Returns:
-            New TacoDataFrame with at most n rows
-
-        Raises:
-            ValueError: If limit somehow removes required navigation columns (unlikely)
-
-        Examples:
-            >>> # Get first 10 rows
-            >>> subset = tdf.limit(10)
-            >>> subset.read(0)
-            >>>
-            >>> # Chain with filter
-            >>> tdf.filter(pl.col("type") == "FOLDER").limit(5)
-        """
+        """Limit to first n rows."""
         limited_df = self._data.limit(n)
-        
-        # Validate critical columns still exist (should always pass for limit)
         _validate_navigation_columns(limited_df, "limit")
-        
+
         return TacoDataFrame(
             data=limited_df,
             format_type=self._format_type,
         )
 
     def sort(self, by, *args, **kwargs) -> TacoDataFrame:
-        """
-        Sort rows by column(s).
-
-        Returns new TacoDataFrame with sorted rows.
-        Navigation with .read() works on sorted order.
-
-        Args:
-            by: Column name(s) or expression(s) to sort by
-            *args: Additional sort expressions
-            **kwargs: Additional Polars sort arguments (descending, nulls_last, etc.)
-
-        Returns:
-            New TacoDataFrame with sorted rows
-
-        Raises:
-            ValueError: If sort somehow removes required navigation columns (unlikely)
-
-        Examples:
-            >>> # Sort by single column
-            >>> sorted_df = tdf.sort("id")
-            >>>
-            >>> # Sort descending
-            >>> largest = tdf.sort("internal:size", descending=True)
-            >>> largest.read(0)  # Navigate to largest file
-            >>>
-            >>> # Multiple columns
-            >>> tdf.sort(["type", "id"])
-            >>>
-            >>> # Chain operations
-            >>> tdf.filter(pl.col("type") == "FILE").sort("internal:size").limit(10)
-        """
+        """Sort rows by column(s)."""
         sorted_df = self._data.sort(by, *args, **kwargs)
-        
-        # Validate critical columns still exist (should always pass for sort)
         _validate_navigation_columns(sorted_df, "sort")
-        
+
         return TacoDataFrame(
             data=sorted_df,
             format_type=self._format_type,
@@ -478,57 +231,16 @@ class TacoDataFrame:
         """
         Add or replace column (immutable, Polars-style).
 
-        Returns new TacoDataFrame with modified column, leaving original unchanged.
-        Protects critical columns required for hierarchical navigation.
-
-        This is the recommended way to modify columns as it follows Polars'
-        functional paradigm and prevents accidental mutations.
-
-        Protected columns (cannot be modified):
-            - id, type: Core navigation columns
-            - internal:*: All internal columns
-
-        Args:
-            name: Column name to add/replace
-            expr: Polars expression, Series, or values
-
-        Returns:
-            New TacoDataFrame with modified column
-
-        Raises:
-            ValueError: If attempting to modify protected column
-
-        Examples:
-            >>> # Cast column type (Polars expression)
-            >>> tdf = tdf.with_column("timestamp", pl.col("timestamp").cast(pl.Datetime))
-            >>>
-            >>> # Add computed column
-            >>> tdf = tdf.with_column("normalized", pl.col("value") / pl.col("value").max())
-            >>>
-            >>> # Replace with new values (Series or list)
-            >>> tdf = tdf.with_column("cloud_cover", pl.Series([10, 20, 30]))
-            >>>
-            >>> # Chain operations
-            >>> tdf = (tdf
-            ...     .with_column("timestamp", pl.col("timestamp").cast(pl.Datetime))
-            ...     .with_column("cloud_cover", pl.col("cloud_cover") * 100)
-            ... )
-            >>>
-            >>> # PROTECTED: Cannot modify critical columns
-            >>> tdf = tdf.with_column("id", "new_id")  # ValueError!
+        Protected columns (id, type, internal:*) cannot be modified.
         """
-        # Validate column is not protected
         _validate_not_protected(name)
 
         # Handle different input types
         if isinstance(expr, pl.Expr):
-            # Polars expression: pl.col("x") * 2
             new_data = self._data.with_columns(expr.alias(name))
         elif isinstance(expr, pl.Series):
-            # Polars Series
             new_data = self._data.with_columns(expr.alias(name))
         else:
-            # List, numpy array, etc.
             new_data = self._data.with_columns(pl.Series(name, expr))
 
         return TacoDataFrame(
@@ -544,31 +256,8 @@ class TacoDataFrame:
         """
         Navigate to child level by position or ID.
 
-        For FILE samples, returns GDAL VSI path as string.
-        For FOLDER samples, reads __meta__ file and returns TacoDataFrame with children.
-
-        Args:
-            key: Row position (int) or sample ID (str)
-
-        Returns:
-            str: GDAL VSI path if sample type is FILE
-            TacoDataFrame: Child samples if sample type is FOLDER
-
-        Raises:
-            IndexError: If position is out of range
-            KeyError: If ID not found
-
-        Example:
-            >>> # Navigate by position
-            >>> child = tdf.read(0)
-            >>>
-            >>> # Navigate by ID
-            >>> child = tdf.read("sample_001")
-            >>>
-            >>> # FILE type returns path
-            >>> vsi_path = tdf.read(5)
-            >>> print(vsi_path)
-            '/vsisubfile/1024_5000,/vsis3/bucket/data.tacozip'
+        FILE samples: returns GDAL VSI path as string
+        FOLDER samples: reads __meta__ and returns TacoDataFrame with children
         """
         position = self._get_position(key)
         row = self._data.row(position, named=True)
@@ -579,28 +268,16 @@ class TacoDataFrame:
         return self._read_meta(row)
 
     def _get_position(self, key: int | str) -> int:
-        """
-        Convert key to integer position.
-
-        Args:
-            key: Position (int) or ID (str)
-
-        Returns:
-            Integer row position
-
-        Raises:
-            IndexError: If position out of range
-            KeyError: If ID not found
-        """
+        """Convert key to integer position."""
         if isinstance(key, int):
             if key < 0 or key >= len(self):
                 raise IndexError(f"Position {key} out of range [0, {len(self)-1}]")
             return key
 
-        # Search by ID - convert to list and use Python's index()
+        # Search by ID
         ids = self._data["id"].to_list()
         if key not in ids:
-            raise KeyError(f"ID '{key}' not found in current level")
+            raise KeyError(f"ID '{key}' not found")
 
         return ids.index(key)
 
@@ -608,15 +285,9 @@ class TacoDataFrame:
         """
         Read __meta__ file for FOLDER sample.
 
-        Handles both formats:
+        Handles:
         - /vsisubfile/ paths (ZIP, TacoCat): Read Parquet from offset
-        - Direct paths (FOLDER): Read Parquet from filesystem (__meta__ uses Parquet)
-
-        Args:
-            row: Row dictionary with sample metadata
-
-        Returns:
-            TacoDataFrame with child samples
+        - Direct paths (FOLDER): Read Parquet from filesystem
         """
         from tacoreader.io import download_range, download_bytes
         from tacoreader.utils.format import is_remote
@@ -625,7 +296,7 @@ class TacoDataFrame:
         vsi_path = row["internal:gdal_vsi"]
 
         if vsi_path.startswith("/vsisubfile/"):
-            # ZIP or TacoCat format: Read Parquet from offset
+            # ZIP or TacoCat: Read Parquet from offset
             root_path, offset, size = parse_vsi_subfile(vsi_path)
             original_path = strip_vsi_prefix(root_path)
 
@@ -649,9 +320,8 @@ class TacoDataFrame:
                 .alias("internal:gdal_vsi")
             )
         else:
-            # FOLDER format: Read Parquet from __meta__ file
+            # FOLDER: Read Parquet from __meta__
             if is_remote(vsi_path):
-                # Determine subpath for __meta__
                 if vsi_path.endswith("/__meta__"):
                     meta_bytes = download_bytes(vsi_path)
                 else:
@@ -659,15 +329,12 @@ class TacoDataFrame:
 
                 children_df = pl.read_parquet(BytesIO(meta_bytes))
             else:
-                # Check if path already ends with __meta__
                 if vsi_path.endswith("/__meta__"):
                     meta_path = vsi_path
                 else:
                     meta_path = str(Path(vsi_path) / "__meta__")
 
                 children_df = pl.read_parquet(meta_path)
-
-            # Parquet natively supports colons in column names
 
             # Construct direct paths for children
             children_df = children_df.with_columns(
@@ -687,16 +354,7 @@ class TacoDataFrame:
         )
 
     def _construct_vsi_path(self, row_struct: dict, zip_path: str) -> str:
-        """
-        Construct /vsisubfile/ path for child in ZIP/TacoCat.
-
-        Args:
-            row_struct: Child row as dictionary
-            zip_path: Parent ZIP path
-
-        Returns:
-            VSI path string or empty string
-        """
+        """Construct /vsisubfile/ path for child in ZIP/TacoCat."""
         if "internal:offset" in row_struct and "internal:size" in row_struct:
             offset = row_struct["internal:offset"]
             size = row_struct["internal:size"]
@@ -704,16 +362,7 @@ class TacoDataFrame:
         return ""
 
     def _construct_folder_path(self, row_struct: dict, parent_path: str) -> str:
-        """
-        Construct direct path for child in FOLDER.
-
-        Args:
-            row_struct: Child row as dictionary
-            parent_path: Parent directory path
-
-        Returns:
-            Direct path string or empty string
-        """
+        """Construct direct path for child in FOLDER."""
         if "internal:relative_path" in row_struct:
             relative = row_struct["internal:relative_path"]
             return f"{parent_path}/{relative}"

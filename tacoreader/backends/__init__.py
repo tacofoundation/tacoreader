@@ -10,28 +10,9 @@ from tacoreader.backends.tacocat import TacoCatBackend
 from tacoreader.backends.zip import ZipBackend
 from tacoreader.dataset import TacoDataset
 
-# ============================================================================
-# FACTORY FUNCTIONS
-# ============================================================================
-
 
 def create_backend(format_type: str) -> TacoBackend:
-    """
-    Create backend instance for specified format.
-
-    Args:
-        format_type: Format identifier ('zip', 'folder', or 'tacocat')
-
-    Returns:
-        Backend instance
-
-    Raises:
-        ValueError: If format_type is unknown
-
-    Example:
-        >>> backend = create_backend("zip")
-        >>> dataset = backend.load("data.tacozip")
-    """
+    """Create backend instance: 'zip', 'folder', or 'tacocat'."""
     backends = {
         "zip": ZipBackend,
         "folder": FolderBackend,
@@ -42,28 +23,14 @@ def create_backend(format_type: str) -> TacoBackend:
     if backend_class is None:
         raise ValueError(
             f"Unknown format: {format_type}\n"
-            f"Supported formats: {', '.join(backends.keys())}"
+            f"Supported: {', '.join(backends.keys())}"
         )
 
     return backend_class()
 
 
 def load_dataset(path: str, format_type: str) -> TacoDataset:
-    """
-    Load dataset using specified backend.
-
-    Args:
-        path: Dataset path
-        format_type: Format identifier ('zip', 'folder', or 'tacocat')
-
-    Returns:
-        TacoDataset with lazy SQL interface
-
-    Example:
-        >>> ds = load_dataset("data.tacozip", "zip")
-        >>> ds = load_dataset("data/", "folder")
-        >>> ds = load_dataset("__tacocat__", "tacocat")
-    """
+    """Load dataset using specified backend."""
     backend = create_backend(format_type)
     return backend.load(path)
 

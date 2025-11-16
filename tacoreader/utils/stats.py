@@ -1,8 +1,8 @@
 """
 Statistics aggregation for TACO datasets.
 
-Provides weighted aggregation of pre-computed statistics from internal:stats column.
-All functions operate on Polars DataFrames for performance.
+Weighted aggregation of pre-computed stats from internal:stats column.
+Operates on Polars DataFrames for performance.
 """
 
 import warnings
@@ -13,30 +13,18 @@ import polars as pl
 from tacoreader._constants import STATS_CONTINUOUS_LENGTH
 
 
-# ============================================================================
-# EXTRACTION & VALIDATION
-# ============================================================================
-
-
 def _extract_stats_and_weights(
     df: pl.DataFrame,
 ) -> tuple[list[list[list[float]]], list[int]]:
     """
-    Extract internal:stats and calculate pixel counts (weights).
+    Extract internal:stats and calculate pixel counts as weights.
 
-    Args:
-        df: Polars DataFrame with 'internal:stats' column
-
-    Returns:
-        Tuple of (all_stats, weights)
-
-    Raises:
-        ValueError: If 'internal:stats' column not found
+    Uses stac:tensor_shape for weights if available, otherwise equal weights.
     """
     if "internal:stats" not in df.columns:
         raise ValueError("DataFrame must contain 'internal:stats' column")
 
-    # Fast: extract as lists (no iterrows overhead)
+    # Fast extraction (no iterrows overhead)
     all_stats = df["internal:stats"].to_list()
 
     # Calculate weights from tensor_shape if available
@@ -67,10 +55,10 @@ def _extract_stats_and_weights(
 
 def _is_categorical(stats: list[list[float]]) -> bool:
     """
-    Detect if stats are categorical or continuous.
+    Detect categorical vs continuous stats.
 
     Continuous: 9 values [min, max, mean, std, valid%, p25, p50, p75, p95]
-    Categorical: N values [prob_class_0, prob_class_1, ..., prob_class_N]
+    Categorical: N values [prob_class_0, ..., prob_class_N]
     """
     if len(stats) == 0 or len(stats[0]) == 0:
         raise ValueError("Empty stats provided")
@@ -78,17 +66,11 @@ def _is_categorical(stats: list[list[float]]) -> bool:
     return len(stats[0]) != STATS_CONTINUOUS_LENGTH
 
 
-# ============================================================================
-# CATEGORICAL AGGREGATION
-# ============================================================================
-
-
 def stats_categorical(df: pl.DataFrame) -> np.ndarray:
     """
     Aggregate categorical probabilities using weighted average.
 
-    Returns:
-        Array of shape [n_bands, n_classes] with averaged probabilities
+    Returns: Array [n_bands, n_classes] with averaged probabilities
     """
     all_stats, weights = _extract_stats_and_weights(df)
 
@@ -124,11 +106,6 @@ def stats_categorical(df: pl.DataFrame) -> np.ndarray:
             result[band_idx, class_idx] = weighted_sum / total_weight
 
     return result
-
-
-# ============================================================================
-# CONTINUOUS AGGREGATION
-# ============================================================================
 
 
 def stats_mean(df: pl.DataFrame) -> np.ndarray:
@@ -220,11 +197,6 @@ def stats_max(df: pl.DataFrame) -> np.ndarray:
     return result
 
 
-# ============================================================================
-# PERCENTILE AGGREGATION (approximation)
-# ============================================================================
-
-
 def _stats_percentile(
     df: pl.DataFrame, percentile_idx: int, percentile_name: str
 ) -> np.ndarray:
@@ -241,8 +213,8 @@ def _stats_percentile(
         )
 
     warnings.warn(
-        f"stats_{percentile_name}() uses simple averaging, which is NOT exact. "
-        "For critical analysis, recompute percentiles from raw data.",
+        f"stats_{percentile_name}() uses simple averaging, NOT exact. "
+        "For critical analysis, recompute from raw data.",
         UserWarning,
         stacklevel=3,
     )

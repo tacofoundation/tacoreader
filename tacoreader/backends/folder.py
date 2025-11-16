@@ -1,33 +1,11 @@
 """
 FOLDER backend for TACO datasets.
 
-This module provides the FolderBackend class for reading TACO datasets stored
-as directory structures with loose files. FOLDER format is optimized for
-development workflows and scenarios requiring frequent file updates.
-
-FOLDER Structure:
-    dataset/
-    ├── DATA/
-    │   ├── sample_001.tif (if level 0 = FILEs)
-    │   OR
-    │   ├── folder_A/ (if level 0 = FOLDERs)
-    │   │   ├── __meta__ (Parquet)
-    │   │   ├── nested_001.tif
-    │   │   └── nested_002.tif
-    ├── METADATA/
-    │   ├── level0.parquet
-    │   └── level1.parquet
-    └── COLLECTION.json
+Reads datasets stored as directory structures with loose files.
+Optimized for development workflows and frequent updates.
 
 Main class:
-    FolderBackend: Backend implementation for FOLDER format
-
-Example:
-    >>> from tacoreader.backends.folder import FolderBackend
-    >>> backend = FolderBackend()
-    >>> dataset = backend.load("s3://bucket/dataset/")
-    >>> print(dataset.schema.root["n"])
-    1000
+    FolderBackend: Backend for FOLDER format
 """
 
 import json
@@ -45,94 +23,43 @@ from tacoreader._logging import get_logger
 from tacoreader.dataset import TacoDataset
 from tacoreader.schema import PITSchema
 from tacoreader.utils.vsi import to_vsi_root
+from tacoreader._constants import PADDING_PREFIX
 
 logger = get_logger(__name__)
-
-# ============================================================================
-# FOLDER BACKEND
-# ============================================================================
 
 
 class FolderBackend(TacoBackend):
     """
     Backend for FOLDER format.
 
-    Handles reading TACO datasets stored as directory structures with
-    loose files. Files are accessed directly via filesystem paths or
-    cloud storage URLs without requiring decompression.
+    Handles datasets stored as directory structures with loose files.
+    Metadata is Parquet, data files accessed via filesystem paths.
 
-    The FOLDER format stores metadata as Parquet files and constructs 
-    GDAL paths dynamically based on sample IDs and types. Navigation 
-    uses __meta__ files for FOLDERs and direct paths for FILEs.
-
-    For local datasets, metadata files are read directly from disk.
-    For remote datasets, metadata is downloaded and loaded into memory.
-
-    Attributes:
-        format_name: Returns "folder"
-
-    Example:
-        >>> backend = FolderBackend()
-        >>> dataset = backend.load("data/")
-        >>> filtered = dataset.sql("SELECT * FROM data WHERE type = 'FILE'")
-        >>> df = filtered.data
+    Loading strategy:
+    - Local: reads metadata directly from disk (no memory loading)
+    - Remote: downloads all metadata to memory
     """
 
     @property
     def format_name(self) -> str:
-        """
-        Format identifier for FOLDER backend.
-
-        Returns:
-            "folder" string constant
-        """
         return "folder"
-
-    # ========================================================================
-    # ABSTRACT METHOD IMPLEMENTATIONS
-    # ========================================================================
 
     def load(self, path: str) -> TacoDataset:
         """
         Load FOLDER dataset.
 
-        For local datasets, reads metadata directly from disk without loading
-        into memory. For remote datasets, downloads all metadata files and
-        loads them into memory.
-
-        Args:
-            path: Path to FOLDER dataset (local or remote)
-                 Local: "data/" or "/absolute/path/to/data/"
-                 Remote: "s3://bucket/data/" or "gs://bucket/data/"
-
-        Returns:
-            TacoDataset with lazy SQL interface
-
-        Raises:
-            ValueError: If FOLDER is invalid or missing metadata
-            IOError: If file access fails
-
-        Example:
-            >>> backend = FolderBackend()
-            >>> dataset = backend.load("data/")
-            >>> print(dataset.id)
-            'sentinel2-l2a'
-            >>>
-            >>> # Remote dataset
-            >>> dataset = backend.load("s3://bucket/data/")
+        Local: lazy access from disk
+        Remote: downloads all metadata to memory
         """
         t_start = time.time()
-        
         logger.debug(f"Loading FOLDER from {path}")
 
-        # Step 1: Read COLLECTION.json
+        # Read collection
         collection = self.read_collection(path)
         logger.debug("Parsed COLLECTION.json")
 
-        # Step 2: Create DuckDB connection
+        # Setup DuckDB with spatial
         db = duckdb.connect(":memory:")
-
-        # Step 3: Load spatial extension
         try:
             db.execute("INSTALL spatial")
             db.execute("LOAD spatial")
@@ -144,7 +71,7 @@ class FolderBackend(TacoBackend):
         level_ids = []
 
         if is_local:
-            # LOCAL: Read directly from disk without loading to memory
+            # LOCAL: read directly from disk (no memory loading)
             base_path = Path(path)
             metadata_dir = base_path / "METADATA"
 
@@ -156,42 +83,41 @@ class FolderBackend(TacoBackend):
 
             for i in range(6):  # Max 6 levels (0-5)
                 level_file = metadata_dir / f"level{i}.parquet"
-                
+
                 if not level_file.exists():
                     break
-                
+
                 # Create table reading directly from disk
                 table_name = f"level{i}_table"
                 db.execute(
                     f"CREATE TABLE {table_name} AS SELECT * FROM read_parquet('{level_file}')"
                 )
-                
+
                 level_ids.append(i)
-                
                 logger.debug(f"Loaded {table_name} from disk")
 
         else:
-            # REMOTE: Download all metadata and load to memory
-            for i in range(6):  # Max 6 levels (0-5)
+            # REMOTE: download all metadata and load to memory
+            for i in range(6):
                 try:
                     # Download parquet
                     parquet_bytes = download_bytes(path, f"METADATA/level{i}.parquet")
-                    
+
                     # Load to PyArrow from bytes
                     reader = pa.BufferReader(parquet_bytes)
                     arrow_table = pq.read_table(reader)
-                    
+
                     # Register in DuckDB (all in memory)
                     table_name = f"level{i}_table"
                     db.register(table_name, arrow_table)
-                    
+
                     level_ids.append(i)
-                    
-                    logger.debug(f"Registered {table_name} in DuckDB ({len(parquet_bytes)} bytes)")
-                    
+                    logger.debug(
+                        f"Registered {table_name} in DuckDB ({len(parquet_bytes)} bytes)"
+                    )
+
                 except Exception:
-                    # Stop at first missing level (expected behavior)
-                    break
+                    break  # Stop at first missing level
 
         if not level_ids:
             raise ValueError(
@@ -199,20 +125,14 @@ class FolderBackend(TacoBackend):
                 f"Expected at least level0.parquet"
             )
 
-        # Step 4: Convert path to VSI format
+        # Setup views and create dataset
         root_path = to_vsi_root(path)
-
-        # Step 5: Setup DuckDB views
         self.setup_duckdb_views(db, level_ids, root_path)
         logger.debug("Created DuckDB views")
 
-        # Step 6: Create 'data' view
         db.execute("CREATE VIEW data AS SELECT * FROM level0")
-
-        # Step 7: Extract PIT schema
         schema = PITSchema(collection["taco:pit_schema"])
 
-        # Step 8: Construct TacoDataset
         dataset = TacoDataset.model_construct(
             id=collection["id"],
             version=collection.get("dataset_version", "unknown"),
@@ -232,42 +152,17 @@ class FolderBackend(TacoBackend):
             _view_name="data",
             _root_path=root_path,
         )
-        
+
         total_time = time.time() - t_start
         logger.info(f"Loaded FOLDER in {total_time:.2f}s")
-        
+
         return dataset
 
     def read_collection(self, path: str) -> dict[str, Any]:
         """
         Read COLLECTION.json from FOLDER root.
 
-        COLLECTION.json is always at the root of the dataset directory.
-        Supports both local filesystem and remote storage (S3/GCS/Azure).
-
-        Args:
-            path: Path to FOLDER dataset (local or remote)
-                 Local: "data/" or "/absolute/path/to/data/"
-                 Remote: "s3://bucket/data/" or "gs://bucket/data/"
-
-        Returns:
-            Dictionary containing COLLECTION.json content
-
-        Raises:
-            ValueError: If COLLECTION.json not found
-            json.JSONDecodeError: If COLLECTION.json is invalid
-            IOError: If remote read fails
-
-        Example:
-            >>> backend = FolderBackend()
-            >>> collection = backend.read_collection("data/")
-            >>> print(collection["id"])
-            'sentinel2-l2a'
-
-            >>> # Remote dataset
-            >>> collection = backend.read_collection("s3://bucket/data/")
-            >>> print(collection["taco_version"])
-            '0.5.0'
+        Supports local filesystem and remote storage (S3/GCS/Azure).
         """
         if Path(path).exists():
             # Local filesystem
@@ -304,42 +199,23 @@ class FolderBackend(TacoBackend):
         root_path: str,
     ) -> None:
         """
-        Create DuckDB views with direct filesystem paths for FOLDER format.
+        Create DuckDB views with direct filesystem paths.
 
-        Each view references a table already registered in DuckDB and adds
-        a computed 'internal:gdal_vsi' column that constructs paths based
-        on sample type and hierarchy level:
-
-        Level 0:
-            - FILE: {root}DATA/{id}
-            - FOLDER: {root}DATA/{id}/__meta__
-
-        Level 1+:
-            - FILE: {root}DATA/{internal:relative_path}
-            - FOLDER: {root}DATA/{internal:relative_path}__meta__
-
-        Args:
-            db: DuckDB connection with tables already registered
-            level_ids: List of level IDs that have tables registered
-            root_path: Root path to FOLDER dataset (with trailing /)
-
-        Example:
-            >>> import duckdb
-            >>> db = duckdb.connect(":memory:")
-            >>> # ... register tables ...
-            >>> backend = FolderBackend()
-            >>> backend.setup_duckdb_views(db, [0, 1], "s3://bucket/data/")
-            >>> result = db.execute("SELECT * FROM level0 LIMIT 1").fetchone()
+        Path construction:
+        - Level 0 FILE: {root}DATA/{id}
+        - Level 0 FOLDER: {root}DATA/{id}/__meta__
+        - Level 1+ FILE: {root}DATA/{internal:relative_path}
+        - Level 1+ FOLDER: {root}DATA/{internal:relative_path}__meta__
         """
-        # Ensure root path has trailing slash
+        # Ensure trailing slash
         root = root_path if root_path.endswith("/") else root_path + "/"
 
         for level_id in level_ids:
             table_name = f"level{level_id}_table"
             view_name = f"level{level_id}"
-            
+
             if level_id == 0:
-                # Level 0: Use id directly (no relative_path column)
+                # Level 0: use id directly (no relative_path column)
                 db.execute(
                     f"""
                     CREATE VIEW {view_name} AS 
@@ -350,11 +226,11 @@ class FolderBackend(TacoBackend):
                         ELSE NULL
                       END as "internal:gdal_vsi"
                     FROM {table_name}
-                    WHERE id NOT LIKE '__TACOPAD__%'
+                    WHERE id NOT LIKE '{PADDING_PREFIX}%'
                 """
                 )
             else:
-                # Level 1+: Use internal:relative_path for nested structure
+                # Level 1+: use internal:relative_path for nested structure
                 db.execute(
                     f"""
                     CREATE VIEW {view_name} AS 
@@ -365,6 +241,6 @@ class FolderBackend(TacoBackend):
                         ELSE NULL
                       END as "internal:gdal_vsi"
                     FROM {table_name}
-                    WHERE id NOT LIKE '__TACOPAD__%'
+                    WHERE id NOT LIKE '{PADDING_PREFIX}%'
                 """
                 )

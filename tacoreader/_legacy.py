@@ -1,23 +1,13 @@
+"""
+Legacy format detection and migration instructions.
+
+Detects TACO v1 formats (.taco, .tortilla, tacofoundation:) and provides
+clear migration path to v2 (.tacozip).
+"""
+
+
 def is_legacy_format(path: str) -> bool:
-    """
-    Detect legacy TACO v1 format.
-
-    Args:
-        path: File path to check
-
-    Returns:
-        True if legacy format detected
-
-    Examples:
-        >>> is_legacy_format("dataset.taco")
-        True
-        >>> is_legacy_format("dataset.tortilla")
-        True
-        >>> is_legacy_format("tacofoundation:my-dataset")
-        True
-        >>> is_legacy_format("dataset.tacozip")
-        False
-    """
+    """Check if path is legacy TACO v1 format."""
     return path.endswith((".taco", ".tortilla")) or path.startswith("tacofoundation:")
 
 
@@ -25,11 +15,10 @@ def raise_legacy_error(path: str) -> None:
     """
     Raise error with migration instructions for legacy format.
 
-    Args:
-        path: Legacy file path
-
-    Raises:
-        ValueError: Always, with migration instructions
+    Always raises ValueError with colored terminal output showing:
+    - Why it failed (v1 not supported in v2+)
+    - How to read legacy files (install tacoreader<1.0)
+    - How to migrate (use tacotoolbox 2.0)
     """
     RED = "\033[91m"
     YELLOW = "\033[93m"

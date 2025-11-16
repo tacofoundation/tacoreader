@@ -1,33 +1,21 @@
 """
 GDAL VSI path utilities.
 
-Pure functions for converting between standard paths and GDAL's Virtual File System (VSI) paths.
+Pure functions for converting between standard paths and GDAL Virtual File System paths.
 No I/O operations - only string transformations.
 """
 
 
 def to_vsi_root(path: str) -> str:
     """
-    Convert any storage path to GDAL VSI-compatible root path.
+    Convert storage path to GDAL VSI format.
 
-    Transforms cloud storage URLs and HTTP paths into GDAL's VSI format.
-    Local paths are returned unchanged.
-
-    Args:
-        path: Original path (local, S3, GCS, HTTP, etc.)
-
-    Returns:
-        VSI-compatible root path ready for GDAL operations
+    Local paths unchanged, cloud/HTTP transformed to VSI.
 
     Examples:
-        >>> to_vsi_root("s3://bucket/data.tacozip")
-        '/vsis3/bucket/data.tacozip'
-        >>> to_vsi_root("gs://bucket/data.tacozip")
-        '/vsigs/bucket/data.tacozip'
-        >>> to_vsi_root("https://example.com/data.zip")
-        '/vsicurl/https://example.com/data.zip'
-        >>> to_vsi_root("dataset.tacozip")
-        'dataset.tacozip'
+        to_vsi_root("s3://bucket/data.zip") -> "/vsis3/bucket/data.zip"
+        to_vsi_root("https://example.com/data.zip") -> "/vsicurl/https://example.com/data.zip"
+        to_vsi_root("dataset.zip") -> "dataset.zip"
     """
     if path.startswith("s3://"):
         return path.replace("s3://", "/vsis3/", 1)
@@ -51,23 +39,7 @@ def to_vsi_root(path: str) -> str:
 
 
 def is_vsi_path(path: str) -> bool:
-    """
-    Check if path is already in VSI format.
-
-    Args:
-        path: Path to check
-
-    Returns:
-        True if path starts with /vsi prefix
-
-    Examples:
-        >>> is_vsi_path("/vsis3/bucket/data.tacozip")
-        True
-        >>> is_vsi_path("/vsicurl/https://example.com/data.zip")
-        True
-        >>> is_vsi_path("dataset.tacozip")
-        False
-    """
+    """Check if path already in VSI format."""
     vsi_prefixes = (
         "/vsis3/",
         "/vsigs/",
@@ -83,23 +55,11 @@ def is_vsi_path(path: str) -> bool:
 
 def strip_vsi_prefix(path: str) -> str:
     """
-    Remove VSI prefix from path, returning original protocol.
-
-    Args:
-        path: VSI path
-
-    Returns:
-        Path with original protocol restored
+    Remove VSI prefix, restore original protocol.
 
     Examples:
-        >>> strip_vsi_prefix("/vsis3/bucket/data.tacozip")
-        's3://bucket/data.tacozip'
-        >>> strip_vsi_prefix("/vsigs/bucket/data.tacozip")
-        'gs://bucket/data.tacozip'
-        >>> strip_vsi_prefix("/vsicurl/https://example.com/data.zip")
-        'https://example.com/data.zip'
-        >>> strip_vsi_prefix("dataset.tacozip")
-        'dataset.tacozip'
+        strip_vsi_prefix("/vsis3/bucket/data.zip") -> "s3://bucket/data.zip"
+        strip_vsi_prefix("/vsicurl/https://example.com") -> "https://example.com"
     """
     if path.startswith("/vsicurl/"):
         return path.replace("/vsicurl/", "", 1)
@@ -121,22 +81,13 @@ def strip_vsi_prefix(path: str) -> str:
 
 def parse_vsi_subfile(vsi_path: str) -> tuple[str, int, int]:
     """
-    Parse /vsisubfile/ path to extract root path, offset, and size.
+    Parse /vsisubfile/ path to extract root, offset, size.
 
-    Args:
-        vsi_path: VSI subfile path like "/vsisubfile/1024_5000,/path/to/file.zip"
+    Format: /vsisubfile/{offset}_{size},{root_path}
 
-    Returns:
-        Tuple of (root_path, offset, size)
-
-    Raises:
-        ValueError: If path format is invalid
-
-    Examples:
-        >>> parse_vsi_subfile("/vsisubfile/1024_5000,/vsis3/bucket/data.zip")
-        ('/vsis3/bucket/data.zip', 1024, 5000)
-        >>> parse_vsi_subfile("/vsisubfile/2737343662_3075,/home/user/file.zip")
-        ('/home/user/file.zip', 2737343662, 3075)
+    Example:
+        parse_vsi_subfile("/vsisubfile/1024_5000,/vsis3/bucket/data.zip")
+        -> ("/vsis3/bucket/data.zip", 1024, 5000)
     """
     if not vsi_path.startswith("/vsisubfile/"):
         raise ValueError(

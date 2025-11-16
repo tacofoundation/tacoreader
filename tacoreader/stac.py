@@ -1,19 +1,14 @@
 """
-STAC-style spatiotemporal filtering helpers for TacoDataset.
+STAC-style spatiotemporal filtering for TacoDataset.
 
-Provides PySTAC-like API for filtering datasets by spatial and temporal criteria.
-All spatial operations use DuckDB Spatial extension with WKB columns from TACO.
+PySTAC-like API for filtering by spatial and temporal criteria.
+All spatial ops use DuckDB Spatial extension with WKB columns.
 
 Main functions:
-    - detect_geometry_column: Auto-detect best geometry column
-    - detect_time_column: Auto-detect time column
-    - build_bbox_sql: Generate bounding box filter SQL
-    - build_intersects_sql: Generate intersection filter SQL
-    - build_within_sql: Generate within filter SQL
-    - build_datetime_sql: Generate temporal filter SQL (with auto type detection)
-    - validate_level_exists: Validate that level exists in dataset
-    - get_columns_for_level: Get available columns for a specific level
-    - build_cascade_join_sql: Build SQL with cascading JOINs for multi-level filtering
+    - detect_geometry_column / detect_time_column: Auto-detection
+    - build_bbox_sql / build_intersects_sql / build_within_sql: Spatial filters
+    - build_datetime_sql: Temporal filter with auto type detection
+    - build_cascade_join_sql: Multi-level filtering with JOINs
 """
 
 from datetime import datetime
@@ -29,67 +24,28 @@ if TYPE_CHECKING:
 
 
 # ============================================================================
-# LEVEL HELPERS (Multi-level filtering support)
+# LEVEL HELPERS
 # ============================================================================
 
 
 def validate_level_exists(dataset: "TacoDataset", level: int) -> None:
-    """
-    Validate that a specific level exists in the dataset.
-
-    Uses pit_schema.max_depth() to check valid level range.
-    Level 0 always exists by definition.
-
-    Args:
-        dataset: TacoDataset instance
-        level: Level number to validate (0, 1, 2, ...)
-
-    Raises:
-        ValueError: If level does not exist in dataset
-
-    Examples:
-        >>> validate_level_exists(dataset, 1)  # OK if level1 exists
-        >>> validate_level_exists(dataset, 5)  # ValueError if max level is 2
-    """
+    """Validate level exists in dataset using pit_schema.max_depth()."""
     max_level = dataset.pit_schema.max_depth()
-    
+
     if level < 0 or level > max_level:
         raise ValueError(
-            f"Level {level} does not exist in dataset.\n"
-            f"Available levels: 0 to {max_level}"
+            f"Level {level} does not exist.\n" f"Available levels: 0 to {max_level}"
         )
 
 
 def get_columns_for_level(dataset: "TacoDataset", level: int) -> list[str]:
-    """
-    Get available column names for a specific level.
-
-    Queries DuckDB to get actual columns from the levelN view.
-    Includes both metadata columns and internal columns.
-
-    Args:
-        dataset: TacoDataset instance
-        level: Level number (0, 1, 2, ...)
-
-    Returns:
-        List of column names available at that level
-
-    Raises:
-        ValueError: If level does not exist
-
-    Examples:
-        >>> cols = get_columns_for_level(dataset, 1)
-        >>> print(cols)
-        ['id', 'type', 'stac:bbox', 'stac:time_start', 'internal:parent_id', ...]
-    """
+    """Get available columns for a specific level by querying DuckDB."""
     validate_level_exists(dataset, level)
 
     level_view = f"level{level}" if level > 0 else "data"
-
-    # Query DuckDB for column names
     result = dataset._duckdb.execute(f"DESCRIBE {level_view}").fetchall()
 
-    # Result is list of tuples: (column_name, column_type, null, key, default, extra)
+    # Result: [(column_name, column_type, null, key, default, extra), ...]
     return [row[0] for row in result]
 
 
@@ -99,55 +55,17 @@ def build_cascade_join_sql(
     """
     Build SQL with cascading JOINs from level0 to target level.
 
-    Creates INNER JOINs connecting level0 → level1 → level2 → ... → target_level
-    using internal:parent_id foreign keys. Always returns DISTINCT level0 samples.
+    Creates INNER JOINs: level0 → level1 → level2 → ... → target_level
+    using internal:parent_id foreign keys. Returns DISTINCT level0 samples.
 
-    JOIN strategy varies by format:
-    - ZIP/FOLDER: parent_id references parent's ID (string)
+    JOIN strategy by format:
+    - ZIP/FOLDER: parent_id references parent's ID string
     - TacoCat: parent_id is local index + source_file for disambiguation
 
-    Hierarchy structure:
+    Example hierarchy:
         Level0 (id: "sample_001")
           └── Level1 (id: "s2_l1c", parent_id: "sample_001")
                └── Level2 (id: "band_B04", parent_id: "s2_l1c")
-
-    Args:
-        current_view: Current view name (e.g., "data" or "view_abc123")
-        target_level: Level where filter will be applied (1, 2, 3, ...)
-        where_clause: SQL WHERE clause to apply (without "WHERE" keyword)
-        format_type: Dataset format ("zip", "folder", or "tacocat")
-
-    Returns:
-        Complete SQL query string with JOINs and WHERE clause
-
-    Examples:
-        >>> # Filter by level1 metadata (ZIP format)
-        >>> sql = build_cascade_join_sql(
-        ...     "data",
-        ...     1,
-        ...     'ST_Within(ST_GeomFromWKB(l1."stac:bbox"), ST_MakeEnvelope(...))',
-        ...     "zip"
-        ... )
-        >>> print(sql)
-        SELECT DISTINCT l0.*
-        FROM data l0
-        INNER JOIN level1 l1 ON l1."internal:parent_id" = l0.id
-        WHERE ST_Within(ST_GeomFromWKB(l1."stac:bbox"), ...)
-
-        >>> # Filter by level1 metadata (TacoCat format)
-        >>> sql = build_cascade_join_sql(
-        ...     "data",
-        ...     1,
-        ...     'l1.id LIKE "l3_swot%"',
-        ...     "tacocat"
-        ... )
-        >>> print(sql)
-        SELECT DISTINCT l0.*
-        FROM data l0
-        INNER JOIN level1 l1
-          ON l1."internal:parent_id" = l0."internal:parent_id"
-         AND l1."internal:source_file" = l0."internal:source_file"
-        WHERE l1.id LIKE "l3_swot%"
     """
     if target_level == 0:
         # No JOINs needed - filter directly on level0
@@ -162,14 +80,14 @@ def build_cascade_join_sql(
 
     # First JOIN: current_view (level0) → level1
     if format_type == "tacocat":
-        # TacoCat: parent_id is local index, need source_file for disambiguation
+        # TacoCat: parent_id is local index, need source_file
         joins.append(
             "INNER JOIN level1 l1\n"
             '      ON l1."internal:parent_id" = l0."internal:parent_id"\n'
             '     AND l1."internal:source_file" = l0."internal:source_file"'
         )
     else:
-        # ZIP/FOLDER: parent_id references parent's ID string
+        # ZIP/FOLDER: parent_id references parent's ID
         joins.append('INNER JOIN level1 l1 ON l1."internal:parent_id" = l0.id')
 
     # Subsequent JOINs: level1 → level2 → level3 ...
@@ -182,7 +100,6 @@ def build_cascade_join_sql(
 
     join_clause = "\n    ".join(joins)
 
-    # Build complete query
     return f"""
         SELECT DISTINCT l0.*
         FROM {current_view} l0
@@ -198,71 +115,35 @@ def build_cascade_join_sql(
 
 def detect_geometry_column(columns: list[str]) -> str:
     """
-    Auto-detect best geometry column from available columns.
+    Auto-detect best geometry column.
 
-    Priority order:
-    1. istac:geometry (most precise - full geometry)
-    2. stac:centroid (point representation for STAC)
-    3. istac:centroid (point representation for ISTAC)
-
-    Args:
-        columns: List of column names from dataset
-
-    Returns:
-        Name of detected geometry column
-
-    Raises:
-        ValueError: If no geometry column found
-
-    Examples:
-        >>> detect_geometry_column(["id", "istac:geometry", "istac:centroid"])
-        'istac:geometry'
-        >>> detect_geometry_column(["id", "stac:centroid"])
-        'stac:centroid'
+    Priority: istac:geometry > stac:centroid > istac:centroid
     """
     for col in STAC_GEOMETRY_COLUMN_PRIORITY:
         if col in columns:
             return col
 
     raise ValueError(
-        "No geometry column found in dataset.\n"
+        "No geometry column found.\n"
         f"Expected one of: {', '.join(STAC_GEOMETRY_COLUMN_PRIORITY)}\n"
-        f"Available columns: {columns}"
+        f"Available: {columns}"
     )
 
 
 def detect_time_column(columns: list[str]) -> str:
     """
-    Auto-detect time column from available columns.
+    Auto-detect time column (always time_start, not middle/end).
 
-    Always uses time_start (not time_middle or time_end).
-    Priority order:
-    1. istac:time_start
-    2. stac:time_start
-
-    Args:
-        columns: List of column names from dataset
-
-    Returns:
-        Name of detected time column
-
-    Raises:
-        ValueError: If no time column found
-
-    Examples:
-        >>> detect_time_column(["id", "istac:time_start"])
-        'istac:time_start'
-        >>> detect_time_column(["id", "stac:time_start"])
-        'stac:time_start'
+    Priority: istac:time_start > stac:time_start
     """
     for col in STAC_TIME_COLUMN_PRIORITY:
         if col in columns:
             return col
 
     raise ValueError(
-        "No time column found in dataset.\n"
+        "No time column found.\n"
         f"Expected one of: {', '.join(STAC_TIME_COLUMN_PRIORITY)}\n"
-        f"Available columns: {columns}"
+        f"Available: {columns}"
     )
 
 
@@ -272,86 +153,32 @@ def detect_time_column(columns: list[str]) -> str:
 
 
 def validate_geometry_column(columns: list[str], requested: str, detected: str) -> str:
-    """
-    Validate that requested geometry column exists.
-
-    If user requested "auto", returns detected column.
-    If user requested specific column, validates it exists and returns it.
-
-    Args:
-        columns: List of available column names
-        requested: User-requested column name or "auto"
-        detected: Auto-detected column name (from detect_geometry_column)
-
-    Returns:
-        Column name to use
-
-    Raises:
-        ValueError: If requested column does not exist
-
-    Examples:
-        >>> validate_geometry_column(
-        ...     ["id", "istac:geometry"],
-        ...     "auto",
-        ...     "istac:geometry"
-        ... )
-        'istac:geometry'
-        >>> validate_geometry_column(
-        ...     ["id", "istac:geometry"],
-        ...     "stac:centroid",
-        ...     "istac:geometry"
-        ... )
-        ValueError: Requested geometry column 'stac:centroid' not found
-    """
+    """Validate requested geometry column exists, or use auto-detected."""
     if requested == "auto":
         return detected
 
     if requested not in columns:
         raise ValueError(
             f"Requested geometry column '{requested}' not found.\n"
-            f"Auto-detected column: {detected}\n"
-            f"Available columns: {columns}\n"
-            f"Use geometry_col='auto' to use auto-detection."
+            f"Auto-detected: {detected}\n"
+            f"Available: {columns}\n"
+            f"Use geometry_col='auto' for auto-detection."
         )
 
     return requested
 
 
 def validate_time_column(columns: list[str], requested: str, detected: str) -> str:
-    """
-    Validate that requested time column exists.
-
-    If user requested "auto", returns detected column.
-    If user requested specific column, validates it exists and returns it.
-
-    Args:
-        columns: List of available column names
-        requested: User-requested column name or "auto"
-        detected: Auto-detected column name (from detect_time_column)
-
-    Returns:
-        Column name to use
-
-    Raises:
-        ValueError: If requested column does not exist
-
-    Examples:
-        >>> validate_time_column(
-        ...     ["id", "istac:time_start"],
-        ...     "auto",
-        ...     "istac:time_start"
-        ... )
-        'istac:time_start'
-    """
+    """Validate requested time column exists, or use auto-detected."""
     if requested == "auto":
         return detected
 
     if requested not in columns:
         raise ValueError(
             f"Requested time column '{requested}' not found.\n"
-            f"Auto-detected column: {detected}\n"
-            f"Available columns: {columns}\n"
-            f"Use time_col='auto' to use auto-detection."
+            f"Auto-detected: {detected}\n"
+            f"Available: {columns}\n"
+            f"Use time_col='auto' for auto-detection."
         )
 
     return requested
@@ -366,32 +193,16 @@ def parse_datetime(
     dt_input: str | datetime | tuple[datetime, datetime]
 ) -> tuple[int, int | None]:
     """
-    Parse datetime input to (start_timestamp, end_timestamp).
+    Parse datetime to (start_timestamp, end_timestamp).
 
-    Accepts multiple formats:
+    Formats:
     - String range: "2023-01-01/2023-12-31"
     - Single datetime: datetime(2023, 1, 1)
-    - Datetime tuple: (start_dt, end_dt)
+    - Tuple: (start_dt, end_dt)
 
-    Args:
-        dt_input: Datetime specification in various formats
-
-    Returns:
-        Tuple of (start_timestamp, end_timestamp)
-        end_timestamp is None for single datetime
-
-    Raises:
-        ValueError: If format is invalid or start > end
-
-    Examples:
-        >>> parse_datetime("2023-01-01/2023-12-31")
-        (1672531200, 1704067199)
-        >>> parse_datetime(datetime(2023, 1, 1))
-        (1672531200, None)
-        >>> parse_datetime((datetime(2023, 1, 1), datetime(2023, 12, 31)))
-        (1672531200, 1704067199)
+    Returns end_timestamp=None for single datetime.
     """
-    # String range format: "2023-01-01/2023-12-31"
+    # String range: "2023-01-01/2023-12-31"
     if isinstance(dt_input, str):
         if "/" in dt_input:
             start_str, end_str = dt_input.split("/", 1)
@@ -403,7 +214,7 @@ def parse_datetime(
 
             if start_ts > end_ts:
                 raise ValueError(
-                    f"Invalid datetime range: start ({start_str}) > end ({end_str})"
+                    f"Invalid range: start ({start_str}) > end ({end_str})"
                 )
 
             return start_ts, end_ts
@@ -423,44 +234,29 @@ def parse_datetime(
         end_ts = int(end_dt.timestamp())
 
         if start_ts > end_ts:
-            raise ValueError("Invalid datetime range: start > end")
+            raise ValueError("Invalid range: start > end")
 
         return start_ts, end_ts
 
     else:
         raise ValueError(
-            f"Invalid datetime input: {dt_input}\n"
+            f"Invalid datetime: {dt_input}\n"
             f"Expected: string range ('2023-01-01/2023-12-31'), "
-            f"datetime object, or tuple of datetime objects"
+            f"datetime object, or tuple"
         )
 
 
 def geometry_to_wkt(geometry: Any) -> str:
     """
-    Convert geometry to WKT string for DuckDB SQL.
+    Convert geometry to WKT string for DuckDB.
 
-    Accepts multiple formats:
+    Accepts:
     - WKT string: "POLYGON((-81 -18, ...))"
     - GeoJSON dict: {"type": "Polygon", "coordinates": [...]}
-    - Shapely object: Polygon(...) (if shapely installed)
+    - Shapely object: Polygon(...)
     - Any object with __geo_interface__
-
-    Args:
-        geometry: Geometry in various formats
-
-    Returns:
-        WKT string ready for ST_GeomFromText
-
-    Raises:
-        ValueError: If geometry format is unsupported
-
-    Examples:
-        >>> geometry_to_wkt("POLYGON((-81 -18, -68 -18, -68 0, -81 0, -81 -18))")
-        'POLYGON((-81 -18, -68 -18, -68 0, -81 0, -81 -18))'
-        >>> geometry_to_wkt({"type": "Point", "coordinates": [-77, -12]})
-        'POINT(-77 -12)'
     """
-    # Already WKT string
+    # Already WKT
     if isinstance(geometry, str):
         return geometry
 
@@ -468,46 +264,26 @@ def geometry_to_wkt(geometry: Any) -> str:
     elif isinstance(geometry, dict):
         return geojson_to_wkt(geometry)
 
-    # Shapely object (has .wkt attribute)
+    # Shapely object
     elif hasattr(geometry, "wkt"):
         return geometry.wkt
 
-    # Any object implementing __geo_interface__ protocol
+    # __geo_interface__ protocol
     elif hasattr(geometry, "__geo_interface__"):
         return geojson_to_wkt(geometry.__geo_interface__)
 
     else:
         raise ValueError(
             f"Unsupported geometry type: {type(geometry)}\n"
-            f"Expected: WKT string, GeoJSON dict, shapely object, "
-            f"or object with __geo_interface__"
+            f"Expected: WKT string, GeoJSON dict, shapely, or __geo_interface__"
         )
 
 
 def geojson_to_wkt(geojson: dict) -> str:
     """
-    Convert GeoJSON dictionary to WKT string.
+    Convert GeoJSON to WKT (pure Python, no dependencies).
 
-    Pure Python implementation, no dependencies required.
-    Supports: Point, LineString, Polygon, MultiPoint, MultiLineString, MultiPolygon.
-
-    Args:
-        geojson: GeoJSON geometry dictionary with "type" and "coordinates"
-
-    Returns:
-        WKT string representation
-
-    Raises:
-        ValueError: If geometry type is unsupported
-
-    Examples:
-        >>> geojson_to_wkt({"type": "Point", "coordinates": [-77, -12]})
-        'POINT(-77 -12)'
-        >>> geojson_to_wkt({
-        ...     "type": "Polygon",
-        ...     "coordinates": [[(-81, -18), (-68, -18), (-68, 0), (-81, 0), (-81, -18)]]
-        ... })
-        'POLYGON((-81 -18, -68 -18, -68 0, -81 0, -81 -18))'
+    Supports: Point, LineString, Polygon, Multi*.
     """
     geom_type = geojson["type"]
     coords = geojson["coordinates"]
@@ -549,111 +325,54 @@ def geojson_to_wkt(geojson: dict) -> str:
 
     else:
         raise ValueError(
-            f"Unsupported GeoJSON geometry type: {geom_type}\n"
-            f"Supported types: Point, LineString, Polygon, "
-            f"MultiPoint, MultiLineString, MultiPolygon"
+            f"Unsupported GeoJSON type: {geom_type}\n"
+            f"Supported: Point, LineString, Polygon, Multi*"
         )
 
 
 # ============================================================================
-# TYPE DETECTION (for datetime columns)
+# TYPE DETECTION
 # ============================================================================
 
 
 def _get_column_type(dataset: "TacoDataset", col: str, level: int) -> str:
     """
-    Detect column type from DuckDB schema.
+    Detect column type from DuckDB schema for type-aware SQL generation.
 
-    Queries DuckDB DESCRIBE to get actual column type.
-    This enables automatic type-aware SQL generation.
-
-    Args:
-        dataset: TacoDataset instance with DuckDB connection
-        col: Column name to check
-        level: Level where column exists (0, 1, 2, ...)
-
-    Returns:
-        DuckDB type name (e.g., 'VARCHAR', 'BIGINT', 'TIMESTAMP', 'DATE')
-
-    Raises:
-        ValueError: If column does not exist in view
-
-    Examples:
-        >>> _get_column_type(dataset, "istac:time_start", 0)
-        'BIGINT'
-        >>> _get_column_type(dataset, "stac:time_start", 1)
-        'VARCHAR'
+    Returns DuckDB type: 'VARCHAR', 'BIGINT', 'TIMESTAMP', etc.
     """
-    # Validate column name for SQL safety
+    # SQL injection protection
     if "'" in col or '"' in col:
-        raise ValueError(
-            f"Invalid column name: {col}\n"
-            f"Column names cannot contain quotes."
-        )
-    
-    # Additional safety: check for suspicious SQL keywords
-    suspicious = [';', '--', '/*', '*/', 'DROP', 'DELETE', 'INSERT', 'UPDATE']
-    col_upper = col.upper()
-    if any(s in col_upper for s in suspicious):
-        raise ValueError(
-            f"Invalid column name: {col}\n"
-            f"Column name contains suspicious SQL keywords."
-        )
-    
-    level_view = f"level{level}" if level > 0 else "data"
+        raise ValueError(f"Invalid column name: {col} (contains quotes)")
 
-    # Query DuckDB for column type using parameterized query
-    # Note: DuckDB returns 'column_type' not 'data_type'
-    query = f'SELECT column_type FROM (DESCRIBE {level_view}) WHERE column_name = ?'
-    
+    suspicious = [";", "--", "/*", "*/", "DROP", "DELETE", "INSERT", "UPDATE"]
+    if any(s in col.upper() for s in suspicious):
+        raise ValueError(f"Invalid column name: {col} (suspicious SQL)")
+
+    level_view = f"level{level}" if level > 0 else "data"
+    query = f"SELECT column_type FROM (DESCRIBE {level_view}) WHERE column_name = ?"
+
     try:
         result = dataset._duckdb.execute(query, [col]).fetchone()
     except Exception as e:
-        raise ValueError(
-            f"Failed to get column type for '{col}' in {level_view}: {e}\n"
-            f"The column may not exist or the view may be invalid."
-        )
+        raise ValueError(f"Failed to get type for '{col}' in {level_view}: {e}")
 
     if result:
         return result[0].upper()
 
     raise ValueError(
         f"Column '{col}' not found in {level_view}\n"
-        f"Available columns: {get_columns_for_level(dataset, level)}"
+        f"Available: {get_columns_for_level(dataset, level)}"
     )
 
 
 def _timestamp_to_iso_string(timestamp: int) -> str:
-    """
-    Convert Unix timestamp to ISO 8601 string.
-
-    Args:
-        timestamp: Seconds since epoch
-
-    Returns:
-        ISO 8601 datetime string (e.g., '2024-04-01T00:00:00')
-
-    Examples:
-        >>> _timestamp_to_iso_string(1711929600)
-        '2024-04-01T00:00:00'
-    """
+    """Convert Unix timestamp to ISO 8601 string."""
     return datetime.fromtimestamp(timestamp).isoformat()
 
 
 def _timestamp_to_date_string(timestamp: int) -> str:
-    """
-    Convert Unix timestamp to DATE string.
-
-    Args:
-        timestamp: Seconds since epoch
-
-    Returns:
-        DATE string (e.g., '2024-04-01')
-
-    Examples:
-        >>> _timestamp_to_date_string(1711929600)
-        '2024-04-01'
-    """
+    """Convert Unix timestamp to DATE string."""
     return datetime.fromtimestamp(timestamp).date().isoformat()
 
 
@@ -671,31 +390,12 @@ def build_bbox_sql(
     level: int = 0,
 ) -> str:
     """
-    Build SQL for bounding box filter.
+    Build bounding box filter SQL.
 
-
-    Args:
-        minx: Minimum longitude/X coordinate
-        miny: Minimum latitude/Y coordinate
-        maxx: Maximum longitude/X coordinate
-        maxy: Maximum latitude/Y coordinate
-        geometry_col: Name of WKB geometry column
-        level: Level where the geometry column exists (0, 1, 2, ...)
-
-    Returns:
-        SQL WHERE clause (without "WHERE" keyword)
-
-    Examples:
-        >>> build_bbox_sql(-81, -18, -68, 0, "istac:geometry", level=0)
-        'ST_Within(ST_GeomFromWKB("istac:geometry"), ST_MakeEnvelope(-81.0, -18.0, -68.0, 0.0))'
-        >>> build_bbox_sql(-81, -18, -68, 0, "stac:bbox", level=1)
-        'ST_Within(ST_GeomFromWKB(l1."stac:bbox"), ST_MakeEnvelope(-81.0, -18.0, -68.0, 0.0))'
+    Uses ST_Within + ST_MakeEnvelope for bbox check.
+    Prefixes column with level alias if level > 0.
     """
-    # Prefix column with level alias if level > 0
-    if level > 0:
-        col_ref = f'l{level}."{geometry_col}"'
-    else:
-        col_ref = f'"{geometry_col}"'
+    col_ref = f'l{level}."{geometry_col}"' if level > 0 else f'"{geometry_col}"'
 
     return (
         f"ST_Within("
@@ -707,35 +407,14 @@ def build_bbox_sql(
 
 def build_intersects_sql(geometry: Any, geometry_col: str, level: int = 0) -> str:
     """
-    Build SQL for geometry intersection filter.
+    Build intersection filter SQL.
 
     Uses ST_Intersects to check if geometries overlap.
-    Geometry column is WKB format, converted with ST_GeomFromWKB.
-
-    Args:
-        geometry: User geometry (WKT string, GeoJSON dict, or shapely object)
-        geometry_col: Name of WKB geometry column
-        level: Level where the geometry column exists (0, 1, 2, ...)
-
-    Returns:
-        SQL WHERE clause (without "WHERE" keyword)
-
-    Examples:
-        >>> polygon = {"type": "Polygon", "coordinates": [[...]]}
-        >>> build_intersects_sql(polygon, "istac:geometry", level=0)
-        'ST_Intersects(ST_GeomFromWKB("istac:geometry"), ST_GeomFromText(...))'
-        >>> build_intersects_sql(polygon, "stac:bbox", level=1)
-        'ST_Intersects(ST_GeomFromWKB(l1."stac:bbox"), ST_GeomFromText(...))'
     """
     wkt = geometry_to_wkt(geometry)
-    # Escape single quotes in WKT
-    wkt_escaped = wkt.replace("'", "''")
+    wkt_escaped = wkt.replace("'", "''")  # SQL escape
 
-    # Prefix column with level alias if level > 0
-    if level > 0:
-        col_ref = f'l{level}."{geometry_col}"'
-    else:
-        col_ref = f'"{geometry_col}"'
+    col_ref = f'l{level}."{geometry_col}"' if level > 0 else f'"{geometry_col}"'
 
     return (
         f"ST_Intersects("
@@ -747,32 +426,14 @@ def build_intersects_sql(geometry: Any, geometry_col: str, level: int = 0) -> st
 
 def build_within_sql(geometry: Any, geometry_col: str, level: int = 0) -> str:
     """
-    Build SQL for within filter.
+    Build within filter SQL.
 
-    Args:
-        geometry: User geometry (WKT string, GeoJSON dict, or shapely object)
-        geometry_col: Name of WKB geometry column
-        level: Level where the geometry column exists (0, 1, 2, ...)
-
-    Returns:
-        SQL WHERE clause (without "WHERE" keyword)
-
-    Examples:
-        >>> polygon = "POLYGON((-81 -18, -68 -18, -68 0, -81 0, -81 -18))"
-        >>> build_within_sql(polygon, "istac:geometry", level=0)
-        'ST_Within(ST_GeomFromWKB("istac:geometry"), ST_GeomFromText(...))'
-        >>> build_within_sql(polygon, "stac:bbox", level=1)
-        'ST_Within(ST_GeomFromWKB(l1."stac:bbox"), ST_GeomFromText(...))'
+    Uses ST_Within to check if dataset geometry is inside user geometry.
     """
     wkt = geometry_to_wkt(geometry)
-    # Escape single quotes in WKT
     wkt_escaped = wkt.replace("'", "''")
 
-    # Prefix column with level alias if level > 0
-    if level > 0:
-        col_ref = f'l{level}."{geometry_col}"'
-    else:
-        col_ref = f'"{geometry_col}"'
+    col_ref = f'l{level}."{geometry_col}"' if level > 0 else f'"{geometry_col}"'
 
     return (
         f"ST_Within("
@@ -790,57 +451,29 @@ def build_datetime_sql(
     dataset: "TacoDataset",
 ) -> str:
     """
-    Build SQL for temporal filter with automatic type detection.
+    Build temporal filter SQL with automatic type detection.
 
-    Detects column type from DuckDB schema and generates appropriate SQL.
-    Supports multiple column types:
-    - INTEGER/BIGINT: Direct timestamp comparison (current behavior)
+    Detects column type from DuckDB schema and generates appropriate SQL:
+    - INTEGER/BIGINT: Direct timestamp comparison
     - VARCHAR: ISO string comparison
-    - TIMESTAMP: Timestamp comparison with conversion
-    - DATE: Date comparison
-
-    Args:
-        start: Start timestamp (seconds since epoch)
-        end: End timestamp (seconds since epoch) or None
-        time_col: Name of time column
-        level: Level where the time column exists (0, 1, 2, ...)
-        dataset: TacoDataset instance (for automatic type detection)
-
-    Returns:
-        SQL WHERE clause (without "WHERE" keyword)
-
-    Examples:
-        >>> # INTEGER column
-        >>> build_datetime_sql(1672531200, 1704067199, "istac:time_start", 0, ds)
-        '("istac:time_start" BETWEEN 1672531200 AND 1704067199)'
-
-        >>> # VARCHAR column
-        >>> build_datetime_sql(1672531200, 1704067199, "time_str", 0, ds)
-        '("time_str" BETWEEN '2023-01-01T00:00:00' AND '2023-12-31T23:59:59')'
-
-        >>> # TIMESTAMP column
-        >>> build_datetime_sql(1672531200, None, "timestamp_col", 1, ds)
-        '(l1."timestamp_col" = to_timestamp(1672531200))'
+    - TIMESTAMP: Timestamp comparison with to_timestamp()
+    - DATE: Date comparison with DATE cast
     """
-    # Detect column type automatically
+    # Auto-detect column type
     col_type = _get_column_type(dataset, time_col, level)
 
-    # Prefix column with level alias if level > 0
-    if level > 0:
-        col_ref = f'l{level}."{time_col}"'
-    else:
-        col_ref = f'"{time_col}"'
+    col_ref = f'l{level}."{time_col}"' if level > 0 else f'"{time_col}"'
 
-    # Generate SQL based on detected type
+    # Generate SQL by detected type
     if col_type in ("BIGINT", "INTEGER", "HUGEINT"):
-        # INTEGER types: Direct timestamp comparison (current behavior)
+        # Direct timestamp comparison
         if end is None:
             return f"({col_ref} = {start})"
         else:
             return f"({col_ref} BETWEEN {start} AND {end})"
 
     elif col_type == "VARCHAR":
-        # STRING type: ISO string comparison
+        # ISO string comparison
         start_str = _timestamp_to_iso_string(start)
         if end is None:
             return f"({col_ref} = '{start_str}')"
@@ -849,14 +482,14 @@ def build_datetime_sql(
             return f"({col_ref} BETWEEN '{start_str}' AND '{end_str}')"
 
     elif col_type in ("TIMESTAMP", "TIMESTAMP WITH TIME ZONE"):
-        # TIMESTAMP type: Convert INT to TIMESTAMP for comparison
+        # Timestamp comparison
         if end is None:
             return f"({col_ref} = to_timestamp({start}))"
         else:
             return f"({col_ref} BETWEEN to_timestamp({start}) AND to_timestamp({end}))"
 
     elif col_type == "DATE":
-        # DATE type: Convert INT to DATE for comparison
+        # Date comparison
         start_date = _timestamp_to_date_string(start)
         if end is None:
             return f"({col_ref} = DATE '{start_date}')"
@@ -867,6 +500,6 @@ def build_datetime_sql(
     else:
         raise ValueError(
             f"Unsupported time column type: {col_type}\n"
-            f"Supported types: INTEGER, BIGINT, VARCHAR, TIMESTAMP, DATE\n"
+            f"Supported: INTEGER, BIGINT, VARCHAR, TIMESTAMP, DATE\n"
             f"Column '{time_col}' has type '{col_type}'"
         )

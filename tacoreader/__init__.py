@@ -13,22 +13,22 @@ __version__ = _metadata.version("tacoreader")
 def verbose(level=True):
     """
     Enable/disable verbose logging for tacoreader operations.
-    
+
     Args:
         level: Logging level to enable:
             - True or "info": Show INFO and above (default)
             - "debug": Show DEBUG and above (very detailed)
             - False: Disable all logging
-    
+
     Example:
         >>> import tacoreader
-        >>> 
+        >>>
         >>> # Enable standard logging
         >>> tacoreader.verbose()
-        >>> 
+        >>>
         >>> # Enable debug logging (very detailed)
         >>> tacoreader.verbose("debug")
-        >>> 
+        >>>
         >>> # Disable logging
         >>> tacoreader.verbose(False)
     """
@@ -40,8 +40,7 @@ def verbose(level=True):
         setup_basic_logging(level=logging.DEBUG)
     else:
         raise ValueError(
-            f"Invalid verbose level: {level}. "
-            "Use True, 'info', 'debug', or False."
+            f"Invalid verbose level: {level}. " "Use True, 'info', 'debug', or False."
         )
 
 
