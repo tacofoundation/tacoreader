@@ -21,10 +21,9 @@ import tacozip
 
 from tacoreader.backends.base import TacoBackend
 from tacoreader.io import download_range
-from tacoreader._constants import ZIP_MAX_GAP_SIZE, PADDING_PREFIX
+from tacoreader._constants import ZIP_MAX_GAP_SIZE
 from tacoreader._logging import get_logger
 from tacoreader.dataset import TacoDataset
-from tacoreader.schema import PITSchema
 from tacoreader.utils.vsi import to_vsi_root
 
 logger = get_logger(__name__)
@@ -109,24 +108,11 @@ class ZipBackend(TacoBackend):
 
         # Parse COLLECTION.json (last file in header)
         collection_bytes = all_files_data[len(header) - 1]
-
-        try:
-            collection = json.loads(collection_bytes)
-        except json.JSONDecodeError as e:
-            raise json.JSONDecodeError(
-                f"Invalid COLLECTION.json in {path}: {e.msg}", e.doc, e.pos
-            )
-
+        collection = self._parse_collection_json(collection_bytes, path)
         logger.debug("Parsed COLLECTION.json")
 
         # Setup DuckDB with spatial
-        db = duckdb.connect(":memory:")
-        try:
-            db.execute("INSTALL spatial")
-            db.execute("LOAD spatial")
-            logger.debug("Loaded DuckDB spatial extension")
-        except Exception as e:
-            logger.debug(f"Spatial extension not available: {e}")
+        db = self._setup_duckdb_connection()
 
         # Register Parquet tables from parsed bytes
         level_ids = []
@@ -155,33 +141,9 @@ class ZipBackend(TacoBackend):
         if not level_ids:
             raise ValueError(f"No metadata levels found in ZIP: {path}")
 
-        # Setup views and create dataset
+        # Finalize dataset using common method
         root_path = to_vsi_root(path)
-        self.setup_duckdb_views(db, level_ids, root_path)
-        logger.debug("Created DuckDB views")
-
-        db.execute("CREATE VIEW data AS SELECT * FROM level0")
-        schema = PITSchema(collection["taco:pit_schema"])
-
-        dataset = TacoDataset.model_construct(
-            id=collection["id"],
-            version=collection.get("dataset_version", "unknown"),
-            description=collection.get("description", ""),
-            tasks=collection.get("tasks", []),
-            extent=collection.get("extent", {}),
-            providers=collection.get("providers", []),
-            licenses=collection.get("licenses", []),
-            title=collection.get("title"),
-            curators=collection.get("curators"),
-            keywords=collection.get("keywords"),
-            pit_schema=schema,
-            _path=path,
-            _format=self.format_name,
-            _collection=collection,
-            _duckdb=db,
-            _view_name="data",
-            _root_path=root_path,
-        )
+        dataset = self._finalize_dataset(db, path, root_path, collection, level_ids)
 
         total_time = time.time() - t_start
         logger.info(f"Loaded ZIP in {total_time:.2f}s")
@@ -215,12 +177,7 @@ class ZipBackend(TacoBackend):
         else:
             collection_bytes = download_range(path, collection_offset, collection_size)
 
-        try:
-            return json.loads(collection_bytes)
-        except json.JSONDecodeError as e:
-            raise json.JSONDecodeError(
-                f"Invalid COLLECTION.json in {path}: {e.msg}", e.doc, e.pos
-            )
+        return self._parse_collection_json(collection_bytes, path)
 
     def setup_duckdb_views(
         self,
@@ -234,6 +191,9 @@ class ZipBackend(TacoBackend):
         Path format: /vsisubfile/{offset}_{size},{zip_path}
         Enables GDAL to read embedded files without extraction.
         """
+        # Get filter condition
+        filter_clause = self._build_view_filter()
+
         for level_id in level_ids:
             table_name = f"level{level_id}_table"
             view_name = f"level{level_id}"
@@ -245,7 +205,7 @@ class ZipBackend(TacoBackend):
                   '/vsisubfile/' || "internal:offset" || '_' || 
                   "internal:size" || ',{root_path}' as "internal:gdal_vsi"
                 FROM {table_name}
-                WHERE id NOT LIKE '{PADDING_PREFIX}%'
+                WHERE {filter_clause}
             """
             )
 

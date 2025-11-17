@@ -33,7 +33,6 @@ from tacoreader._constants import (
     TACOCAT_TOTAL_HEADER_SIZE,
     TACOCAT_VERSION,
     TACOCAT_FILENAME,
-    PADDING_PREFIX,
 )
 from tacoreader._logging import get_logger
 from tacoreader.dataset import TacoDataset
@@ -173,25 +172,14 @@ class TacoCatBackend(TacoBackend):
         collection_bytes = full_bytes[
             header.collection_offset : header.collection_offset + header.collection_size
         ]
-        try:
-            collection = json.loads(collection_bytes)
-        except json.JSONDecodeError as e:
-            raise json.JSONDecodeError(
-                f"Invalid COLLECTION.json in TacoCat {path}: {e.msg}", e.doc, e.pos
-            )
-
+        collection = self._parse_collection_json(collection_bytes, path)
         logger.debug("Parsed COLLECTION.json")
 
         # Setup DuckDB with spatial
-        db = duckdb.connect(":memory:")
-        try:
-            db.execute("INSTALL spatial")
-            db.execute("LOAD spatial")
-            logger.debug("Loaded DuckDB spatial extension")
-        except Exception as e:
-            logger.debug(f"Spatial extension not available: {e}")
+        db = self._setup_duckdb_connection()
 
         # Register Parquet tables directly from memory
+        level_ids = []
         for level_id, (offset, size) in header.level_index.items():
             if size == 0:
                 continue
@@ -205,39 +193,16 @@ class TacoCatBackend(TacoBackend):
 
             table_name = f"level{level_id}_table"
             db.register(table_name, arrow_table)
+            level_ids.append(level_id)
 
             logger.debug(f"Registered {table_name} in DuckDB ({size} bytes)")
 
-        if not header.level_index:
+        if not level_ids:
             raise ValueError(f"No metadata levels found in TacoCat: {path}")
 
-        # Setup views and create dataset
+        # Finalize dataset using common method
         root_path = to_vsi_root(path)
-        self.setup_duckdb_views(db, header.level_index.keys(), root_path)
-        logger.debug("Created DuckDB views")
-
-        db.execute("CREATE VIEW data AS SELECT * FROM level0")
-        schema = PITSchema(collection["taco:pit_schema"])
-
-        dataset = TacoDataset.model_construct(
-            id=collection["id"],
-            version=collection.get("dataset_version", "unknown"),
-            description=collection.get("description", ""),
-            tasks=collection.get("tasks", []),
-            extent=collection.get("extent", {}),
-            providers=collection.get("providers", []),
-            licenses=collection.get("licenses", []),
-            title=collection.get("title"),
-            curators=collection.get("curators"),
-            keywords=collection.get("keywords"),
-            pit_schema=schema,
-            _path=path,
-            _format=self.format_name,
-            _collection=collection,
-            _duckdb=db,
-            _view_name="data",
-            _root_path=root_path,
-        )
+        dataset = self._finalize_dataset(db, path, root_path, collection, level_ids)
 
         total_time = time.time() - t_start
         logger.info(f"Loaded TacoCat in {total_time:.2f}s")
@@ -261,12 +226,7 @@ class TacoCatBackend(TacoBackend):
             header.collection_offset : header.collection_offset + header.collection_size
         ]
 
-        try:
-            return json.loads(collection_bytes)
-        except json.JSONDecodeError as e:
-            raise json.JSONDecodeError(
-                f"Invalid COLLECTION.json in TacoCat {path}: {e.msg}", e.doc, e.pos
-            )
+        return self._parse_collection_json(collection_bytes, path)
 
     def setup_duckdb_views(
         self,
@@ -281,6 +241,9 @@ class TacoCatBackend(TacoBackend):
         Allows samples to point to their specific origin ZIP file.
         """
         base_path = self._extract_base_path(root_path)
+        
+        # Get filter condition
+        filter_clause = self._build_view_filter()
 
         for level_id in level_ids:
             table_name = f"level{level_id}_table"
@@ -294,7 +257,7 @@ class TacoCatBackend(TacoBackend):
                   "internal:size" || ',{base_path}' || "internal:source_file"
                   as "internal:gdal_vsi"
                 FROM {table_name}
-                WHERE id NOT LIKE '{PADDING_PREFIX}%'
+                WHERE {filter_clause}
             """
             )
 

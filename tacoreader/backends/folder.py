@@ -21,9 +21,7 @@ from tacoreader.backends.base import TacoBackend
 from tacoreader.io import download_bytes
 from tacoreader._logging import get_logger
 from tacoreader.dataset import TacoDataset
-from tacoreader.schema import PITSchema
 from tacoreader.utils.vsi import to_vsi_root
-from tacoreader._constants import PADDING_PREFIX
 
 logger = get_logger(__name__)
 
@@ -59,13 +57,7 @@ class FolderBackend(TacoBackend):
         logger.debug("Parsed COLLECTION.json")
 
         # Setup DuckDB with spatial
-        db = duckdb.connect(":memory:")
-        try:
-            db.execute("INSTALL spatial")
-            db.execute("LOAD spatial")
-            logger.debug("Loaded DuckDB spatial extension")
-        except Exception as e:
-            logger.debug(f"Spatial extension not available: {e}")
+        db = self._setup_duckdb_connection()
 
         is_local = Path(path).exists()
         level_ids = []
@@ -125,33 +117,9 @@ class FolderBackend(TacoBackend):
                 f"Expected at least level0.parquet"
             )
 
-        # Setup views and create dataset
+        # Finalize dataset using common method
         root_path = to_vsi_root(path)
-        self.setup_duckdb_views(db, level_ids, root_path)
-        logger.debug("Created DuckDB views")
-
-        db.execute("CREATE VIEW data AS SELECT * FROM level0")
-        schema = PITSchema(collection["taco:pit_schema"])
-
-        dataset = TacoDataset.model_construct(
-            id=collection["id"],
-            version=collection.get("dataset_version", "unknown"),
-            description=collection.get("description", ""),
-            tasks=collection.get("tasks", []),
-            extent=collection.get("extent", {}),
-            providers=collection.get("providers", []),
-            licenses=collection.get("licenses", []),
-            title=collection.get("title"),
-            curators=collection.get("curators"),
-            keywords=collection.get("keywords"),
-            pit_schema=schema,
-            _path=path,
-            _format=self.format_name,
-            _collection=collection,
-            _duckdb=db,
-            _view_name="data",
-            _root_path=root_path,
-        )
+        dataset = self._finalize_dataset(db, path, root_path, collection, level_ids)
 
         total_time = time.time() - t_start
         logger.info(f"Loaded FOLDER in {total_time:.2f}s")
@@ -174,21 +142,15 @@ class FolderBackend(TacoBackend):
                 )
 
             with open(collection_path) as f:
-                try:
-                    return json.load(f)
-                except json.JSONDecodeError as e:
-                    raise json.JSONDecodeError(
-                        f"Invalid COLLECTION.json in {path}: {e.msg}", e.doc, e.pos
-                    )
+                collection_bytes = f.read().encode('utf-8')
+                return self._parse_collection_json(collection_bytes, path)
 
         # Remote storage
         try:
             collection_bytes = download_bytes(path, "COLLECTION.json")
-            return json.loads(collection_bytes)
-        except json.JSONDecodeError as e:
-            raise json.JSONDecodeError(
-                f"Invalid COLLECTION.json in {path}: {e.msg}", e.doc, e.pos
-            )
+            return self._parse_collection_json(collection_bytes, path)
+        except json.JSONDecodeError:
+            raise  # Already has consistent error message
         except Exception as e:
             raise OSError(f"Failed to read COLLECTION.json from {path}: {e}")
 
@@ -210,6 +172,9 @@ class FolderBackend(TacoBackend):
         # Ensure trailing slash
         root = root_path if root_path.endswith("/") else root_path + "/"
 
+        # Get filter condition
+        filter_clause = self._build_view_filter()
+
         for level_id in level_ids:
             table_name = f"level{level_id}_table"
             view_name = f"level{level_id}"
@@ -226,7 +191,7 @@ class FolderBackend(TacoBackend):
                         ELSE NULL
                       END as "internal:gdal_vsi"
                     FROM {table_name}
-                    WHERE id NOT LIKE '{PADDING_PREFIX}%'
+                    WHERE {filter_clause}
                 """
                 )
             else:
@@ -241,6 +206,6 @@ class FolderBackend(TacoBackend):
                         ELSE NULL
                       END as "internal:gdal_vsi"
                     FROM {table_name}
-                    WHERE id NOT LIKE '{PADDING_PREFIX}%'
+                    WHERE {filter_clause}
                 """
                 )

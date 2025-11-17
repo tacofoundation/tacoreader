@@ -2,13 +2,13 @@
 Abstract base class for TACO format backends.
 
 Defines common interface for all backends (ZIP, FOLDER, TacoCat).
-Not a pure template method - FOLDER uses the default load() implementation
-for lazy disk access, while ZIP/TacoCat override it completely for in-memory loading.
+All backends must implement load() with their specific loading strategy.
 
 Main class:
-    TacoBackend: Abstract base with optional template method
+    TacoBackend: Abstract base class with common utilities
 """
 
+import json
 from abc import ABC, abstractmethod
 from typing import Any
 
@@ -16,18 +16,23 @@ import duckdb
 
 from tacoreader.dataset import TacoDataset
 from tacoreader.schema import PITSchema
-from tacoreader.utils.vsi import to_vsi_root
+from tacoreader._constants import PADDING_PREFIX
+from tacoreader._logging import get_logger
+
+logger = get_logger(__name__)
 
 
 class TacoBackend(ABC):
     """
     Base class for TACO backends.
 
-    Two loading strategies:
-    - FOLDER: uses default load() for lazy disk access (files already on disk)
-    - ZIP/TacoCat: override load() for in-memory loading (need to parse headers)
+    All backends implement format-specific loading strategies:
+    - FOLDER: lazy disk access (local) or memory loading (remote)
+    - ZIP: offset-based parsing with HTTP request grouping
+    - TacoCat: binary header parsing with consolidated metadata
 
     All backends must implement:
+    - load(): format-specific dataset loading
     - read_collection(): format-specific COLLECTION.json reading
     - setup_duckdb_views(): create views with internal:gdal_vsi column
     - format_name: property returning format identifier
@@ -47,6 +52,7 @@ class TacoBackend(ABC):
     def setup_duckdb_views(
         self,
         db: duckdb.DuckDBPyConnection,
+        level_ids: list[int],
         root_path: str,
     ) -> None:
         """
@@ -67,41 +73,113 @@ class TacoBackend(ABC):
         """Format identifier: 'zip', 'folder', or 'tacocat'."""
         pass
 
+    @abstractmethod
     def load(self, path: str) -> TacoDataset:
         """
-        Template method for loading datasets.
-
-        Default implementation (used by FOLDER):
-        1. Read collection metadata
-        2. Create DuckDB connection with spatial extension
-        3. Convert path to VSI format
-        4. Setup views with internal:gdal_vsi column
-        5. Create TacoDataset with lazy SQL interface
-
-        ZIP and TacoCat override this completely for in-memory loading.
+        Load dataset from path.
+        
+        Each backend implements format-specific loading:
+        - FOLDER: lazy disk access (local) or memory loading (remote)
+        - ZIP: offset-based parsing with request grouping
+        - TacoCat: binary header parsing and consolidated metadata
+        
+        Args:
+            path: Dataset path (local filesystem or cloud URL)
+            
+        Returns:
+            Fully loaded TacoDataset instance
         """
-        # Read collection metadata
-        collection = self.read_collection(path)
+        pass
 
-        # Setup DuckDB with spatial support
+    # ========================================================================
+    # COMMON UTILITIES
+    # ========================================================================
+
+    def _setup_duckdb_connection(self) -> duckdb.DuckDBPyConnection:
+        """
+        Create DuckDB connection with spatial extension if available.
+        
+        Returns:
+            DuckDB connection with spatial extension loaded (if available)
+        """
         db = duckdb.connect(":memory:")
         try:
             db.execute("INSTALL spatial")
             db.execute("LOAD spatial")
-        except Exception:
-            pass  # Spatial methods will fail with clear error if used
+            logger.debug("DuckDB spatial extension loaded")
+        except Exception as e:
+            logger.debug(f"Spatial extension not available: {e}")
+        
+        return db
 
-        # Convert to VSI format and setup views
-        root_path = to_vsi_root(path)
-        self.setup_duckdb_views(db, root_path)
+    @staticmethod
+    def _build_view_filter() -> str:
+        """
+        SQL WHERE clause for filtering padding samples from views.
+        
+        Returns:
+            SQL condition string to exclude padding samples
+        """
+        return f"id NOT LIKE '{PADDING_PREFIX}%'"
 
-        # Create 'data' alias for level0
+    def _parse_collection_json(self, collection_bytes: bytes, path: str) -> dict[str, Any]:
+        """
+        Parse COLLECTION.json with consistent error handling.
+        
+        Args:
+            collection_bytes: Raw JSON bytes
+            path: Dataset path for error messages
+            
+        Returns:
+            Parsed collection dictionary
+            
+        Raises:
+            json.JSONDecodeError: If JSON is invalid
+        """
+        try:
+            return json.loads(collection_bytes)
+        except json.JSONDecodeError as e:
+            raise json.JSONDecodeError(
+                f"Invalid COLLECTION.json in {self.format_name} format at {path}: {e.msg}",
+                e.doc,
+                e.pos
+            )
+
+    def _finalize_dataset(
+        self,
+        db: duckdb.DuckDBPyConnection,
+        path: str,
+        root_path: str,
+        collection: dict[str, Any],
+        level_ids: list[int],
+    ) -> TacoDataset:
+        """
+        Common dataset finalization after metadata loading.
+        
+        Creates views, data alias, schema, and constructs TacoDataset.
+        
+        Args:
+            db: DuckDB connection with registered tables
+            path: Original dataset path
+            root_path: VSI-formatted root path
+            collection: Parsed COLLECTION.json
+            level_ids: List of level IDs that were loaded
+            
+        Returns:
+            Fully constructed TacoDataset instance
+        """
+        # Create views with internal:gdal_vsi
+        self.setup_duckdb_views(db, level_ids, root_path)
+        logger.debug("Created DuckDB views")
+        
+        # Create data alias for level0
         db.execute("CREATE VIEW data AS SELECT * FROM level0")
-
-        # Build dataset
+        
+        # Build PIT schema
         schema = PITSchema(collection["taco:pit_schema"])
-
-        return TacoDataset.model_construct(
+        
+        # Construct dataset
+        dataset = TacoDataset.model_construct(
             # Public metadata
             id=collection["id"],
             version=collection.get("dataset_version", "unknown"),
@@ -122,3 +200,5 @@ class TacoBackend(ABC):
             _view_name="data",
             _root_path=root_path,
         )
+        
+        return dataset
