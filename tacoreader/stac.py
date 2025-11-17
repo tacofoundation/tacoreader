@@ -94,7 +94,9 @@ def build_cascade_join_sql(
         )
     else:
         # ZIP/FOLDER: parent_id references parent's ID
-        joins.append(f'INNER JOIN {LEVEL_VIEW_PREFIX}1 l1 ON l1."{METADATA_PARENT_ID}" = l0.{COLUMN_ID}')
+        joins.append(
+            f'INNER JOIN {LEVEL_VIEW_PREFIX}1 l1 ON l1."{METADATA_PARENT_ID}" = l0.{COLUMN_ID}'
+        )
 
     # Subsequent JOINs: level1 → level2 → level3 ...
     for level in range(2, target_level + 1):

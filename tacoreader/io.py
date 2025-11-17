@@ -30,17 +30,16 @@ def _create_store(url: str):
         PROTOCOL_MAPPINGS["http"]["standard"]: obs.store.HTTPStore,
         PROTOCOL_MAPPINGS["https"]["standard"]: obs.store.HTTPStore,
     }
-    
+
     # Find matching protocol
     for protocol, store_class in protocol_handlers.items():
         if url.startswith(protocol):
             return store_class.from_url(url)
-    
+
     # Build error message with all supported protocols
     supported = sorted(set(PROTOCOL_MAPPINGS[p]["standard"] for p in PROTOCOL_MAPPINGS))
     raise ValueError(
-        f"Unsupported URL scheme: {url}\n"
-        f"Supported: {', '.join(supported)}"
+        f"Unsupported URL scheme: {url}\n" f"Supported: {', '.join(supported)}"
     )
 
 
@@ -69,13 +68,13 @@ def download_range(url: str, offset: int, size: int, subpath: str = "") -> bytes
 
     Efficient for reading portions of large files without full download.
     Uses HTTP Range requests or cloud storage equivalent.
-    
+
     Args:
         url: Base URL
         offset: Starting byte position
         size: Number of bytes to read
         subpath: Optional subpath within URL
-        
+
     Returns:
         Requested byte range
     """
@@ -94,11 +93,11 @@ def get_file_size(url: str, subpath: str = "") -> int | None:
     Get remote file size in bytes.
 
     Returns None if size unavailable (e.g., streamed HTTP responses).
-    
+
     Args:
         url: Base URL
         subpath: Optional subpath within URL
-        
+
     Returns:
         File size in bytes, or None if unavailable
     """

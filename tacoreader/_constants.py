@@ -137,9 +137,7 @@ These columns are critical for:
 - Format-specific data location
 """
 
-NAVIGATION_REQUIRED_COLUMNS = frozenset(
-    {COLUMN_ID, COLUMN_TYPE, METADATA_GDAL_VSI}
-)
+NAVIGATION_REQUIRED_COLUMNS = frozenset({COLUMN_ID, COLUMN_TYPE, METADATA_GDAL_VSI})
 """
 Minimum columns required for .read() hierarchical navigation.
 

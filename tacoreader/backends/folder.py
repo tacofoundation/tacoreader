@@ -103,7 +103,9 @@ class FolderBackend(TacoBackend):
             for i in range(6):
                 try:
                     # Download parquet
-                    parquet_bytes = download_bytes(path, f"METADATA/{LEVEL_VIEW_PREFIX}{i}.parquet")
+                    parquet_bytes = download_bytes(
+                        path, f"METADATA/{LEVEL_VIEW_PREFIX}{i}.parquet"
+                    )
 
                     # Load to PyArrow from bytes
                     reader = pa.BufferReader(parquet_bytes)
@@ -152,7 +154,7 @@ class FolderBackend(TacoBackend):
                 )
 
             with open(collection_path) as f:
-                collection_bytes = f.read().encode('utf-8')
+                collection_bytes = f.read().encode("utf-8")
                 return self._parse_collection_json(collection_bytes, path)
 
         # Remote storage

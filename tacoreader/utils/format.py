@@ -35,7 +35,7 @@ def detect_format(path: str) -> Literal["zip", "folder", "tacocat"]:
 
 def is_remote(path: str) -> bool:
     """Check if path requires network access"""
-    
+
     # Combine cloud protocols and VSI prefixes
     remote_prefixes = CLOUD_PROTOCOLS + ALL_VSI_PREFIXES
     return path.startswith(remote_prefixes)

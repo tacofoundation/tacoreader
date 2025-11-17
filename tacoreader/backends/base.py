@@ -81,15 +81,15 @@ class TacoBackend(ABC):
     def load(self, path: str) -> TacoDataset:
         """
         Load dataset from path.
-        
+
         Each backend implements format-specific loading:
         - FOLDER: lazy disk access (local) or memory loading (remote)
         - ZIP: offset-based parsing with request grouping
         - TacoCat: binary header parsing and consolidated metadata
-        
+
         Args:
             path: Dataset path (local filesystem or cloud URL)
-            
+
         Returns:
             Fully loaded TacoDataset instance
         """
@@ -108,7 +108,7 @@ class TacoBackend(ABC):
             logger.debug("DuckDB spatial extension loaded")
         except Exception as e:
             logger.debug(f"Spatial extension not available: {e}")
-        
+
         return db
 
     @staticmethod
@@ -116,7 +116,9 @@ class TacoBackend(ABC):
         """SQL WHERE clause for filtering padding samples from views."""
         return f"{COLUMN_ID} NOT LIKE '{PADDING_PREFIX}%'"
 
-    def _parse_collection_json(self, collection_bytes: bytes, path: str) -> dict[str, Any]:
+    def _parse_collection_json(
+        self, collection_bytes: bytes, path: str
+    ) -> dict[str, Any]:
         """Parse COLLECTION.json with consistent error handling."""
         try:
             return json.loads(collection_bytes)
@@ -124,7 +126,7 @@ class TacoBackend(ABC):
             raise json.JSONDecodeError(
                 f"Invalid COLLECTION.json in {self.format_name} format at {path}: {e.msg}",
                 e.doc,
-                e.pos
+                e.pos,
             )
 
     def _finalize_dataset(
@@ -137,19 +139,19 @@ class TacoBackend(ABC):
     ) -> TacoDataset:
         """
         Common dataset finalization after metadata loading.
-        
+
         Creates views, data alias, schema, and constructs TacoDataset.
         """
         # Create views with internal:gdal_vsi
         self.setup_duckdb_views(db, level_ids, root_path)
         logger.debug("Created DuckDB views")
-        
+
         # Create data alias for level0
         db.execute(f"CREATE VIEW {DEFAULT_VIEW_NAME} AS SELECT * FROM level0")
-        
+
         # Build PIT schema
         schema = PITSchema(collection["taco:pit_schema"])
-        
+
         # Construct dataset
         dataset = TacoDataset.model_construct(
             # Public metadata
@@ -172,5 +174,5 @@ class TacoBackend(ABC):
             _view_name=DEFAULT_VIEW_NAME,
             _root_path=root_path,
         )
-        
+
         return dataset

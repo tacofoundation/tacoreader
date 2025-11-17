@@ -31,7 +31,11 @@ Main classes:
 
 from typing import Literal, TypedDict
 
-from tacoreader._constants import SAMPLE_TYPE_FILE, SAMPLE_TYPE_FOLDER, VALID_SAMPLE_TYPES
+from tacoreader._constants import (
+    SAMPLE_TYPE_FILE,
+    SAMPLE_TYPE_FOLDER,
+    VALID_SAMPLE_TYPES,
+)
 
 
 class PITRootLevel(TypedDict):

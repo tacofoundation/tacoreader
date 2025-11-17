@@ -247,7 +247,7 @@ class TacoCatBackend(TacoBackend):
         Allows samples to point to their specific origin ZIP file.
         """
         base_path = self._extract_base_path(root_path)
-        
+
         # Get filter condition
         filter_clause = self._build_view_filter()
 

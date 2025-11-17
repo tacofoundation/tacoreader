@@ -94,7 +94,9 @@ def load(
             )
 
         # Recreate 'data' view
-        dataset._duckdb.execute(f"CREATE VIEW {DEFAULT_VIEW_NAME} AS SELECT * FROM {LEVEL_VIEW_PREFIX}0")
+        dataset._duckdb.execute(
+            f"CREATE VIEW {DEFAULT_VIEW_NAME} AS SELECT * FROM {LEVEL_VIEW_PREFIX}0"
+        )
         dataset._root_path = base_vsi
 
         return dataset

@@ -16,16 +16,16 @@ def to_vsi_root(path: str) -> str:
     """
     # Build protocol conversion mapping: standard → vsi
     protocol_to_vsi = {}
-    
+
     for proto_config in PROTOCOL_MAPPINGS.values():
         standard = proto_config["standard"]
         vsi = proto_config["vsi"]
         protocol_to_vsi[standard] = vsi
-        
+
         # Add alternative protocol if exists (e.g., azure://)
         if "alt" in proto_config:
             protocol_to_vsi[proto_config["alt"]] = vsi
-    
+
     # Check each protocol
     for standard_proto, vsi_prefix in protocol_to_vsi.items():
         if path.startswith(standard_proto):
@@ -34,7 +34,7 @@ def to_vsi_root(path: str) -> str:
                 return f"{vsi_prefix}{path}"
             else:
                 return path.replace(standard_proto, vsi_prefix, 1)
-    
+
     return path
 
 
@@ -46,26 +46,26 @@ def is_vsi_path(path: str) -> bool:
 def strip_vsi_prefix(path: str) -> str:
     """
     Remove VSI prefix, restore original protocol.
-    
+
     Converts GDAL VSI paths back to standard protocol URLs.
     """
     # Handle vsicurl special case (unwrap entire URL)
     if path.startswith("/vsicurl/"):
         return path.replace("/vsicurl/", "", 1)
-    
+
     # Build VSI → standard protocol mapping
     vsi_to_standard = {}
-    
+
     for proto_config in PROTOCOL_MAPPINGS.values():
         vsi = proto_config["vsi"]
         standard = proto_config["standard"]
         vsi_to_standard[vsi] = standard
-    
+
     # Check each VSI prefix
     for vsi_prefix, standard_proto in vsi_to_standard.items():
         if path.startswith(vsi_prefix):
             return path.replace(vsi_prefix, standard_proto, 1)
-    
+
     return path
 
 

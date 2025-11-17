@@ -108,7 +108,9 @@ class TacoDataset(BaseModel):
         new_view_name = f"view_{uuid.uuid4().hex[:8]}"
 
         # Replace 'data' with current view for chaining
-        modified_query = query.replace(f"FROM {DEFAULT_VIEW_NAME}", f"FROM {self._view_name}")
+        modified_query = query.replace(
+            f"FROM {DEFAULT_VIEW_NAME}", f"FROM {self._view_name}"
+        )
 
         # Create temp view (lazy)
         self._duckdb.execute(
