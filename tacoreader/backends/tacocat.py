@@ -33,6 +33,12 @@ from tacoreader._constants import (
     TACOCAT_TOTAL_HEADER_SIZE,
     TACOCAT_VERSION,
     TACOCAT_FILENAME,
+    METADATA_GDAL_VSI,
+    METADATA_OFFSET,
+    METADATA_SIZE,
+    METADATA_SOURCE_FILE,
+    LEVEL_VIEW_PREFIX,
+    LEVEL_TABLE_SUFFIX,
 )
 from tacoreader._logging import get_logger
 from tacoreader.dataset import TacoDataset
@@ -191,7 +197,7 @@ class TacoCatBackend(TacoBackend):
             reader = pa.BufferReader(parquet_bytes)
             arrow_table = pq.read_table(reader)
 
-            table_name = f"level{level_id}_table"
+            table_name = f"{LEVEL_VIEW_PREFIX}{level_id}{LEVEL_TABLE_SUFFIX}"
             db.register(table_name, arrow_table)
             level_ids.append(level_id)
 
@@ -246,16 +252,16 @@ class TacoCatBackend(TacoBackend):
         filter_clause = self._build_view_filter()
 
         for level_id in level_ids:
-            table_name = f"level{level_id}_table"
-            view_name = f"level{level_id}"
+            table_name = f"{LEVEL_VIEW_PREFIX}{level_id}{LEVEL_TABLE_SUFFIX}"
+            view_name = f"{LEVEL_VIEW_PREFIX}{level_id}"
 
             db.execute(
                 f"""
                 CREATE VIEW {view_name} AS 
                 SELECT *,
-                  '/vsisubfile/' || "internal:offset" || '_' || 
-                  "internal:size" || ',{base_path}' || "internal:source_file"
-                  as "internal:gdal_vsi"
+                  '/vsisubfile/' || "{METADATA_OFFSET}" || '_' || 
+                  "{METADATA_SIZE}" || ',{base_path}' || "{METADATA_SOURCE_FILE}"
+                  as "{METADATA_GDAL_VSI}"
                 FROM {table_name}
                 WHERE {filter_clause}
             """

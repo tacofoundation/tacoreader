@@ -16,7 +16,11 @@ import duckdb
 
 from tacoreader.dataset import TacoDataset
 from tacoreader.schema import PITSchema
-from tacoreader._constants import PADDING_PREFIX
+from tacoreader._constants import (
+    PADDING_PREFIX,
+    DEFAULT_VIEW_NAME,
+    COLUMN_ID,
+)
 from tacoreader._logging import get_logger
 
 logger = get_logger(__name__)
@@ -96,12 +100,7 @@ class TacoBackend(ABC):
     # ========================================================================
 
     def _setup_duckdb_connection(self) -> duckdb.DuckDBPyConnection:
-        """
-        Create DuckDB connection with spatial extension if available.
-        
-        Returns:
-            DuckDB connection with spatial extension loaded (if available)
-        """
+        """Create DuckDB connection with spatial extension if available."""
         db = duckdb.connect(":memory:")
         try:
             db.execute("INSTALL spatial")
@@ -114,28 +113,11 @@ class TacoBackend(ABC):
 
     @staticmethod
     def _build_view_filter() -> str:
-        """
-        SQL WHERE clause for filtering padding samples from views.
-        
-        Returns:
-            SQL condition string to exclude padding samples
-        """
-        return f"id NOT LIKE '{PADDING_PREFIX}%'"
+        """SQL WHERE clause for filtering padding samples from views."""
+        return f"{COLUMN_ID} NOT LIKE '{PADDING_PREFIX}%'"
 
     def _parse_collection_json(self, collection_bytes: bytes, path: str) -> dict[str, Any]:
-        """
-        Parse COLLECTION.json with consistent error handling.
-        
-        Args:
-            collection_bytes: Raw JSON bytes
-            path: Dataset path for error messages
-            
-        Returns:
-            Parsed collection dictionary
-            
-        Raises:
-            json.JSONDecodeError: If JSON is invalid
-        """
+        """Parse COLLECTION.json with consistent error handling."""
         try:
             return json.loads(collection_bytes)
         except json.JSONDecodeError as e:
@@ -157,23 +139,13 @@ class TacoBackend(ABC):
         Common dataset finalization after metadata loading.
         
         Creates views, data alias, schema, and constructs TacoDataset.
-        
-        Args:
-            db: DuckDB connection with registered tables
-            path: Original dataset path
-            root_path: VSI-formatted root path
-            collection: Parsed COLLECTION.json
-            level_ids: List of level IDs that were loaded
-            
-        Returns:
-            Fully constructed TacoDataset instance
         """
         # Create views with internal:gdal_vsi
         self.setup_duckdb_views(db, level_ids, root_path)
         logger.debug("Created DuckDB views")
         
         # Create data alias for level0
-        db.execute("CREATE VIEW data AS SELECT * FROM level0")
+        db.execute(f"CREATE VIEW {DEFAULT_VIEW_NAME} AS SELECT * FROM level0")
         
         # Build PIT schema
         schema = PITSchema(collection["taco:pit_schema"])
@@ -197,7 +169,7 @@ class TacoBackend(ABC):
             _format=self.format_name,
             _collection=collection,
             _duckdb=db,
-            _view_name="data",
+            _view_name=DEFAULT_VIEW_NAME,
             _root_path=root_path,
         )
         

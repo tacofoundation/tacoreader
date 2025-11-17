@@ -2,22 +2,22 @@
 Format detection and path type utilities.
 
 Low-level utilities with no tacoreader dependencies (avoids circular imports).
+Pure string operations - no I/O, no side effects.
 """
 
 from typing import Literal
 
-from tacoreader._constants import TACOCAT_FILENAME
+from tacoreader._constants import (
+    TACOCAT_FILENAME,
+    TACOZIP_EXTENSIONS,
+    CLOUD_PROTOCOLS,
+    ALL_VSI_PREFIXES,
+)
 
 
 def detect_format(path: str) -> Literal["zip", "folder", "tacocat"]:
-    """
-    Detect TACO format from path.
+    """Detect TACO format from path"""
 
-    Examples:
-        detect_format("data.tacozip") -> "zip"
-        detect_format("s3://bucket/__TACOCAT__") -> "tacocat"
-        detect_format("data/") -> "folder"
-    """
     clean_path = path.rstrip("/")
     filename = clean_path.split("/")[-1]
 
@@ -25,8 +25,8 @@ def detect_format(path: str) -> Literal["zip", "folder", "tacocat"]:
     if filename == TACOCAT_FILENAME:
         return "tacocat"
 
-    # ZIP format
-    if filename.endswith(".tacozip") or filename.endswith(".zip"):
+    # ZIP format - check all valid extensions
+    if filename.endswith(TACOZIP_EXTENSIONS):
         return "zip"
 
     # FOLDER format (default)
@@ -34,33 +34,13 @@ def detect_format(path: str) -> Literal["zip", "folder", "tacocat"]:
 
 
 def is_remote(path: str) -> bool:
-    """
-    Check if path requires network access.
-
-    Includes HTTP/HTTPS, cloud storage (S3/GCS/Azure), and GDAL VSI paths.
-    """
-    remote_prefixes = (
-        # Cloud storage
-        "s3://",
-        "gs://",
-        "az://",
-        "azure://",
-        "oss://",
-        "swift://",
-        # HTTP
-        "http://",
-        "https://",
-        # GDAL VSI
-        "/vsis3/",
-        "/vsigs/",
-        "/vsiaz/",
-        "/vsioss/",
-        "/vsiswift/",
-        "/vsicurl/",
-    )
+    """Check if path requires network access"""
+    
+    # Combine cloud protocols and VSI prefixes
+    remote_prefixes = CLOUD_PROTOCOLS + ALL_VSI_PREFIXES
     return path.startswith(remote_prefixes)
 
 
 def is_local(path: str) -> bool:
-    """Check if path is local filesystem."""
+    """Check if path is local filesystem"""
     return not is_remote(path)

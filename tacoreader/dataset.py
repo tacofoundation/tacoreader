@@ -5,13 +5,13 @@ Provides STAC-like metadata with DuckDB connection for lazy SQL queries.
 Queries not executed until .data is called.
 """
 
-import re
 import uuid
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, PrivateAttr
 
 from tacoreader.schema import PITSchema
+from tacoreader._constants import DEFAULT_VIEW_NAME
 
 
 class TacoDataset(BaseModel):
@@ -26,8 +26,7 @@ class TacoDataset(BaseModel):
         title, curators, keywords, pit_schema
 
     Private attributes:
-        _path, _format, _collection, _duckdb, _view_name, _root_path,
-        _has_level1_joins, _joined_levels
+        _path, _format, _collection, _duckdb, _view_name, _root_path
 
     Examples:
         ds = load("data.tacozip")
@@ -59,12 +58,8 @@ class TacoDataset(BaseModel):
     _format: Literal["zip", "folder", "tacocat"] = PrivateAttr()
     _collection: dict[str, Any] = PrivateAttr()
     _duckdb: Any = PrivateAttr(default=None)
-    _view_name: str = PrivateAttr(default="data")
+    _view_name: str = PrivateAttr(default=DEFAULT_VIEW_NAME)
     _root_path: str = PrivateAttr(default="")
-
-    # JOIN tracking (for migrate() validation)
-    _has_level1_joins: bool = PrivateAttr(default=False)
-    _joined_levels: set[str] = PrivateAttr(default_factory=set)
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
@@ -109,13 +104,11 @@ class TacoDataset(BaseModel):
 
         Query NOT executed immediately - creates temp view.
         Always use 'data' as table name, auto-replaced with current view.
-
-        Tracks JOINs with level1+ tables for migrate() validation.
         """
         new_view_name = f"view_{uuid.uuid4().hex[:8]}"
 
         # Replace 'data' with current view for chaining
-        modified_query = query.replace("FROM data", f"FROM {self._view_name}")
+        modified_query = query.replace(f"FROM {DEFAULT_VIEW_NAME}", f"FROM {self._view_name}")
 
         # Create temp view (lazy)
         self._duckdb.execute(
@@ -131,17 +124,6 @@ class TacoDataset(BaseModel):
         ).fetchone()[0]
 
         new_schema = self.pit_schema.with_n(new_n)
-
-        # Detect JOINs with level1+ tables
-        join_pattern = r"\b(?:JOIN|FROM)\s+(level[1-5])\b"
-        matches = re.findall(join_pattern, query, re.IGNORECASE)
-
-        has_new_joins = len(matches) > 0
-        new_joined_levels = set(matches) if has_new_joins else set()
-
-        # Inherit + merge tracking
-        final_has_joins = self._has_level1_joins or has_new_joins
-        final_joined_levels = self._joined_levels.union(new_joined_levels)
 
         return TacoDataset.model_construct(
             id=self.id,
@@ -161,8 +143,6 @@ class TacoDataset(BaseModel):
             _duckdb=self._duckdb,
             _view_name=new_view_name,
             _root_path=self._root_path,
-            _has_level1_joins=final_has_joins,
-            _joined_levels=final_joined_levels,
         )
 
     # ========================================================================
@@ -212,7 +192,7 @@ class TacoDataset(BaseModel):
         sql_filter = build_bbox_sql(minx, miny, maxx, maxy, geometry_col, level)
 
         if level == 0:
-            return self.sql(f"SELECT * FROM data WHERE {sql_filter}")
+            return self.sql(f"SELECT * FROM {DEFAULT_VIEW_NAME} WHERE {sql_filter}")
         else:
             full_query = build_cascade_join_sql(
                 self._view_name, level, sql_filter, self._format
@@ -261,7 +241,7 @@ class TacoDataset(BaseModel):
         sql_filter = build_datetime_sql(start, end, time_col, level)
 
         if level == 0:
-            return self.sql(f"SELECT * FROM data WHERE {sql_filter}")
+            return self.sql(f"SELECT * FROM {DEFAULT_VIEW_NAME} WHERE {sql_filter}")
         else:
             full_query = build_cascade_join_sql(
                 self._view_name, level, sql_filter, self._format

@@ -13,11 +13,16 @@ Main functions:
 """
 
 from datetime import datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from tacoreader._constants import (
     STAC_GEOMETRY_COLUMN_PRIORITY,
     STAC_TIME_COLUMN_PRIORITY,
+    METADATA_PARENT_ID,
+    METADATA_SOURCE_FILE,
+    COLUMN_ID,
+    LEVEL_VIEW_PREFIX,
+    DEFAULT_VIEW_NAME,
 )
 
 if TYPE_CHECKING:
@@ -43,7 +48,7 @@ def get_columns_for_level(dataset: "TacoDataset", level: int) -> list[str]:
     """Get available columns for a specific level by querying DuckDB."""
     validate_level_exists(dataset, level)
 
-    level_view = f"level{level}" if level > 0 else "data"
+    level_view = f"{LEVEL_VIEW_PREFIX}{level}" if level > 0 else DEFAULT_VIEW_NAME
     result = dataset._duckdb.execute(f"DESCRIBE {level_view}").fetchall()
 
     # Result: [(column_name, column_type, null, key, default, extra), ...]
@@ -83,20 +88,20 @@ def build_cascade_join_sql(
     if format_type == "tacocat":
         # TacoCat: parent_id is local index, need source_file
         joins.append(
-            "INNER JOIN level1 l1\n"
-            '      ON l1."internal:parent_id" = l0."internal:parent_id"\n'
-            '     AND l1."internal:source_file" = l0."internal:source_file"'
+            f"INNER JOIN {LEVEL_VIEW_PREFIX}1 l1\n"
+            f'      ON l1."{METADATA_PARENT_ID}" = l0."{METADATA_PARENT_ID}"\n'
+            f'     AND l1."{METADATA_SOURCE_FILE}" = l0."{METADATA_SOURCE_FILE}"'
         )
     else:
         # ZIP/FOLDER: parent_id references parent's ID
-        joins.append('INNER JOIN level1 l1 ON l1."internal:parent_id" = l0.id')
+        joins.append(f'INNER JOIN {LEVEL_VIEW_PREFIX}1 l1 ON l1."{METADATA_PARENT_ID}" = l0.{COLUMN_ID}')
 
     # Subsequent JOINs: level1 → level2 → level3 ...
     for level in range(2, target_level + 1):
         prev_level = level - 1
         joins.append(
-            f"INNER JOIN level{level} l{level} "
-            f'ON l{level}."internal:parent_id" = l{prev_level}.id'
+            f"INNER JOIN {LEVEL_VIEW_PREFIX}{level} l{level} "
+            f'ON l{level}."{METADATA_PARENT_ID}" = l{prev_level}.{COLUMN_ID}'
         )
 
     join_clause = "\n    ".join(joins)
@@ -208,9 +213,6 @@ def parse_datetime(
             f"Expected: string range ('2023-01-01/2023-12-31'), "
             f"datetime object, or tuple"
         )
-
-
-
 
 
 # ============================================================================

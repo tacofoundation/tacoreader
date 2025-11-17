@@ -11,7 +11,23 @@ import warnings
 
 import duckdb
 
-from tacoreader._constants import PROTECTED_COLUMNS, PADDING_PREFIX
+from tacoreader._constants import (
+    PROTECTED_COLUMNS,
+    PADDING_PREFIX,
+    METADATA_GDAL_VSI,
+    METADATA_OFFSET,
+    METADATA_SIZE,
+    METADATA_SOURCE_FILE,
+    METADATA_RELATIVE_PATH,
+    SAMPLE_TYPE_FILE,
+    SAMPLE_TYPE_FOLDER,
+    COLUMN_ID,
+    COLUMN_TYPE,
+    DEFAULT_VIEW_NAME,
+    LEVEL_VIEW_PREFIX,
+    LEVEL_TABLE_SUFFIX,
+    UNION_VIEW_SUFFIX,
+)
 from tacoreader._logging import get_logger
 
 if TYPE_CHECKING:
@@ -24,7 +40,7 @@ logger = get_logger(__name__)
 def _get_available_levels(dataset: "TacoDataset") -> list[str]:
     """Get list of available level views from pit_schema.max_depth()."""
     max_depth = dataset.pit_schema.max_depth()
-    return [f"level{i}" for i in range(max_depth + 1)]
+    return [f"{LEVEL_VIEW_PREFIX}{i}" for i in range(max_depth + 1)]
 
 
 def _validate_column_compatibility(
@@ -63,14 +79,14 @@ def _validate_column_compatibility(
         common_cols = set.intersection(*column_sets)
         all_cols = set.union(*column_sets)
 
-        # Columnas críticas dependen del nivel
-        if level_key == "level0":
+        # Critical columns depend on level
+        if level_key == f"{LEVEL_VIEW_PREFIX}0":
             critical_cols = PROTECTED_COLUMNS - {
-                "internal:source_file",
-                "internal:relative_path",
+                METADATA_SOURCE_FILE,
+                METADATA_RELATIVE_PATH,
             }
         else:
-            critical_cols = PROTECTED_COLUMNS - {"internal:source_file"}
+            critical_cols = PROTECTED_COLUMNS - {METADATA_SOURCE_FILE}
 
         missing_critical = critical_cols - common_cols
         if missing_critical:
@@ -111,7 +127,7 @@ def _validate_column_compatibility(
                     f"  1. Use column_mode='intersection' (default) to keep only common columns\n"
                     f"  2. Use column_mode='fill_missing' to fill missing columns with NULL\n"
                     f"  3. Align columns with SQL before concat:\n"
-                    f"     ds1 = ds1.sql('SELECT {', '.join(sorted(common_cols)[:3])} ... FROM data')"
+                    f"     ds1 = ds1.sql('SELECT {', '.join(sorted(common_cols)[:3])} ... FROM {DEFAULT_VIEW_NAME}')"
                 )
             final_columns[level_key] = common_cols
 
@@ -212,28 +228,13 @@ def concat(
 
     Returns:
         TacoDataset with consolidated data and lazy SQL
-
-    Examples:
-        # Default: intersection mode (keeps only common columns)
-        dataset = concat([ds1, ds2, ds3])
-
-        # Fill missing: keeps all columns, fills with NULL
-        dataset = concat([ds1, ds2, ds3], column_mode="fill_missing")
-
-        # Strict: fails if columns differ
-        dataset = concat([ds1, ds2, ds3], column_mode="strict")
-
-        # Manual alignment (most control)
-        common = "id, type, cloud_cover, internal:offset, internal:size"
-        ds1_aligned = ds1.sql(f"SELECT {common} FROM data")
-        dataset = concat([ds1_aligned, ds2, ds3])
     """
     if len(datasets) < 2:
         raise ValueError(f"Need at least 2 datasets to concat, got {len(datasets)}")
 
     logger.info(f"Concatenating {len(datasets)} datasets...")
 
-    # Validar PIT schemas
+    # Validate PIT schemas
     reference_schema = datasets[0].pit_schema
     for i, ds in enumerate(datasets[1:], 1):
         if not reference_schema.is_compatible(ds.pit_schema):
@@ -246,7 +247,7 @@ def concat(
 
     logger.debug("All schemas compatible")
 
-    # Validar columnas y obtener target columns
+    # Validate columns and get target columns
     logger.debug(f"Validating columns (mode={column_mode})...")
 
     target_columns_by_level = _validate_column_compatibility(datasets, mode=column_mode)
@@ -254,15 +255,15 @@ def concat(
     for level_key, cols in target_columns_by_level.items():
         logger.debug(f"  {level_key}: {len(cols)} columns")
 
-    # Consolidar schemas
+    # Consolidate schemas
     consolidated_schema = _merge_schemas([ds.pit_schema for ds in datasets])
 
     logger.debug("Consolidating levels in-memory...")
 
-    # Crear nueva conexión DuckDB
+    # Create new DuckDB connection
     db = duckdb.connect(":memory:")
 
-    # Cargar extensión espacial
+    # Load spatial extension
     try:
         db.execute("INSTALL spatial")
         db.execute("LOAD spatial")
@@ -270,12 +271,12 @@ def concat(
     except Exception as e:
         logger.debug(f"Spatial extension not available: {e}")
 
-    # Obtener todos los levels disponibles
+    # Get all available levels
     all_levels = set()
     for ds in datasets:
         all_levels.update(_get_available_levels(ds))
 
-    # Para cada level, registrar tablas y crear UNION ALL view
+    # For each level, register tables and create UNION ALL view
     first_format = datasets[0]._format
 
     for level_key in sorted(all_levels):
@@ -289,55 +290,55 @@ def concat(
             if level_key not in available_levels:
                 continue
 
-            # Extraer PyArrow table del dataset original
+            # Extract PyArrow table from original dataset
             arrow_table = ds._duckdb.execute(
-                f"SELECT * FROM {level_key}_table"
+                f"SELECT * FROM {level_key}{LEVEL_TABLE_SUFFIX}"
             ).fetch_arrow_table()
 
-            # Registrar en nueva conexión con nombre único
-            table_name = f"ds{ds_idx}_{level_key}_table"
+            # Register in new connection with unique name
+            table_name = f"ds{ds_idx}_{level_key}{LEVEL_TABLE_SUFFIX}"
             db.register(table_name, arrow_table)
 
-            # Construir SELECT con columnas alineadas + internal:source_file
+            # Build SELECT with aligned columns + internal:source_file
             source_file = Path(ds._path).name
 
-            # Obtener columnas actuales de esta tabla
+            # Get current columns from this table
             current_cols = set(arrow_table.column_names)
 
-            # Construir lista de columnas con alineación
+            # Build column list with alignment
             select_parts = []
             for col in sorted(target_cols):
                 if col in current_cols:
-                    # Escapar nombres con caracteres especiales
+                    # Escape column names with special characters
                     escaped_col = f'"{col}"' if ":" in col or " " in col else col
                     select_parts.append(escaped_col)
                 else:
-                    # Columna faltante - rellenar con NULL
+                    # Missing column - fill with NULL
                     select_parts.append(f'NULL AS "{col}"')
 
-            # Agregar internal:source_file
-            select_parts.append(f"'{source_file}' AS \"internal:source_file\"")
+            # Add internal:source_file
+            select_parts.append(f"'{source_file}' AS \"{METADATA_SOURCE_FILE}\"")
 
             union_parts.append(f"SELECT {', '.join(select_parts)} FROM {table_name}")
 
         if not union_parts:
             continue
 
-        # Crear view consolidada con UNION ALL
+        # Create consolidated view with UNION ALL
         union_query = " UNION ALL ".join(union_parts)
-        db.execute(f"CREATE VIEW {level_key}_union AS {union_query}")
+        db.execute(f"CREATE VIEW {level_key}{UNION_VIEW_SUFFIX} AS {union_query}")
 
         logger.debug(
             f"    {level_key}: {len(union_parts)} dataset(s), {len(target_cols)} columns"
         )
 
-    # Crear views finales con internal:gdal_vsi según formato
+    # Create final views with internal:gdal_vsi by format
     if first_format == "zip":
         root_path = datasets[0]._root_path
 
         for level_key in sorted(all_levels):
             if not db.execute(
-                f"SELECT 1 FROM information_schema.tables WHERE table_name = '{level_key}_union'"
+                f"SELECT 1 FROM information_schema.tables WHERE table_name = '{level_key}{UNION_VIEW_SUFFIX}'"
             ).fetchone():
                 continue
 
@@ -345,10 +346,10 @@ def concat(
                 f"""
                 CREATE VIEW {level_key} AS 
                 SELECT *,
-                  '/vsisubfile/' || "internal:offset" || '_' || 
-                  "internal:size" || ',{root_path}' as "internal:gdal_vsi"
-                FROM {level_key}_union
-                WHERE id NOT LIKE '{PADDING_PREFIX}%'
+                  '/vsisubfile/' || "{METADATA_OFFSET}" || '_' || 
+                  "{METADATA_SIZE}" || ',{root_path}' as "{METADATA_GDAL_VSI}"
+                FROM {level_key}{UNION_VIEW_SUFFIX}
+                WHERE {COLUMN_ID} NOT LIKE '{PADDING_PREFIX}%'
             """
             )
 
@@ -358,22 +359,22 @@ def concat(
 
         for level_key in sorted(all_levels):
             if not db.execute(
-                f"SELECT 1 FROM information_schema.tables WHERE table_name = '{level_key}_union'"
+                f"SELECT 1 FROM information_schema.tables WHERE table_name = '{level_key}{UNION_VIEW_SUFFIX}'"
             ).fetchone():
                 continue
 
-            if level_key == "level0":
+            if level_key == f"{LEVEL_VIEW_PREFIX}0":
                 db.execute(
                     f"""
                     CREATE VIEW {level_key} AS 
                     SELECT *,
                       CASE 
-                        WHEN type = 'FOLDER' THEN '{root}DATA/' || id || '/__meta__'
-                        WHEN type = 'FILE' THEN '{root}DATA/' || id
+                        WHEN {COLUMN_TYPE} = '{SAMPLE_TYPE_FOLDER}' THEN '{root}DATA/' || {COLUMN_ID} || '/__meta__'
+                        WHEN {COLUMN_TYPE} = '{SAMPLE_TYPE_FILE}' THEN '{root}DATA/' || {COLUMN_ID}
                         ELSE NULL
-                      END as "internal:gdal_vsi"
-                    FROM {level_key}_union
-                    WHERE id NOT LIKE '{PADDING_PREFIX}%'
+                      END as "{METADATA_GDAL_VSI}"
+                    FROM {level_key}{UNION_VIEW_SUFFIX}
+                    WHERE {COLUMN_ID} NOT LIKE '{PADDING_PREFIX}%'
                 """
                 )
             else:
@@ -382,12 +383,12 @@ def concat(
                     CREATE VIEW {level_key} AS 
                     SELECT *,
                       CASE 
-                        WHEN type = 'FOLDER' THEN '{root}DATA/' || "internal:relative_path" || '__meta__'
-                        WHEN type = 'FILE' THEN '{root}DATA/' || "internal:relative_path"
+                        WHEN {COLUMN_TYPE} = '{SAMPLE_TYPE_FOLDER}' THEN '{root}DATA/' || "{METADATA_RELATIVE_PATH}" || '__meta__'
+                        WHEN {COLUMN_TYPE} = '{SAMPLE_TYPE_FILE}' THEN '{root}DATA/' || "{METADATA_RELATIVE_PATH}"
                         ELSE NULL
-                      END as "internal:gdal_vsi"
-                    FROM {level_key}_union
-                    WHERE id NOT LIKE '{PADDING_PREFIX}%'
+                      END as "{METADATA_GDAL_VSI}"
+                    FROM {level_key}{UNION_VIEW_SUFFIX}
+                    WHERE {COLUMN_ID} NOT LIKE '{PADDING_PREFIX}%'
                 """
                 )
 
@@ -396,7 +397,7 @@ def concat(
 
         for level_key in sorted(all_levels):
             if not db.execute(
-                f"SELECT 1 FROM information_schema.tables WHERE table_name = '{level_key}_union'"
+                f"SELECT 1 FROM information_schema.tables WHERE table_name = '{level_key}{UNION_VIEW_SUFFIX}'"
             ).fetchone():
                 continue
 
@@ -404,23 +405,23 @@ def concat(
                 f"""
                 CREATE VIEW {level_key} AS 
                 SELECT *,
-                  '/vsisubfile/' || "internal:offset" || '_' || 
-                  "internal:size" || ',{base_path}' || "internal:source_file"
-                  as "internal:gdal_vsi"
-                FROM {level_key}_union
-                WHERE id NOT LIKE '{PADDING_PREFIX}%'
+                  '/vsisubfile/' || "{METADATA_OFFSET}" || '_' || 
+                  "{METADATA_SIZE}" || ',{base_path}' || "{METADATA_SOURCE_FILE}"
+                  as "{METADATA_GDAL_VSI}"
+                FROM {level_key}{UNION_VIEW_SUFFIX}
+                WHERE {COLUMN_ID} NOT LIKE '{PADDING_PREFIX}%'
             """
             )
 
-    # Crear 'data' view
-    db.execute("CREATE VIEW data AS SELECT * FROM level0")
+    # Create 'data' view
+    db.execute(f"CREATE VIEW {DEFAULT_VIEW_NAME} AS SELECT * FROM {LEVEL_VIEW_PREFIX}0")
 
     total_samples = consolidated_schema.root["n"]
     logger.info(
         f"Concatenated {len(datasets)} datasets ({total_samples:,} total samples)"
     )
 
-    # Construir TacoDataset
+    # Build TacoDataset
     from tacoreader.dataset import TacoDataset
 
     dataset = TacoDataset.model_construct(
@@ -439,7 +440,7 @@ def concat(
         _format=first_format,
         _collection=datasets[0]._collection,
         _duckdb=db,
-        _view_name="data",
+        _view_name=DEFAULT_VIEW_NAME,
         _root_path=datasets[0]._root_path,
     )
 

@@ -31,6 +31,8 @@ Main classes:
 
 from typing import Literal, TypedDict
 
+from tacoreader._constants import SAMPLE_TYPE_FILE, SAMPLE_TYPE_FOLDER, VALID_SAMPLE_TYPES
+
 
 class PITRootLevel(TypedDict):
     """Root level descriptor (level 0)."""
@@ -86,10 +88,10 @@ class PITSchema:
         - All child types are valid
         """
         # Validate root type
-        if self.root["type"] not in ("FOLDER", "FILE"):
+        if self.root["type"] not in VALID_SAMPLE_TYPES:
             raise ValueError(
                 f"Invalid root type: {self.root['type']}\n"
-                f"Must be 'FOLDER' or 'FILE'"
+                f"Must be '{SAMPLE_TYPE_FILE}' or '{SAMPLE_TYPE_FOLDER}'"
             )
 
         # Validate hierarchy
@@ -129,7 +131,7 @@ class PITSchema:
 
                 # Validate child types
                 for child_type in types:
-                    if child_type not in ("FOLDER", "FILE"):
+                    if child_type not in VALID_SAMPLE_TYPES:
                         raise ValueError(
                             f"Depth {depth_str}, pattern {i}: invalid type '{child_type}'"
                         )

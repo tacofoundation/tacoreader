@@ -3,39 +3,45 @@ Remote I/O operations for TACO datasets.
 
 Centralized remote file ops (HTTP, S3, GCS, Azure).
 Uses obstore backend but designed for easy replacement.
-
-Main functions:
-    download_bytes: Download complete file
-    download_range: Download byte range
-    get_file_size: Get remote file size
+TODO: The use of obstore is temporary until get time to review OpenDAL properly.
 """
 
 import obstore as obs
+
+from tacoreader._constants import PROTOCOL_MAPPINGS
 
 
 def _create_store(url: str):
     """
     Create obstore ObjectStore from URL.
 
-    Supports: s3://, gs://, az://, http://, https://
+    Supports all protocols defined in PROTOCOL_MAPPINGS:
+    - s3:// → S3Store
+    - gs:// → GCSStore
+    - az://, azure:// → AzureStore
+    - http://, https:// → HTTPStore
     """
-    if url.startswith("s3://"):
-        return obs.store.S3Store.from_url(url)
-
-    elif url.startswith("gs://"):
-        return obs.store.GCSStore.from_url(url)
-
-    elif url.startswith("az://") or url.startswith("azure://"):
-        return obs.store.AzureStore.from_url(url)
-
-    elif url.startswith("http://") or url.startswith("https://"):
-        return obs.store.HTTPStore.from_url(url)
-
-    else:
-        raise ValueError(
-            f"Unsupported URL scheme: {url}\n"
-            f"Supported: s3://, gs://, az://, http://, https://"
-        )
+    # Build mapping from standard protocol to store class
+    protocol_handlers = {
+        PROTOCOL_MAPPINGS["s3"]["standard"]: obs.store.S3Store,
+        PROTOCOL_MAPPINGS["gcs"]["standard"]: obs.store.GCSStore,
+        PROTOCOL_MAPPINGS["azure"]["standard"]: obs.store.AzureStore,
+        PROTOCOL_MAPPINGS["azure"]["alt"]: obs.store.AzureStore,  # azure:// alias
+        PROTOCOL_MAPPINGS["http"]["standard"]: obs.store.HTTPStore,
+        PROTOCOL_MAPPINGS["https"]["standard"]: obs.store.HTTPStore,
+    }
+    
+    # Find matching protocol
+    for protocol, store_class in protocol_handlers.items():
+        if url.startswith(protocol):
+            return store_class.from_url(url)
+    
+    # Build error message with all supported protocols
+    supported = sorted(set(PROTOCOL_MAPPINGS[p]["standard"] for p in PROTOCOL_MAPPINGS))
+    raise ValueError(
+        f"Unsupported URL scheme: {url}\n"
+        f"Supported: {', '.join(supported)}"
+    )
 
 
 def download_bytes(url: str, subpath: str = "") -> bytes:
@@ -63,6 +69,15 @@ def download_range(url: str, offset: int, size: int, subpath: str = "") -> bytes
 
     Efficient for reading portions of large files without full download.
     Uses HTTP Range requests or cloud storage equivalent.
+    
+    Args:
+        url: Base URL
+        offset: Starting byte position
+        size: Number of bytes to read
+        subpath: Optional subpath within URL
+        
+    Returns:
+        Requested byte range
     """
     try:
         store = _create_store(url)
@@ -78,7 +93,14 @@ def get_file_size(url: str, subpath: str = "") -> int | None:
     """
     Get remote file size in bytes.
 
-    Returns None if unavailable.
+    Returns None if size unavailable (e.g., streamed HTTP responses).
+    
+    Args:
+        url: Base URL
+        subpath: Optional subpath within URL
+        
+    Returns:
+        File size in bytes, or None if unavailable
     """
     try:
         store = _create_store(url)

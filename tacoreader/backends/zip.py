@@ -21,7 +21,14 @@ import tacozip
 
 from tacoreader.backends.base import TacoBackend
 from tacoreader.io import download_range
-from tacoreader._constants import ZIP_MAX_GAP_SIZE
+from tacoreader._constants import (
+    ZIP_MAX_GAP_SIZE,
+    METADATA_GDAL_VSI,
+    METADATA_OFFSET,
+    METADATA_SIZE,
+    LEVEL_VIEW_PREFIX,
+    LEVEL_TABLE_SUFFIX,
+)
 from tacoreader._logging import get_logger
 from tacoreader.dataset import TacoDataset
 from tacoreader.utils.vsi import to_vsi_root
@@ -130,7 +137,7 @@ class ZipBackend(TacoBackend):
             reader = pa.BufferReader(parquet_bytes)
             arrow_table = pq.read_table(reader)
 
-            table_name = f"level{i}_table"
+            table_name = f"{LEVEL_VIEW_PREFIX}{i}{LEVEL_TABLE_SUFFIX}"
             db.register(table_name, arrow_table)
             level_ids.append(i)
 
@@ -195,15 +202,15 @@ class ZipBackend(TacoBackend):
         filter_clause = self._build_view_filter()
 
         for level_id in level_ids:
-            table_name = f"level{level_id}_table"
-            view_name = f"level{level_id}"
+            table_name = f"{LEVEL_VIEW_PREFIX}{level_id}{LEVEL_TABLE_SUFFIX}"
+            view_name = f"{LEVEL_VIEW_PREFIX}{level_id}"
 
             db.execute(
                 f"""
                 CREATE VIEW {view_name} AS 
                 SELECT *,
-                  '/vsisubfile/' || "internal:offset" || '_' || 
-                  "internal:size" || ',{root_path}' as "internal:gdal_vsi"
+                  '/vsisubfile/' || "{METADATA_OFFSET}" || '_' || 
+                  "{METADATA_SIZE}" || ',{root_path}' as "{METADATA_GDAL_VSI}"
                 FROM {table_name}
                 WHERE {filter_clause}
             """
@@ -224,11 +231,6 @@ class ZipBackend(TacoBackend):
 
         Returns:
             List of groups: [[(idx, offset, size), ...], ...]
-
-        Example:
-            header = [(1000, 50000), (51000, 30000), (5000000, 20000)]
-            -> [[(0, 1000, 50000), (1, 51000, 30000)], [(2, 5000000, 20000)]]
-            First two grouped (gap=1000), third separate (gap=4.9MB)
         """
         if not header:
             return []

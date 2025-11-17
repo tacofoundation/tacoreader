@@ -22,6 +22,16 @@ from tacoreader.io import download_bytes
 from tacoreader._logging import get_logger
 from tacoreader.dataset import TacoDataset
 from tacoreader.utils.vsi import to_vsi_root
+from tacoreader._constants import (
+    SAMPLE_TYPE_FILE,
+    SAMPLE_TYPE_FOLDER,
+    COLUMN_TYPE,
+    COLUMN_ID,
+    METADATA_GDAL_VSI,
+    METADATA_RELATIVE_PATH,
+    LEVEL_VIEW_PREFIX,
+    LEVEL_TABLE_SUFFIX,
+)
 
 logger = get_logger(__name__)
 
@@ -74,13 +84,13 @@ class FolderBackend(TacoBackend):
                 )
 
             for i in range(6):  # Max 6 levels (0-5)
-                level_file = metadata_dir / f"level{i}.parquet"
+                level_file = metadata_dir / f"{LEVEL_VIEW_PREFIX}{i}.parquet"
 
                 if not level_file.exists():
                     break
 
                 # Create table reading directly from disk
-                table_name = f"level{i}_table"
+                table_name = f"{LEVEL_VIEW_PREFIX}{i}{LEVEL_TABLE_SUFFIX}"
                 db.execute(
                     f"CREATE TABLE {table_name} AS SELECT * FROM read_parquet('{level_file}')"
                 )
@@ -93,14 +103,14 @@ class FolderBackend(TacoBackend):
             for i in range(6):
                 try:
                     # Download parquet
-                    parquet_bytes = download_bytes(path, f"METADATA/level{i}.parquet")
+                    parquet_bytes = download_bytes(path, f"METADATA/{LEVEL_VIEW_PREFIX}{i}.parquet")
 
                     # Load to PyArrow from bytes
                     reader = pa.BufferReader(parquet_bytes)
                     arrow_table = pq.read_table(reader)
 
                     # Register in DuckDB (all in memory)
-                    table_name = f"level{i}_table"
+                    table_name = f"{LEVEL_VIEW_PREFIX}{i}{LEVEL_TABLE_SUFFIX}"
                     db.register(table_name, arrow_table)
 
                     level_ids.append(i)
@@ -114,7 +124,7 @@ class FolderBackend(TacoBackend):
         if not level_ids:
             raise ValueError(
                 f"No metadata files found in {path}/METADATA/\n"
-                f"Expected at least level0.parquet"
+                f"Expected at least {LEVEL_VIEW_PREFIX}0.parquet"
             )
 
         # Finalize dataset using common method
@@ -176,8 +186,8 @@ class FolderBackend(TacoBackend):
         filter_clause = self._build_view_filter()
 
         for level_id in level_ids:
-            table_name = f"level{level_id}_table"
-            view_name = f"level{level_id}"
+            table_name = f"{LEVEL_VIEW_PREFIX}{level_id}{LEVEL_TABLE_SUFFIX}"
+            view_name = f"{LEVEL_VIEW_PREFIX}{level_id}"
 
             if level_id == 0:
                 # Level 0: use id directly (no relative_path column)
@@ -186,10 +196,10 @@ class FolderBackend(TacoBackend):
                     CREATE VIEW {view_name} AS 
                     SELECT *,
                       CASE 
-                        WHEN type = 'FOLDER' THEN '{root}DATA/' || id || '/__meta__'
-                        WHEN type = 'FILE' THEN '{root}DATA/' || id
+                        WHEN {COLUMN_TYPE} = '{SAMPLE_TYPE_FOLDER}' THEN '{root}DATA/' || {COLUMN_ID} || '/__meta__'
+                        WHEN {COLUMN_TYPE} = '{SAMPLE_TYPE_FILE}' THEN '{root}DATA/' || {COLUMN_ID}
                         ELSE NULL
-                      END as "internal:gdal_vsi"
+                      END as "{METADATA_GDAL_VSI}"
                     FROM {table_name}
                     WHERE {filter_clause}
                 """
@@ -201,10 +211,10 @@ class FolderBackend(TacoBackend):
                     CREATE VIEW {view_name} AS 
                     SELECT *,
                       CASE 
-                        WHEN type = 'FOLDER' THEN '{root}DATA/' || "internal:relative_path" || '__meta__'
-                        WHEN type = 'FILE' THEN '{root}DATA/' || "internal:relative_path"
+                        WHEN {COLUMN_TYPE} = '{SAMPLE_TYPE_FOLDER}' THEN '{root}DATA/' || "{METADATA_RELATIVE_PATH}" || '__meta__'
+                        WHEN {COLUMN_TYPE} = '{SAMPLE_TYPE_FILE}' THEN '{root}DATA/' || "{METADATA_RELATIVE_PATH}"
                         ELSE NULL
-                      END as "internal:gdal_vsi"
+                      END as "{METADATA_GDAL_VSI}"
                     FROM {table_name}
                     WHERE {filter_clause}
                 """

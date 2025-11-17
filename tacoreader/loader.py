@@ -10,7 +10,16 @@ from tacoreader.dataset import TacoDataset
 from tacoreader.utils.format import detect_format
 from tacoreader.utils.vsi import to_vsi_root
 from tacoreader._legacy import is_legacy_format, raise_legacy_error
-from tacoreader._constants import PADDING_PREFIX
+from tacoreader._constants import (
+    PADDING_PREFIX,
+    METADATA_GDAL_VSI,
+    METADATA_OFFSET,
+    METADATA_SIZE,
+    METADATA_SOURCE_FILE,
+    LEVEL_VIEW_PREFIX,
+    COLUMN_ID,
+    DEFAULT_VIEW_NAME,
+)
 
 
 def load(
@@ -32,23 +41,6 @@ def load(
 
     Returns:
         TacoDataset with lazy SQL interface
-
-    Examples:
-        # Single file
-        ds = load("data.tacozip")
-
-        # Multiple files (auto-concatenated)
-        ds = load(["part1.tacozip", "part2.tacozip"])
-
-        # S3
-        ds = load("s3://bucket/data.tacozip")
-
-        # TacoCat with ZIPs elsewhere
-        ds = load("__TACOCAT__", base_path="s3://other-bucket/zips/")
-
-        # Lazy queries
-        peru = ds.sql("SELECT * FROM data WHERE country = 'Peru'")
-        df = peru.data  # Materialization
     """
     # Handle list of paths
     if isinstance(path, list):
@@ -81,11 +73,11 @@ def load(
         max_depth = dataset.pit_schema.max_depth()
 
         # Drop 'data' view first (depends on level0)
-        dataset._duckdb.execute("DROP VIEW IF EXISTS data")
+        dataset._duckdb.execute(f"DROP VIEW IF EXISTS {DEFAULT_VIEW_NAME}")
 
         # Recreate level views with new base_path
         for i in range(max_depth + 1):
-            level_key = f"level{i}"
+            level_key = f"{LEVEL_VIEW_PREFIX}{i}"
 
             dataset._duckdb.execute(f"DROP VIEW IF EXISTS {level_key}")
 
@@ -93,16 +85,16 @@ def load(
                 f"""
                 CREATE VIEW {level_key} AS 
                 SELECT *,
-                  '/vsisubfile/' || "internal:offset" || '_' || 
-                  "internal:size" || ',{base_vsi}' || "internal:source_file"
-                  as "internal:gdal_vsi"
+                  '/vsisubfile/' || "{METADATA_OFFSET}" || '_' || 
+                  "{METADATA_SIZE}" || ',{base_vsi}' || "{METADATA_SOURCE_FILE}"
+                  as "{METADATA_GDAL_VSI}"
                 FROM {level_key}_table
-                WHERE id NOT LIKE '{PADDING_PREFIX}%'
+                WHERE {COLUMN_ID} NOT LIKE '{PADDING_PREFIX}%'
             """
             )
 
         # Recreate 'data' view
-        dataset._duckdb.execute("CREATE VIEW data AS SELECT * FROM level0")
+        dataset._duckdb.execute(f"CREATE VIEW {DEFAULT_VIEW_NAME} AS SELECT * FROM {LEVEL_VIEW_PREFIX}0")
         dataset._root_path = base_vsi
 
         return dataset
