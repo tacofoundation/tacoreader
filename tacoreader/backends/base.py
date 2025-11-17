@@ -173,6 +173,9 @@ class TacoBackend(ABC):
             _duckdb=db,
             _view_name=DEFAULT_VIEW_NAME,
             _root_path=root_path,
+            # JOIN tracking (for export validation in tacotoolbox)
+            _has_level1_joins=False,
+            _joined_levels=set(),
         )
 
         return dataset

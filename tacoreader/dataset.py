@@ -5,6 +5,7 @@ Provides STAC-like metadata with DuckDB connection for lazy SQL queries.
 Queries not executed until .data is called.
 """
 
+import re
 import uuid
 from typing import Any, Literal
 
@@ -26,7 +27,8 @@ class TacoDataset(BaseModel):
         title, curators, keywords, pit_schema
 
     Private attributes:
-        _path, _format, _collection, _duckdb, _view_name, _root_path
+        _path, _format, _collection, _duckdb, _view_name, _root_path,
+        _has_level1_joins, _joined_levels
 
     Examples:
         ds = load("data.tacozip")
@@ -60,6 +62,10 @@ class TacoDataset(BaseModel):
     _duckdb: Any = PrivateAttr(default=None)
     _view_name: str = PrivateAttr(default=DEFAULT_VIEW_NAME)
     _root_path: str = PrivateAttr(default="")
+    
+    # JOIN tracking (for export validation in tacotoolbox)
+    _has_level1_joins: bool = PrivateAttr(default=False)
+    _joined_levels: set[str] = PrivateAttr(default_factory=set)
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
@@ -126,6 +132,22 @@ class TacoDataset(BaseModel):
         ).fetchone()[0]
 
         new_schema = self.pit_schema.with_n(new_n)
+        
+        # Detect JOINs with level1+ tables (case insensitive)
+        join_pattern = r"\b(?:JOIN|FROM)\s+(level[1-5])\b"
+        matches = re.findall(join_pattern, query, re.IGNORECASE)
+        
+        # Track if this query introduces level1+ JOINs
+        has_new_joins = len(matches) > 0
+        new_joined_levels = set(matches) if has_new_joins else set()
+        
+        # Inherit tracking from parent dataset
+        inherited_has_joins = self._has_level1_joins
+        inherited_joined_levels = self._joined_levels.copy()
+        
+        # Merge with current query's JOINs
+        final_has_joins = inherited_has_joins or has_new_joins
+        final_joined_levels = inherited_joined_levels.union(new_joined_levels)
 
         return TacoDataset.model_construct(
             id=self.id,
@@ -145,6 +167,8 @@ class TacoDataset(BaseModel):
             _duckdb=self._duckdb,
             _view_name=new_view_name,
             _root_path=self._root_path,
+            _has_level1_joins=final_has_joins,  # Track JOINs for export validation
+            _joined_levels=final_joined_levels,  # Track which levels were joined
         )
 
     # ========================================================================
@@ -267,21 +291,49 @@ class TacoDataset(BaseModel):
         lines.append(f"├── Description: {desc_short}")
         lines.append(f"├── Tasks: {', '.join(self.tasks)}")
 
-        if "spatial" in self.extent:
-            spatial = self.extent["spatial"]
-            lines.append(
-                f"├── Spatial Extent: [{spatial[0]:.1f}, {spatial[1]:.1f}, "
-                f"{spatial[2]:.1f}, {spatial[3]:.1f}]"
-            )
+        # Spatial extent (always defined by auto_calculate_extent)
+        spatial = self.extent["spatial"]
+        lines.append(
+            f"├── Spatial Extent: [{spatial[0]:.2f}°, {spatial[1]:.2f}°, "
+            f"{spatial[2]:.2f}°, {spatial[3]:.2f}°]"
+        )
 
-        if self.extent.get("temporal"):
+        # Temporal extent (can be None for atemporal datasets)
+        if not self.extent.get("temporal"):
+            lines.append("├── Temporal Extent: Not defined (atemporal dataset)")
+        else:
             temporal = self.extent["temporal"]
-            lines.append(f"├── Temporal Extent: {temporal[0]} -> {temporal[1]}")
+            # Format dates nicely (remove time if it's midnight)
+            start_str = self._format_temporal_string(temporal[0])
+            end_str = self._format_temporal_string(temporal[1])
+            lines.append(f"├── Temporal Extent: {start_str} → {end_str}")
 
         lines.append("│")
         lines.append(f"└── Level 0: {self.pit_schema.root['n']} rows")
 
         return "\n".join(lines)
+
+    def _format_temporal_string(self, iso_string: str) -> str:
+        """
+        Format ISO 8601 datetime string for display.
+
+        If time is midnight (00:00:00), show only date.
+        Otherwise show full datetime.
+        """
+        # Remove 'Z' suffix for parsing
+        clean_str = iso_string.replace("Z", "")
+
+        # Check if it ends with T00:00:00 (midnight)
+        if "T00:00:00" in clean_str:
+            # Return only date part
+            return clean_str.split("T")[0]
+        else:
+            # Return full datetime (YYYY-MM-DD HH:MM:SS)
+            date_part, time_part = clean_str.split("T")
+            # Truncate microseconds if present
+            if "." in time_part:
+                time_part = time_part.split(".")[0]
+            return f"{date_part} {time_part}"
 
     def _repr_html_(self):
         """Rich HTML representation for Jupyter notebooks."""
