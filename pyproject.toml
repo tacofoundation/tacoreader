@@ -56,7 +56,7 @@ select = [
     "I", "C90", "E", "W", "F", "PGH", "UP",
     "RUF", "TRY"
 ]
-ignore = ["E501", "E731", "TRY003", "F401", "F821", "S311", "A004", "A001", "UP017"]
+ignore = ["E501", "E731", "TRY003", "F401", "F821", "S311", "A004", "A001", "UP017", "S608"]
 per-file-ignores = { "tests/*" = ["S101"],  "tacoreader/v1/*" = ["ALL"], "tacoreader/_nest_asyncio.py" = ["ALL"] }
 
 [tool.ruff.format]

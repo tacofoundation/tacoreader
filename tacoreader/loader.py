@@ -5,21 +5,21 @@ Main entry point. Auto-detects format and dispatches to backend.
 Supports single files or lists (automatically concatenated).
 """
 
-from tacoreader.backends import create_backend, load_dataset
-from tacoreader.dataset import TacoDataset
-from tacoreader.utils.format import detect_format
-from tacoreader.utils.vsi import to_vsi_root
-from tacoreader._legacy import is_legacy_format, raise_legacy_error
 from tacoreader._constants import (
-    PADDING_PREFIX,
+    COLUMN_ID,
+    DEFAULT_VIEW_NAME,
+    LEVEL_VIEW_PREFIX,
     METADATA_GDAL_VSI,
     METADATA_OFFSET,
     METADATA_SIZE,
     METADATA_SOURCE_FILE,
-    LEVEL_VIEW_PREFIX,
-    COLUMN_ID,
-    DEFAULT_VIEW_NAME,
+    PADDING_PREFIX,
 )
+from tacoreader._legacy import is_legacy_format, raise_legacy_error
+from tacoreader.backends import create_backend, load_dataset
+from tacoreader.dataset import TacoDataset
+from tacoreader.utils.format import detect_format
+from tacoreader.utils.vsi import to_vsi_root
 
 
 def load(
@@ -83,9 +83,9 @@ def load(
 
             dataset._duckdb.execute(
                 f"""
-                CREATE VIEW {level_key} AS 
+                CREATE VIEW {level_key} AS
                 SELECT *,
-                  '/vsisubfile/' || "{METADATA_OFFSET}" || '_' || 
+                  '/vsisubfile/' || "{METADATA_OFFSET}" || '_' ||
                   "{METADATA_SIZE}" || ',{base_vsi}' || "{METADATA_SOURCE_FILE}"
                   as "{METADATA_GDAL_VSI}"
                 FROM {level_key}_table

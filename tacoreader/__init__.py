@@ -1,11 +1,11 @@
 import importlib.metadata as _metadata
 import logging
 
+from tacoreader._logging import disable_logging, setup_basic_logging
 from tacoreader.concat import concat
 from tacoreader.dataframe import TacoDataFrame
 from tacoreader.dataset import TacoDataset
 from tacoreader.loader import load
-from tacoreader._logging import setup_basic_logging, disable_logging
 
 __version__ = _metadata.version("tacoreader")
 

@@ -8,10 +8,10 @@ Pure string operations - no I/O, no side effects.
 from typing import Literal
 
 from tacoreader._constants import (
+    ALL_VSI_PREFIXES,
+    CLOUD_PROTOCOLS,
     TACOCAT_FILENAME,
     TACOZIP_EXTENSIONS,
-    CLOUD_PROTOCOLS,
-    ALL_VSI_PREFIXES,
 )
 
 
@@ -36,8 +36,10 @@ def detect_format(path: str) -> Literal["zip", "folder", "tacocat"]:
 def is_remote(path: str) -> bool:
     """Check if path requires network access"""
 
-    # Combine cloud protocols and VSI prefixes
-    remote_prefixes = CLOUD_PROTOCOLS + ALL_VSI_PREFIXES
+    # Combine cloud protocols and VSI prefixes, filtering out None values
+    remote_prefixes = tuple(
+        p for p in CLOUD_PROTOCOLS + ALL_VSI_PREFIXES if p is not None
+    )
     return path.startswith(remote_prefixes)
 
 

@@ -17,21 +17,21 @@ import duckdb
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from tacoreader.backends.base import TacoBackend
-from tacoreader.io import download_bytes
-from tacoreader._logging import get_logger
-from tacoreader.dataset import TacoDataset
-from tacoreader.utils.vsi import to_vsi_root
 from tacoreader._constants import (
-    SAMPLE_TYPE_FILE,
-    SAMPLE_TYPE_FOLDER,
-    COLUMN_TYPE,
     COLUMN_ID,
+    COLUMN_TYPE,
+    LEVEL_TABLE_SUFFIX,
+    LEVEL_VIEW_PREFIX,
     METADATA_GDAL_VSI,
     METADATA_RELATIVE_PATH,
-    LEVEL_VIEW_PREFIX,
-    LEVEL_TABLE_SUFFIX,
+    SAMPLE_TYPE_FILE,
+    SAMPLE_TYPE_FOLDER,
 )
+from tacoreader._logging import get_logger
+from tacoreader.backends.base import TacoBackend
+from tacoreader.dataset import TacoDataset
+from tacoreader.remote_io import download_bytes
+from tacoreader.utils.vsi import to_vsi_root
 
 logger = get_logger(__name__)
 
@@ -164,7 +164,7 @@ class FolderBackend(TacoBackend):
         except json.JSONDecodeError:
             raise  # Already has consistent error message
         except Exception as e:
-            raise OSError(f"Failed to read COLLECTION.json from {path}: {e}")
+            raise OSError(f"Failed to read COLLECTION.json from {path}: {e}") from e
 
     def setup_duckdb_views(
         self,
@@ -195,9 +195,9 @@ class FolderBackend(TacoBackend):
                 # Level 0: use id directly (no relative_path column)
                 db.execute(
                     f"""
-                    CREATE VIEW {view_name} AS 
+                    CREATE VIEW {view_name} AS
                     SELECT *,
-                      CASE 
+                      CASE
                         WHEN {COLUMN_TYPE} = '{SAMPLE_TYPE_FOLDER}' THEN '{root}DATA/' || {COLUMN_ID} || '/__meta__'
                         WHEN {COLUMN_TYPE} = '{SAMPLE_TYPE_FILE}' THEN '{root}DATA/' || {COLUMN_ID}
                         ELSE NULL
@@ -210,9 +210,9 @@ class FolderBackend(TacoBackend):
                 # Level 1+: use internal:relative_path for nested structure
                 db.execute(
                     f"""
-                    CREATE VIEW {view_name} AS 
+                    CREATE VIEW {view_name} AS
                     SELECT *,
-                      CASE 
+                      CASE
                         WHEN {COLUMN_TYPE} = '{SAMPLE_TYPE_FOLDER}' THEN '{root}DATA/' || "{METADATA_RELATIVE_PATH}" || '__meta__'
                         WHEN {COLUMN_TYPE} = '{SAMPLE_TYPE_FILE}' THEN '{root}DATA/' || "{METADATA_RELATIVE_PATH}"
                         ELSE NULL

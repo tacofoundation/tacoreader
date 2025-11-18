@@ -7,12 +7,15 @@ Queries not executed until .data is called.
 
 import re
 import uuid
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, PrivateAttr
 
-from tacoreader.schema import PITSchema
 from tacoreader._constants import DEFAULT_VIEW_NAME
+from tacoreader.schema import PITSchema
+
+if TYPE_CHECKING:
+    from tacoreader.dataframe import TacoDataFrame
 
 
 class TacoDataset(BaseModel):
@@ -62,7 +65,7 @@ class TacoDataset(BaseModel):
     _duckdb: Any = PrivateAttr(default=None)
     _view_name: str = PrivateAttr(default=DEFAULT_VIEW_NAME)
     _root_path: str = PrivateAttr(default="")
-    
+
     # JOIN tracking (for export validation in tacotoolbox)
     _has_level1_joins: bool = PrivateAttr(default=False)
     _joined_levels: set[str] = PrivateAttr(default_factory=set)
@@ -132,19 +135,19 @@ class TacoDataset(BaseModel):
         ).fetchone()[0]
 
         new_schema = self.pit_schema.with_n(new_n)
-        
+
         # Detect JOINs with level1+ tables (case insensitive)
         join_pattern = r"\b(?:JOIN|FROM)\s+(level[1-5])\b"
         matches = re.findall(join_pattern, query, re.IGNORECASE)
-        
+
         # Track if this query introduces level1+ JOINs
         has_new_joins = len(matches) > 0
         new_joined_levels = set(matches) if has_new_joins else set()
-        
+
         # Inherit tracking from parent dataset
         inherited_has_joins = self._has_level1_joins
         inherited_joined_levels = self._joined_levels.copy()
-        
+
         # Merge with current query's JOINs
         final_has_joins = inherited_has_joins or has_new_joins
         final_joined_levels = inherited_joined_levels.union(new_joined_levels)
@@ -200,10 +203,9 @@ class TacoDataset(BaseModel):
         validate_level_exists(self, level)
 
         # Get columns for target level
-        if level == 0:
-            current_cols = self.data.columns
-        else:
-            current_cols = get_columns_for_level(self, level)
+        current_cols = (
+            self.data.columns if level == 0 else get_columns_for_level(self, level)
+        )
 
         # Detect or validate geometry column
         if geometry_col == "auto":
@@ -249,10 +251,9 @@ class TacoDataset(BaseModel):
 
         validate_level_exists(self, level)
 
-        if level == 0:
-            current_cols = self.data.columns
-        else:
-            current_cols = get_columns_for_level(self, level)
+        current_cols = (
+            self.data.columns if level == 0 else get_columns_for_level(self, level)
+        )
 
         if time_col == "auto":
             time_col = detect_time_column(current_cols)

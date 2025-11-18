@@ -5,7 +5,7 @@ Pure functions for converting between standard paths and GDAL Virtual File Syste
 No I/O operations - only string transformations.
 """
 
-from tacoreader._constants import PROTOCOL_MAPPINGS, ALL_VSI_PREFIXES
+from tacoreader._constants import ALL_VSI_PREFIXES, PROTOCOL_MAPPINGS
 
 
 def to_vsi_root(path: str) -> str:

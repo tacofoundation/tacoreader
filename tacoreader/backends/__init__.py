@@ -13,7 +13,7 @@ from tacoreader.dataset import TacoDataset
 
 def create_backend(format_type: str) -> TacoBackend:
     """Create backend instance: 'zip', 'folder', or 'tacocat'."""
-    backends = {
+    backends: dict[str, type[TacoBackend]] = {
         "zip": ZipBackend,
         "folder": FolderBackend,
         "tacocat": TacoCatBackend,
@@ -37,7 +37,6 @@ def load_dataset(path: str, format_type: str) -> TacoDataset:
 
 __all__ = [
     "FolderBackend",
-    "TacoBackend",
     "TacoCatBackend",
     "ZipBackend",
     "create_backend",

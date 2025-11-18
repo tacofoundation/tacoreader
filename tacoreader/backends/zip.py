@@ -19,18 +19,18 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import tacozip
 
-from tacoreader.backends.base import TacoBackend
-from tacoreader.io import download_range
 from tacoreader._constants import (
-    ZIP_MAX_GAP_SIZE,
+    LEVEL_TABLE_SUFFIX,
+    LEVEL_VIEW_PREFIX,
     METADATA_GDAL_VSI,
     METADATA_OFFSET,
     METADATA_SIZE,
-    LEVEL_VIEW_PREFIX,
-    LEVEL_TABLE_SUFFIX,
+    ZIP_MAX_GAP_SIZE,
 )
 from tacoreader._logging import get_logger
+from tacoreader.backends.base import TacoBackend
 from tacoreader.dataset import TacoDataset
+from tacoreader.remote_io import download_range
 from tacoreader.utils.vsi import to_vsi_root
 
 logger = get_logger(__name__)
@@ -63,98 +63,31 @@ class ZipBackend(TacoBackend):
 
         # Read TACO_HEADER to get offsets
         header = self._read_taco_header(path)
-
         if not header:
             raise ValueError(f"Empty TACO_HEADER in {path}")
-
         logger.debug(f"Read TACO_HEADER with {len(header)} entries")
 
-        is_local = Path(path).exists()
-
-        # Group files by proximity for efficient batch downloading
-        if is_local:
-            file_groups = [
-                [(i, offset, size)] for i, (offset, size) in enumerate(header)
-            ]
-        else:
-            file_groups = self._group_files_by_proximity(header)
-            logger.debug(
-                f"Grouped {len(header)} files into {len(file_groups)} request(s)"
-            )
-
-        # Download and parse all files
-        all_files_data = {}  # {index: bytes}
-
-        for group in file_groups:
-            if not group:
-                continue
-
-            # Calculate range for this group
-            first_idx, first_offset, first_size = group[0]
-            last_idx, last_offset, last_size = group[-1]
-
-            range_start = first_offset
-            range_end = last_offset + last_size
-            range_size = range_end - range_start
-
-            logger.debug(
-                f"Downloading group: {len(group)} files, {range_size/1024:.1f}KB"
-            )
-
-            # Download entire group as single blob
-            if is_local:
-                blob = self._read_blob_local(path, range_start, range_size)
-            else:
-                blob = self._read_blob_remote(path, range_start, range_size)
-
-            # Extract individual files from blob
-            for idx, offset, size in group:
-                relative_offset = offset - range_start
-                file_bytes = blob[relative_offset : relative_offset + size]
-                all_files_data[idx] = file_bytes
+        # Download all files
+        all_files_data = self._download_all_files(path, header)
 
         # Parse COLLECTION.json (last file in header)
         collection_bytes = all_files_data[len(header) - 1]
         collection = self._parse_collection_json(collection_bytes, path)
         logger.debug("Parsed COLLECTION.json")
 
-        # Setup DuckDB with spatial
+        # Setup DuckDB and register tables
         db = self._setup_duckdb_connection()
-
-        # Register Parquet tables from parsed bytes
-        level_ids = []
-
-        for i in range(len(header) - 1):  # All except last (COLLECTION.json)
-            if i not in all_files_data:
-                continue
-
-            parquet_bytes = all_files_data[i]
-
-            if len(parquet_bytes) == 0:
-                continue
-
-            # Load to PyArrow and register in DuckDB
-            reader = pa.BufferReader(parquet_bytes)
-            arrow_table = pq.read_table(reader)
-
-            table_name = f"{LEVEL_VIEW_PREFIX}{i}{LEVEL_TABLE_SUFFIX}"
-            db.register(table_name, arrow_table)
-            level_ids.append(i)
-
-            logger.debug(
-                f"Registered {table_name} in DuckDB ({len(parquet_bytes)} bytes)"
-            )
+        level_ids = self._register_parquet_tables(db, all_files_data, header)
 
         if not level_ids:
             raise ValueError(f"No metadata levels found in ZIP: {path}")
 
-        # Finalize dataset using common method
+        # Finalize dataset
         root_path = to_vsi_root(path)
         dataset = self._finalize_dataset(db, path, root_path, collection, level_ids)
 
         total_time = time.time() - t_start
         logger.info(f"Loaded ZIP in {total_time:.2f}s")
-
         return dataset
 
     def read_collection(self, path: str) -> dict[str, Any]:
@@ -204,12 +137,11 @@ class ZipBackend(TacoBackend):
         for level_id in level_ids:
             table_name = f"{LEVEL_VIEW_PREFIX}{level_id}{LEVEL_TABLE_SUFFIX}"
             view_name = f"{LEVEL_VIEW_PREFIX}{level_id}"
-
             db.execute(
                 f"""
-                CREATE VIEW {view_name} AS 
+                CREATE VIEW {view_name} AS
                 SELECT *,
-                  '/vsisubfile/' || "{METADATA_OFFSET}" || '_' || 
+                  '/vsisubfile/' || "{METADATA_OFFSET}" || '_' ||
                   "{METADATA_SIZE}" || ',{root_path}' as "{METADATA_GDAL_VSI}"
                 FROM {table_name}
                 WHERE {filter_clause}
@@ -219,6 +151,86 @@ class ZipBackend(TacoBackend):
     # ========================================================================
     # INTERNAL HELPERS
     # ========================================================================
+
+    def _download_all_files(
+        self, path: str, header: list[tuple[int, int]]
+    ) -> dict[int, bytes]:
+        """Download all files from ZIP using grouped requests."""
+        is_local = Path(path).exists()
+
+        # Group files by proximity for efficient batch downloading
+        if is_local:
+            file_groups = [
+                [(i, offset, size)] for i, (offset, size) in enumerate(header)
+            ]
+        else:
+            file_groups = self._group_files_by_proximity(header)
+            logger.debug(
+                f"Grouped {len(header)} files into {len(file_groups)} request(s)"
+            )
+
+        # Download and parse all files
+        all_files_data = {}
+
+        for group in file_groups:
+            if not group:
+                continue
+
+            # Calculate range for this group
+            first_idx, first_offset, first_size = group[0]
+            last_idx, last_offset, last_size = group[-1]
+            range_start = first_offset
+            range_end = last_offset + last_size
+            range_size = range_end - range_start
+
+            logger.debug(
+                f"Downloading group: {len(group)} files, {range_size/1024:.1f}KB"
+            )
+
+            # Download entire group as single blob
+            blob = (
+                self._read_blob_local(path, range_start, range_size)
+                if is_local
+                else self._read_blob_remote(path, range_start, range_size)
+            )
+
+            # Extract individual files from blob
+            for idx, offset, size in group:
+                relative_offset = offset - range_start
+                all_files_data[idx] = blob[relative_offset : relative_offset + size]
+
+        return all_files_data
+
+    def _register_parquet_tables(
+        self,
+        db: duckdb.DuckDBPyConnection,
+        all_files_data: dict[int, bytes],
+        header: list[tuple[int, int]],
+    ) -> list[int]:
+        """Register Parquet tables in DuckDB from downloaded files."""
+        level_ids = []
+
+        for i in range(len(header) - 1):  # All except last (COLLECTION.json)
+            if i not in all_files_data:
+                continue
+
+            parquet_bytes = all_files_data[i]
+            if len(parquet_bytes) == 0:
+                continue
+
+            # Load to PyArrow and register in DuckDB
+            reader = pa.BufferReader(parquet_bytes)
+            arrow_table = pq.read_table(reader)
+
+            table_name = f"{LEVEL_VIEW_PREFIX}{i}{LEVEL_TABLE_SUFFIX}"
+            db.register(table_name, arrow_table)
+            level_ids.append(i)
+
+            logger.debug(
+                f"Registered {table_name} in DuckDB ({len(parquet_bytes)} bytes)"
+            )
+
+        return level_ids
 
     def _group_files_by_proximity(
         self, header: list[tuple[int, int]]
@@ -236,7 +248,7 @@ class ZipBackend(TacoBackend):
             return []
 
         groups = []
-        current_group = []
+        current_group: list[tuple[int, int, int]] = []
 
         for i, (offset, size) in enumerate(header):
             if size == 0:

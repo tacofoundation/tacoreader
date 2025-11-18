@@ -16,11 +16,11 @@ import numpy as np
 import polars as pl
 
 from tacoreader._constants import (
-    NAVIGATION_REQUIRED_COLUMNS,
     DATAFRAME_DEFAULT_HEAD_ROWS,
     DATAFRAME_DEFAULT_TAIL_ROWS,
-    PROTECTED_COLUMNS,
+    NAVIGATION_REQUIRED_COLUMNS,
     PADDING_PREFIX,
+    PROTECTED_COLUMNS,
 )
 
 
@@ -227,7 +227,7 @@ class TacoDataFrame:
             format_type=self._format_type,
         )
 
-    def with_column(self, name: str, expr) -> "TacoDataFrame":
+    def with_column(self, name: str, expr) -> TacoDataFrame:
         """
         Add or replace column (immutable, Polars-style).
 
@@ -236,9 +236,7 @@ class TacoDataFrame:
         _validate_not_protected(name)
 
         # Handle different input types
-        if isinstance(expr, pl.Expr):
-            new_data = self._data.with_columns(expr.alias(name))
-        elif isinstance(expr, pl.Series):
+        if isinstance(expr, pl.Expr | pl.Series):
             new_data = self._data.with_columns(expr.alias(name))
         else:
             new_data = self._data.with_columns(pl.Series(name, expr))
@@ -289,7 +287,7 @@ class TacoDataFrame:
         - /vsisubfile/ paths (ZIP, TacoCat): Read Parquet from offset
         - Direct paths (FOLDER): Read Parquet from filesystem
         """
-        from tacoreader.io import download_range, download_bytes
+        from tacoreader.remote_io import download_bytes, download_range
         from tacoreader.utils.format import is_remote
         from tacoreader.utils.vsi import parse_vsi_subfile, strip_vsi_prefix
 
@@ -329,10 +327,11 @@ class TacoDataFrame:
 
                 children_df = pl.read_parquet(BytesIO(meta_bytes))
             else:
-                if vsi_path.endswith("/__meta__"):
-                    meta_path = vsi_path
-                else:
-                    meta_path = str(Path(vsi_path) / "__meta__")
+                meta_path = (
+                    vsi_path
+                    if vsi_path.endswith("/__meta__")
+                    else str(Path(vsi_path) / "__meta__")
+                )
 
                 children_df = pl.read_parquet(meta_path)
 

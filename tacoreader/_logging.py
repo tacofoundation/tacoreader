@@ -5,7 +5,7 @@ Centralized logging setup. Users configure externally via standard logging confi
 
 Usage:
     from tacoreader._logging import get_logger
-    
+
     logger = get_logger(__name__)
     logger.debug("Debug info")
     logger.info("General info")
@@ -26,16 +26,14 @@ def get_logger(name: str) -> logging.Logger:
     return logging.getLogger(name)
 
 
-def setup_basic_logging(
-    level: int = logging.INFO, format: Optional[str] = None
-) -> None:
+def setup_basic_logging(level: int = logging.INFO, fmt: str | None = None) -> None:
     """
     Setup basic logging for tacoreader.
 
     Convenience function - advanced users should configure via logging.basicConfig().
     """
-    if format is None:
-        format = DEFAULT_FORMAT
+    if fmt is None:
+        fmt = DEFAULT_FORMAT
 
     logger = logging.getLogger("tacoreader")
     logger.setLevel(level)
@@ -44,7 +42,7 @@ def setup_basic_logging(
     if not logger.handlers:
         handler = logging.StreamHandler()
         handler.setLevel(level)
-        handler.setFormatter(logging.Formatter(format))
+        handler.setFormatter(logging.Formatter(fmt))
         logger.addHandler(handler)
 
     # Prevent propagation (avoid duplicate logs)

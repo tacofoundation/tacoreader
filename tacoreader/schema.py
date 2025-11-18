@@ -80,6 +80,45 @@ class PITSchema:
         self.hierarchy = schema_dict["hierarchy"]
         self._validate()
 
+    def _validate_pattern(
+        self, depth_str: str, pattern_idx: int, pattern: PITPattern
+    ) -> None:
+        """Validate a single pattern at given depth."""
+        # Check required fields
+        if "type" not in pattern or "id" not in pattern:
+            raise ValueError(
+                f"Depth {depth_str}, pattern {pattern_idx}: missing required field\n"
+                f"Patterns must have both 'type' and 'id'"
+            )
+
+        types = pattern["type"]
+        ids = pattern["id"]
+
+        # Check non-empty arrays
+        if not types:
+            raise ValueError(
+                f"Depth {depth_str}, pattern {pattern_idx}: type array empty"
+            )
+
+        if not ids:
+            raise ValueError(
+                f"Depth {depth_str}, pattern {pattern_idx}: id array empty"
+            )
+
+        # Check same length
+        if len(types) != len(ids):
+            raise ValueError(
+                f"Depth {depth_str}, pattern {pattern_idx}: type and id arrays differ\n"
+                f"Type: {len(types)}, ID: {len(ids)}"
+            )
+
+        # Validate child types
+        for child_type in types:
+            if child_type not in VALID_SAMPLE_TYPES:
+                raise ValueError(
+                    f"Depth {depth_str}, pattern {pattern_idx}: invalid type '{child_type}'"
+                )
+
     def _validate(self) -> None:
         """
         Validate schema structure.
@@ -107,38 +146,7 @@ class PITSchema:
                 )
 
             for i, pattern in enumerate(patterns):
-                # Check required fields
-                if "type" not in pattern or "id" not in pattern:
-                    raise ValueError(
-                        f"Depth {depth_str}, pattern {i}: missing required field\n"
-                        f"Patterns must have both 'type' and 'id'"
-                    )
-
-                types = pattern["type"]
-                ids = pattern["id"]
-
-                # Check non-empty arrays
-                if not types:
-                    raise ValueError(
-                        f"Depth {depth_str}, pattern {i}: type array empty"
-                    )
-
-                if not ids:
-                    raise ValueError(f"Depth {depth_str}, pattern {i}: id array empty")
-
-                # Check same length
-                if len(types) != len(ids):
-                    raise ValueError(
-                        f"Depth {depth_str}, pattern {i}: type and id arrays differ\n"
-                        f"Type: {len(types)}, ID: {len(ids)}"
-                    )
-
-                # Validate child types
-                for child_type in types:
-                    if child_type not in VALID_SAMPLE_TYPES:
-                        raise ValueError(
-                            f"Depth {depth_str}, pattern {i}: invalid type '{child_type}'"
-                        )
+                self._validate_pattern(depth_str, i, pattern)
 
     def is_compatible(self, other: "PITSchema") -> bool:
         """
@@ -197,7 +205,7 @@ class PITSchema:
         """
         if not self.hierarchy:
             return 0
-        return max((int(k) for k in self.hierarchy.keys()), default=0)
+        return max((int(k) for k in self.hierarchy), default=0)
 
     def __repr__(self) -> str:
         """String representation showing root type and max depth."""

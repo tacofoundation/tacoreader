@@ -192,7 +192,7 @@ TACOCAT_INDEX_ENTRY_SIZE = 16
 TACOCAT_INDEX_SIZE = (
     TACOCAT_MAX_LEVELS * TACOCAT_INDEX_ENTRY_SIZE + TACOCAT_INDEX_ENTRY_SIZE
 )  # 112
-"""Total index block size: 7 entries × 16 bytes."""
+"""Total index block size: 7 entries x 16 bytes."""
 
 TACOCAT_TOTAL_HEADER_SIZE = TACOCAT_HEADER_SIZE + TACOCAT_INDEX_SIZE  # 128
 """Total header + index size (data starts at byte 128)."""

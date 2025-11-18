@@ -1,9 +1,50 @@
 """HTML representation for TacoDataset (Jupyter notebook display)."""
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, TypedDict
 
 if TYPE_CHECKING:
     from tacoreader.loader import TacoDataset
+
+
+class NodeDict(TypedDict):
+    """Type for graph node dictionaries."""
+
+    id: str
+    type: str
+    level: int
+    x: float
+    y: float
+    label: str
+    color: str
+
+
+class EdgeDict(TypedDict):
+    """Type for graph edge dictionaries."""
+
+    from_x: float
+    from_y: float
+    to_x: float
+    to_y: float
+
+
+class TextDict(TypedDict, total=False):
+    """Type for graph text dictionaries."""
+
+    x: float
+    y: float
+    text: str
+    size: str
+
+
+# Graph configuration constants
+NODE_RADIUS = 12
+LEVEL_HEIGHT = 55
+NODE_SPACING_H = 40
+NODE_SPACING_V = 50
+START_X = 110
+START_Y = 30
+MAX_CHILDREN_FULL = 4
+LEFT_MARGIN = NODE_RADIUS + 10
 
 
 def build_html_repr(dataset: "TacoDataset") -> str:
@@ -118,7 +159,7 @@ def render_hierarchy_section(dataset: "TacoDataset") -> str:
     # Root level
     root_type = dataset.pit_schema.root["type"]
     root_n = dataset.pit_schema.root["n"]
-    items.append(f"<li><strong>Level 0:</strong> {root_type} × {root_n}</li>")
+    items.append(f"<li><strong>Level 0:</strong> {root_type} x {root_n}</li>")
 
     # Child levels - group patterns by level
     for depth_str in sorted(hierarchy.keys(), key=int):
@@ -138,7 +179,7 @@ def render_hierarchy_section(dataset: "TacoDataset") -> str:
         types_str = f"[{', '.join(types)}]"
 
         # Show pattern count if multiple
-        pattern_info = f" × {num_patterns} positions" if num_patterns > 1 else ""
+        pattern_info = f" x {num_patterns} positions" if num_patterns > 1 else ""
 
         # Sub-details for IDs
         ids_html = f"""
@@ -153,7 +194,7 @@ def render_hierarchy_section(dataset: "TacoDataset") -> str:
         items.append(
             f"""
         <li>
-            <strong>Level {depth}:</strong> {types_str}{pattern_info} × {n} each
+            <strong>Level {depth}:</strong> {types_str}{pattern_info} x {n} each
             {ids_html}
         </li>
         """
@@ -265,6 +306,333 @@ def render_fields_section(dataset: "TacoDataset") -> str:
     """
 
 
+def _create_root_node() -> NodeDict:
+    """Create the root TACO node."""
+    return {
+        "id": "root",
+        "type": "TACO",
+        "level": -1,
+        "x": START_X,
+        "y": START_Y,
+        "label": "TACO",
+        "color": "#FFB6C1",
+    }
+
+
+def _create_sample_level(
+    root_node: NodeDict,
+    root_type: str,
+    n_samples: int,
+    nodes: list[NodeDict],
+    edges: list[EdgeDict],
+    texts: list[TextDict],
+) -> NodeDict:
+    """
+    Create level 0 showing sample homogeneity pattern.
+
+    Returns the left sample node that will be expanded.
+    """
+    level0_y = START_Y + LEVEL_HEIGHT
+
+    # Left sample (will be expanded)
+    sample_left: NodeDict = {
+        "id": "sample_0",
+        "type": root_type,
+        "level": 0,
+        "x": START_X - NODE_SPACING_H,
+        "y": level0_y,
+        "label": "Sample 0",
+        "color": get_node_color(root_type),
+    }
+    nodes.append(sample_left)
+    edges.append(
+        {
+            "from_x": root_node["x"],
+            "from_y": root_node["y"],
+            "to_x": sample_left["x"],
+            "to_y": sample_left["y"],
+        }
+    )
+
+    # Dots in the middle
+    texts.append({"x": START_X, "y": level0_y + 5, "text": "..."})
+
+    # Right sample
+    sample_right: NodeDict = {
+        "id": f"sample_{n_samples-1}",
+        "type": root_type,
+        "level": 0,
+        "x": START_X + NODE_SPACING_H,
+        "y": level0_y,
+        "label": f"Sample {n_samples-1}",
+        "color": get_node_color(root_type),
+    }
+    nodes.append(sample_right)
+    edges.append(
+        {
+            "from_x": root_node["x"],
+            "from_y": root_node["y"],
+            "to_x": sample_right["x"],
+            "to_y": sample_right["y"],
+        }
+    )
+
+    return sample_left
+
+
+def _determine_children_to_show(num_children: int) -> tuple[list[int], bool, int]:
+    """
+    Determine which children indices to show based on count.
+
+    Returns:
+        (indices_to_show, show_ellipsis, hidden_count)
+    """
+    if num_children <= MAX_CHILDREN_FULL:
+        return list(range(num_children)), False, 0
+    else:
+        # Show first 2, ellipsis, last 1
+        return [0, 1, num_children - 1], True, num_children - 3
+
+
+def _create_child_nodes(
+    parent_node: NodeDict,
+    types: list[str],
+    ids: list[str],
+    current_depth: int,
+    current_y: float,
+    indices_to_show: list[int],
+    show_ellipsis: bool,
+    hidden_count: int,
+    nodes: list[NodeDict],
+    edges: list[EdgeDict],
+    texts: list[TextDict],
+) -> NodeDict | None:
+    """
+    Create child nodes for a level.
+
+    Returns the first FOLDER child for expansion, or None.
+    """
+    num_visible = len(indices_to_show) + (1 if show_ellipsis else 0)
+    total_width = (num_visible - 1) * NODE_SPACING_H
+    start_x = parent_node["x"] - (total_width / 2)
+
+    expanded_child: NodeDict | None = None
+    current_x = start_x
+
+    for idx_pos, i in enumerate(indices_to_show):
+        child_type = types[i]
+        child_id = ids[i]
+
+        child_node: NodeDict = {
+            "id": f"child_d{current_depth}_i{i}",
+            "type": child_type,
+            "level": current_depth,
+            "x": current_x,
+            "y": current_y,
+            "label": child_id[:10],
+            "color": get_node_color(child_type),
+        }
+        nodes.append(child_node)
+
+        edges.append(
+            {
+                "from_x": parent_node["x"],
+                "from_y": parent_node["y"],
+                "to_x": child_node["x"],
+                "to_y": child_node["y"],
+            }
+        )
+
+        # Mark first child for expansion if it's a FOLDER
+        if i == 0 and child_type == "FOLDER":
+            expanded_child = child_node
+
+        current_x += NODE_SPACING_H
+
+        # Add ellipsis after second node if needed
+        if show_ellipsis and idx_pos == 1:
+            texts.append(
+                {
+                    "x": current_x,
+                    "y": current_y + 5,
+                    "text": f"...(+{hidden_count})",
+                    "size": "9",
+                }
+            )
+            current_x += NODE_SPACING_H
+
+    # Show collapsed indicator for sibling folders
+    if expanded_child:
+        for i in indices_to_show[1:]:
+            if types[i] == "FOLDER":
+                sibling_node = next(
+                    n for n in nodes if n["id"] == f"child_d{current_depth}_i{i}"
+                )
+                texts.append(
+                    {
+                        "x": sibling_node["x"],
+                        "y": sibling_node["y"] + NODE_SPACING_V // 2,
+                        "text": "...",
+                        "size": "10",
+                    }
+                )
+
+    return expanded_child
+
+
+def _expand_hierarchy(
+    parent_node: NodeDict,
+    hierarchy: dict,
+    start_depth: int,
+    start_y: float,
+    nodes: list[NodeDict],
+    edges: list[EdgeDict],
+    texts: list[TextDict],
+) -> float:
+    """
+    Recursively expand first child at each level.
+
+    Returns final Y position.
+    """
+    current_y = start_y
+    current_parent = parent_node
+    current_depth = start_depth
+
+    while str(current_depth) in hierarchy:
+        patterns = hierarchy[str(current_depth)]
+        if not patterns:
+            break
+
+        pattern = patterns[0]
+        types = pattern["type"]
+        ids = pattern["id"]
+
+        current_y += NODE_SPACING_V
+        num_children = len(types)
+
+        indices_to_show, show_ellipsis, hidden_count = _determine_children_to_show(
+            num_children
+        )
+
+        expanded_child = _create_child_nodes(
+            current_parent,
+            types,
+            ids,
+            current_depth,
+            current_y,
+            indices_to_show,
+            show_ellipsis,
+            hidden_count,
+            nodes,
+            edges,
+            texts,
+        )
+
+        if expanded_child:
+            current_parent = expanded_child
+            current_depth += 1
+        else:
+            # No more folders to expand
+            break
+
+    return current_y
+
+
+def _adjust_node_positions(
+    nodes: list[NodeDict], edges: list[EdgeDict], texts: list[TextDict]
+) -> None:
+    """Adjust node positions to prevent cutoff on left side."""
+    if not nodes:
+        return
+
+    min_x = min(node["x"] for node in nodes)
+
+    if min_x < LEFT_MARGIN:
+        offset = LEFT_MARGIN - min_x
+
+        for node in nodes:
+            node["x"] += offset
+
+        for edge in edges:
+            edge["from_x"] += offset
+            edge["to_x"] += offset
+
+        for text in texts:
+            text["x"] += offset
+
+
+def _render_svg_elements(
+    nodes: list[NodeDict], edges: list[EdgeDict], texts: list[TextDict], final_y: float
+) -> str:
+    """Render SVG elements (edges, nodes, texts)."""
+    svg_edges = []
+    for edge in edges:
+        dx = edge["to_x"] - edge["from_x"]
+        dy = edge["to_y"] - edge["from_y"]
+        length = (dx**2 + dy**2) ** 0.5
+
+        if length > 0:
+            scale = (length - NODE_RADIUS) / length
+            to_x = edge["from_x"] + dx * scale
+            to_y = edge["from_y"] + dy * scale
+
+            svg_edges.append(
+                f"""
+            <line x1="{edge['from_x']}" y1="{edge['from_y']}"
+                  x2="{to_x}" y2="{to_y}"
+                  stroke="#999" stroke-width="1.5"
+                  marker-end="url(#arrowhead)"/>
+            """
+            )
+
+    svg_nodes = []
+    for node in nodes:
+        svg_nodes.append(
+            f"""
+        <circle cx="{node['x']}" cy="{node['y']}" r="{NODE_RADIUS}"
+                fill="{node['color']}" stroke="#666" stroke-width="1.5">
+            <title>{node['label']} ({node['type']})</title>
+        </circle>
+        """
+        )
+
+    svg_texts = []
+    for text in texts:
+        size = text.get("size", "12")
+        svg_texts.append(
+            f"""
+        <text x="{text['x']}" y="{text['y']}"
+              text-anchor="middle"
+              font-size="{size}"
+              font-weight="bold"
+              fill="#666">{text['text']}</text>
+        """
+        )
+
+    # Calculate SVG dimensions
+    if nodes:
+        max_x = max(node["x"] for node in nodes)
+        svg_width = int(max_x + NODE_RADIUS + 20)
+    else:
+        svg_width = 250
+
+    svg_height = final_y + 50
+
+    return f"""
+    <svg width="{svg_width}" height="{svg_height}" class="taco-graph-svg">
+        <defs>
+            <marker id="arrowhead" markerWidth="10" markerHeight="10"
+                    refX="9" refY="3" orient="auto">
+                <polygon points="0 0, 10 3, 0 6" fill="#999"/>
+            </marker>
+        </defs>
+        {''.join(svg_edges)}
+        {''.join(svg_nodes)}
+        {''.join(svg_texts)}
+    </svg>
+    """
+
+
 def render_graph(dataset: "TacoDataset") -> str:
     """
     Render PIT schema graph as SVG showing ONE complete sample expanded.
@@ -286,288 +654,40 @@ def render_graph(dataset: "TacoDataset") -> str:
     hierarchy = pit_schema.hierarchy
     root = pit_schema.root
 
-    # Graph configuration
-    NODE_RADIUS = 12
-    LEVEL_HEIGHT = 55
-    NODE_SPACING_H = 40
-    NODE_SPACING_V = 50
-    START_X = 110
-    START_Y = 30
-    MAX_CHILDREN_FULL = 4  # Show all if <= this number
+    nodes: list[NodeDict] = []
+    edges: list[EdgeDict] = []
+    texts: list[TextDict] = []
 
-    nodes = []
-    edges = []
-    texts = []
-
-    # ROOT NODE (TACO - Pink)
-    root_node = {
-        "id": "root",
-        "type": "TACO",
-        "level": -1,
-        "x": START_X,
-        "y": START_Y,
-        "label": "TACO",
-        "color": "#FFB6C1",
-    }
+    # Create root node
+    root_node = _create_root_node()
     nodes.append(root_node)
 
-    # LEVEL 0 - Show homogeneity pattern
+    # Create sample level
+    sample_left = _create_sample_level(
+        root_node, root["type"], root["n"], nodes, edges, texts
+    )
+
+    # Expand hierarchy from sample_left
     level0_y = START_Y + LEVEL_HEIGHT
-    n_samples = root["n"]
-
-    # Left sample (will be expanded)
-    sample_left = {
-        "id": "sample_0",
-        "type": root["type"],
-        "level": 0,
-        "x": START_X - NODE_SPACING_H,
-        "y": level0_y,
-        "label": "Sample 0",
-        "color": get_node_color(root["type"]),
-    }
-    nodes.append(sample_left)
-    edges.append(
-        {
-            "from_x": root_node["x"],
-            "from_y": root_node["y"],
-            "to_x": sample_left["x"],
-            "to_y": sample_left["y"],
-        }
+    final_y = _expand_hierarchy(
+        sample_left, hierarchy, 1, level0_y, nodes, edges, texts
     )
 
-    # Dots in the middle
-    texts.append({"x": START_X, "y": level0_y + 5, "text": "..."})
-
-    # Right sample
-    sample_right = {
-        "id": f"sample_{n_samples-1}",
-        "type": root["type"],
-        "level": 0,
-        "x": START_X + NODE_SPACING_H,
-        "y": level0_y,
-        "label": f"Sample {n_samples-1}",
-        "color": get_node_color(root["type"]),
-    }
-    nodes.append(sample_right)
-    edges.append(
-        {
-            "from_x": root_node["x"],
-            "from_y": root_node["y"],
-            "to_x": sample_right["x"],
-            "to_y": sample_right["y"],
-        }
-    )
-
-    # EXPAND FULL HIERARCHY OF SAMPLE_0
-    current_y = level0_y
-    parent_node = sample_left
-    current_depth = 1
-
-    # Recursively expand first child at each level
-    while str(current_depth) in hierarchy:
-        patterns = hierarchy[str(current_depth)]
-        if not patterns:
-            break
-
-        pattern = patterns[0]
-        types = pattern["type"]
-        ids = pattern["id"]
-
-        current_y += NODE_SPACING_V
-
-        num_children = len(types)
-
-        # Determine which children to show based on count
-        if num_children <= MAX_CHILDREN_FULL:
-            # Show all children
-            indices_to_show = list(range(num_children))
-            show_ellipsis = False
-            hidden_count = 0
-        else:
-            # Show first 2, ellipsis, last 1
-            indices_to_show = [0, 1, num_children - 1]
-            show_ellipsis = True
-            hidden_count = num_children - 3
-
-        # Calculate spacing for visible nodes
-        num_visible = len(indices_to_show) + (1 if show_ellipsis else 0)
-        total_width = (num_visible - 1) * NODE_SPACING_H
-        start_x = parent_node["x"] - (total_width / 2)
-
-        # Track which child to expand (first one)
-        expanded_child = None
-        current_x = start_x
-
-        for idx_pos, i in enumerate(indices_to_show):
-            child_type = types[i]
-            child_id = ids[i]
-
-            child_node = {
-                "id": f"child_d{current_depth}_i{i}",
-                "type": child_type,
-                "level": current_depth,
-                "x": current_x,
-                "y": current_y,
-                "label": child_id[:10],
-                "color": get_node_color(child_type),
-            }
-            nodes.append(child_node)
-
-            # Edge from parent to child
-            edges.append(
-                {
-                    "from_x": parent_node["x"],
-                    "from_y": parent_node["y"],
-                    "to_x": child_node["x"],
-                    "to_y": child_node["y"],
-                }
-            )
-
-            # Mark first child for expansion if it's a FOLDER
-            if i == 0 and child_type == "FOLDER":
-                expanded_child = child_node
-
-            current_x += NODE_SPACING_H
-
-            # Add ellipsis after second node if needed
-            if show_ellipsis and idx_pos == 1:
-                texts.append(
-                    {
-                        "x": current_x,
-                        "y": current_y + 5,
-                        "text": f"...(+{hidden_count})",
-                        "size": "9",
-                    }
-                )
-                current_x += NODE_SPACING_H
-
-        # Show collapsed indicator for sibling folders (those not expanded)
-        if expanded_child:
-            for i in indices_to_show[1:]:  # Skip first (expanded)
-                if types[i] == "FOLDER":
-                    # Find the node we just created
-                    sibling_node = next(
-                        n for n in nodes if n["id"] == f"child_d{current_depth}_i{i}"
-                    )
-                    texts.append(
-                        {
-                            "x": sibling_node["x"],
-                            "y": sibling_node["y"] + NODE_SPACING_V // 2,
-                            "text": "...",
-                            "size": "10",
-                        }
-                    )
-
-        # Move to next level with expanded child
-        if expanded_child:
-            parent_node = expanded_child
-            current_depth += 1
-        else:
-            # No more folders to expand (reached FILEs)
-            break
-
-    # Fix node positions to prevent cutoff on the left side
-    if nodes:
-        min_x = min(node["x"] for node in nodes)
-
-        # Ensure left margin for nodes
-        LEFT_MARGIN = NODE_RADIUS + 10
-        if min_x < LEFT_MARGIN:
-            offset = LEFT_MARGIN - min_x
-
-            # Shift all nodes to the right
-            for node in nodes:
-                node["x"] += offset
-
-            # Shift all edges
-            for edge in edges:
-                edge["from_x"] += offset
-                edge["to_x"] += offset
-
-            # Shift all texts
-            for text in texts:
-                text["x"] += offset
-
-        # Calculate SVG width with proper margins
-        max_x = max(node["x"] for node in nodes)
-        svg_width = int(max_x + NODE_RADIUS + 20)
-    else:
-        svg_width = 250
-
-    svg_height = current_y + 50
+    # Adjust positions to prevent cutoff
+    _adjust_node_positions(nodes, edges, texts)
 
     # Render SVG
-    svg_edges = []
-    for edge in edges:
-        dx = edge["to_x"] - edge["from_x"]
-        dy = edge["to_y"] - edge["from_y"]
-        length = (dx**2 + dy**2) ** 0.5
-
-        if length > 0:
-            scale = (length - NODE_RADIUS) / length
-            to_x = edge["from_x"] + dx * scale
-            to_y = edge["from_y"] + dy * scale
-
-            svg_edges.append(
-                f"""
-            <line x1="{edge['from_x']}" y1="{edge['from_y']}" 
-                  x2="{to_x}" y2="{to_y}"
-                  stroke="#999" stroke-width="1.5" 
-                  marker-end="url(#arrowhead)"/>
-            """
-            )
-
-    svg_nodes = []
-    for node in nodes:
-        svg_nodes.append(
-            f"""
-        <circle cx="{node['x']}" cy="{node['y']}" r="{NODE_RADIUS}" 
-                fill="{node['color']}" stroke="#666" stroke-width="1.5">
-            <title>{node['label']} ({node['type']})</title>
-        </circle>
-        """
-        )
-
-    svg_texts = []
-    for text in texts:
-        size = text.get("size", "12")
-        svg_texts.append(
-            f"""
-        <text x="{text['x']}" y="{text['y']}" 
-              text-anchor="middle" 
-              font-size="{size}" 
-              font-weight="bold"
-              fill="#666">{text['text']}</text>
-        """
-        )
-
-    svg = f"""
-    <svg width="{svg_width}" height="{svg_height}" class="taco-graph-svg">
-        <defs>
-            <marker id="arrowhead" markerWidth="10" markerHeight="10" 
-                    refX="9" refY="3" orient="auto">
-                <polygon points="0 0, 10 3, 0 6" fill="#999"/>
-            </marker>
-        </defs>
-        {''.join(svg_edges)}
-        {''.join(svg_nodes)}
-        {''.join(svg_texts)}
-    </svg>
-    """
-
-    return svg
+    return _render_svg_elements(nodes, edges, texts, final_y)
 
 
 def get_node_color(node_type: str) -> str:
     """Get color for node based on type."""
-    if node_type == "TACO":
-        return "#FFB6C1"
-    elif node_type == "FOLDER":
-        return "#90EE90"
-    elif node_type == "FILE":
-        return "#DDA0DD"
-    else:
-        return "#FFB6C1"
+    colors = {
+        "TACO": "#FFB6C1",
+        "FOLDER": "#90EE90",
+        "FILE": "#DDA0DD",
+    }
+    return colors.get(node_type, "#FFB6C1")
 
 
 def get_css() -> str:
@@ -748,7 +868,7 @@ def get_css() -> str:
         .taco-body {
             flex-direction: column;
         }
-        
+
         .taco-graph {
             order: -1;
             flex: 0 0 auto;

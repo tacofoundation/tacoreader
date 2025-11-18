@@ -12,7 +12,6 @@ Main classes:
     TacoCatBackend: Backend for TacoCat format
 """
 
-import json
 import mmap
 import struct
 import time
@@ -23,25 +22,25 @@ import duckdb
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from tacoreader.backends.base import TacoBackend
-from tacoreader.io import download_bytes
 from tacoreader._constants import (
+    LEVEL_TABLE_SUFFIX,
+    LEVEL_VIEW_PREFIX,
+    METADATA_GDAL_VSI,
+    METADATA_OFFSET,
+    METADATA_SIZE,
+    METADATA_SOURCE_FILE,
+    TACOCAT_FILENAME,
     TACOCAT_HEADER_SIZE,
     TACOCAT_INDEX_ENTRY_SIZE,
     TACOCAT_MAGIC,
     TACOCAT_MAX_LEVELS,
     TACOCAT_TOTAL_HEADER_SIZE,
     TACOCAT_VERSION,
-    TACOCAT_FILENAME,
-    METADATA_GDAL_VSI,
-    METADATA_OFFSET,
-    METADATA_SIZE,
-    METADATA_SOURCE_FILE,
-    LEVEL_VIEW_PREFIX,
-    LEVEL_TABLE_SUFFIX,
 )
 from tacoreader._logging import get_logger
+from tacoreader.backends.base import TacoBackend
 from tacoreader.dataset import TacoDataset
+from tacoreader.remote_io import download_bytes
 from tacoreader.schema import PITSchema
 from tacoreader.utils.vsi import to_vsi_root
 
@@ -58,7 +57,7 @@ class TacoCatHeader:
     │ VERSION: uint32 (4 bytes)               │
     │ MAX_DEPTH: uint32 (4 bytes)             │
     ├─────────────────────────────────────────┤
-    │ INDEX: 7 entries × (offset + size)      │
+    │ INDEX: 7 entries x (offset + size)      │
     │   - LEVEL0...LEVEL5 (6 entries)         │
     │   - COLLECTION (1 entry)                │
     └─────────────────────────────────────────┘
@@ -254,12 +253,11 @@ class TacoCatBackend(TacoBackend):
         for level_id in level_ids:
             table_name = f"{LEVEL_VIEW_PREFIX}{level_id}{LEVEL_TABLE_SUFFIX}"
             view_name = f"{LEVEL_VIEW_PREFIX}{level_id}"
-
             db.execute(
                 f"""
-                CREATE VIEW {view_name} AS 
+                CREATE VIEW {view_name} AS
                 SELECT *,
-                  '/vsisubfile/' || "{METADATA_OFFSET}" || '_' || 
+                  '/vsisubfile/' || "{METADATA_OFFSET}" || '_' ||
                   "{METADATA_SIZE}" || ',{base_path}' || "{METADATA_SOURCE_FILE}"
                   as "{METADATA_GDAL_VSI}"
                 FROM {table_name}
@@ -280,15 +278,16 @@ class TacoCatBackend(TacoBackend):
         """
         if Path(path).exists():
             logger.debug(f"Reading local TacoCat: {path}")
-            with open(path, "rb") as f:
-                with mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as mm:
-                    return bytes(mm[:])
+            with open(path, "rb") as f, mmap.mmap(
+                f.fileno(), 0, access=mmap.ACCESS_READ
+            ) as mm:
+                return bytes(mm[:])
         else:
             try:
                 logger.debug(f"Downloading remote TacoCat: {path}")
                 return download_bytes(path)
             except Exception as e:
-                raise OSError(f"Failed to download TacoCat from {path}: {e}")
+                raise OSError(f"Failed to download TacoCat from {path}: {e}") from e
 
     def _extract_base_path(self, root_path: str) -> str:
         """

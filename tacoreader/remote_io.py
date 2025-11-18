@@ -34,10 +34,10 @@ def _create_store(url: str):
     # Find matching protocol
     for protocol, store_class in protocol_handlers.items():
         if url.startswith(protocol):
-            return store_class.from_url(url)
+            return store_class.from_url(url)  # type: ignore[attr-defined]
 
     # Build error message with all supported protocols
-    supported = sorted(set(PROTOCOL_MAPPINGS[p]["standard"] for p in PROTOCOL_MAPPINGS))
+    supported = sorted({PROTOCOL_MAPPINGS[p]["standard"] for p in PROTOCOL_MAPPINGS})
     raise ValueError(
         f"Unsupported URL scheme: {url}\n" f"Supported: {', '.join(supported)}"
     )
@@ -59,7 +59,7 @@ def download_bytes(url: str, subpath: str = "") -> bytes:
         result = obs.get(store, subpath)
         return bytes(result.bytes())
     except Exception as e:
-        raise OSError(f"Failed to download {url}{subpath}: {e}")
+        raise OSError(f"Failed to download {url}{subpath}: {e}") from e
 
 
 def download_range(url: str, offset: int, size: int, subpath: str = "") -> bytes:
@@ -85,7 +85,7 @@ def download_range(url: str, offset: int, size: int, subpath: str = "") -> bytes
     except Exception as e:
         raise OSError(
             f"Failed to download range [{offset}:{offset+size}] from {url}{subpath}: {e}"
-        )
+        ) from e
 
 
 def get_file_size(url: str, subpath: str = "") -> int | None:
@@ -104,6 +104,7 @@ def get_file_size(url: str, subpath: str = "") -> int | None:
     try:
         store = _create_store(url)
         head = obs.head(store, subpath)
-        return head.size
     except Exception:
         return None
+    else:
+        return head.size  # type: ignore[attr-defined]

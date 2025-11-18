@@ -14,14 +14,14 @@ from typing import Any
 
 import duckdb
 
-from tacoreader.dataset import TacoDataset
-from tacoreader.schema import PITSchema
 from tacoreader._constants import (
-    PADDING_PREFIX,
-    DEFAULT_VIEW_NAME,
     COLUMN_ID,
+    DEFAULT_VIEW_NAME,
+    PADDING_PREFIX,
 )
 from tacoreader._logging import get_logger
+from tacoreader.dataset import TacoDataset
+from tacoreader.schema import PITSchema
 
 logger = get_logger(__name__)
 
@@ -127,7 +127,7 @@ class TacoBackend(ABC):
                 f"Invalid COLLECTION.json in {self.format_name} format at {path}: {e.msg}",
                 e.doc,
                 e.pos,
-            )
+            ) from e
 
     def _finalize_dataset(
         self,
