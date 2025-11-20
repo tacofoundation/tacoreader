@@ -8,7 +8,6 @@ Main class:
     ZipBackend: Backend for .tacozip format
 """
 
-import json
 import mmap
 import time
 from pathlib import Path
