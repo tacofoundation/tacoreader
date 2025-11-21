@@ -5,16 +5,24 @@ Pure functions for converting between standard paths and GDAL Virtual File Syste
 No I/O operations - only string transformations.
 """
 
+from pathlib import Path
+
 from tacoreader._constants import ALL_VSI_PREFIXES, PROTOCOL_MAPPINGS
+from tacoreader.utils.format import is_local
 
 
 def to_vsi_root(path: str) -> str:
     """
     Convert storage path to GDAL VSI format.
 
-    Local paths unchanged, cloud/HTTP transformed to VSI.
+    Local paths resolved to absolute, cloud/HTTP transformed to VSI.
+    Ensures paths work regardless of working directory.
     """
-    # Build protocol conversion mapping: standard → vsi
+    # Local paths: resolve to absolute to avoid working directory issues
+    if is_local(path):
+        return str(Path(path).resolve())
+
+    # Remote paths: convert protocol to VSI
     protocol_to_vsi = {}
 
     for proto_config in PROTOCOL_MAPPINGS.values():
@@ -22,14 +30,11 @@ def to_vsi_root(path: str) -> str:
         vsi = proto_config["vsi"]
         protocol_to_vsi[standard] = vsi
 
-        # Add alternative protocol if exists (e.g., azure://)
         if "alt" in proto_config:
             protocol_to_vsi[proto_config["alt"]] = vsi
 
-    # Check each protocol
     for standard_proto, vsi_prefix in protocol_to_vsi.items():
         if path.startswith(standard_proto):
-            # Special handling for HTTP/HTTPS (vsicurl wraps entire URL)
             if standard_proto in ("http://", "https://"):
                 return f"{vsi_prefix}{path}"
             else:
