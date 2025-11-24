@@ -10,10 +10,11 @@ from __future__ import annotations
 
 from io import BytesIO
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import polars as pl
+import pyarrow.parquet as pq
 
 from tacoreader._constants import (
     DATAFRAME_DEFAULT_HEAD_ROWS,
@@ -22,6 +23,26 @@ from tacoreader._constants import (
     PADDING_PREFIX,
     PROTECTED_COLUMNS,
 )
+
+# =============================================================================
+# FORK-SAFETY NOTE (PyTorch DataLoader compatibility)
+# =============================================================================
+# Polars uses Rust/rayon internally for parallel operations. When combined
+# with fork() (default on Linux for multiprocessing), the rayon thread pool
+# mutex state is copied to child processes in a locked state, causing
+# permanent deadlock ☠️.
+#
+# AFFECTED OPERATIONS (DO NOT USE IN WORKERS):
+# - pl.read_parquet() -> uses rayon for parsing
+# - map_elements() -> uses rayon for parallelization
+#
+# FORK-SAFE ALTERNATIVES:
+# - pq.read_table() + pl.from_arrow() -> no rayon
+# - Python loops + pl.Series() -> no rayon
+#
+# Reference: https://docs.pola.rs/user-guide/misc/multiprocessing/
+# Tested: PyArrow 21.0.0, Polars 1.33.1, PyTorch 2.7
+# =============================================================================
 
 
 def _is_protected_column(column_name: str) -> bool:
@@ -279,13 +300,17 @@ class TacoDataFrame:
 
         return ids.index(key)
 
-    def _read_meta(self, row: dict) -> TacoDataFrame:
+    def _read_meta(self, row: dict) -> TacoDataFrame:  # noqa: C901
         """
         Read __meta__ file for FOLDER sample.
 
         Handles:
         - /vsisubfile/ paths (ZIP, TacoCat): Read Parquet from offset
         - Direct paths (FOLDER): Read Parquet from filesystem
+
+        NOTE: Uses PyArrow + pure Python loops for fork-safety.
+        CANNOT use pl.read_parquet() or map_elements() - they trigger
+        rayon which deadlocks with fork(). See module docstring.
         """
         from tacoreader.remote_io import download_bytes, download_range
         from tacoreader.utils.format import is_remote
@@ -300,23 +325,32 @@ class TacoDataFrame:
 
             if is_remote(original_path):
                 parquet_bytes = download_range(original_path, offset, size)
-                children_df = pl.read_parquet(BytesIO(parquet_bytes))
             else:
                 with open(original_path, "rb") as f:
                     f.seek(offset)
                     parquet_bytes = f.read(size)
 
-                children_df = pl.read_parquet(BytesIO(parquet_bytes))
-
-            # Construct VSI paths for children
-            children_df = children_df.with_columns(
-                pl.struct([pl.col("*")])
-                .map_elements(
-                    lambda row_struct: self._construct_vsi_path(row_struct, root_path),
-                    return_dtype=pl.Utf8,
-                )
-                .alias("internal:gdal_vsi")
+            children_df = cast(
+                pl.DataFrame, pl.from_arrow(pq.read_table(BytesIO(parquet_bytes)))
             )
+
+            # Build VSI paths
+            vsi_paths = []
+            for i in range(len(children_df)):
+                child_row = children_df.row(i, named=True)
+                if "internal:offset" in child_row and "internal:size" in child_row:
+                    child_offset = child_row["internal:offset"]
+                    child_size = child_row["internal:size"]
+                    vsi_paths.append(
+                        f"/vsisubfile/{child_offset}_{child_size},{root_path}"
+                    )
+                else:
+                    vsi_paths.append("")
+
+            children_df = children_df.with_columns(
+                pl.Series("internal:gdal_vsi", vsi_paths)
+            )
+
         else:
             # FOLDER: Read Parquet from __meta__
             if is_remote(vsi_path):
@@ -325,7 +359,9 @@ class TacoDataFrame:
                 else:
                     meta_bytes = download_bytes(vsi_path, "__meta__")
 
-                children_df = pl.read_parquet(BytesIO(meta_bytes))
+                children_df = cast(
+                    pl.DataFrame, pl.from_arrow(pq.read_table(BytesIO(meta_bytes)))
+                )
             else:
                 meta_path = (
                     vsi_path
@@ -333,18 +369,29 @@ class TacoDataFrame:
                     else str(Path(vsi_path) / "__meta__")
                 )
 
-                children_df = pl.read_parquet(meta_path)
-
-            # Construct direct paths for children
-            children_df = children_df.with_columns(
-                pl.struct([pl.col("*")])
-                .map_elements(
-                    lambda row_struct: self._construct_folder_path(
-                        row_struct, vsi_path
-                    ),
-                    return_dtype=pl.Utf8,
+                children_df = cast(
+                    pl.DataFrame, pl.from_arrow(pq.read_table(meta_path))
                 )
-                .alias("internal:gdal_vsi")
+
+            # Strip /__meta__ suffix for path construction
+            parent_path = vsi_path
+            if parent_path.endswith("/__meta__"):
+                parent_path = parent_path[:-9]
+
+            # Build paths
+            vsi_paths = []
+            for i in range(len(children_df)):
+                child_row = children_df.row(i, named=True)
+                if "internal:relative_path" in child_row:
+                    relative = child_row["internal:relative_path"]
+                    vsi_paths.append(f"{parent_path}/{relative}")
+                elif "id" in child_row:
+                    vsi_paths.append(f"{parent_path}/{child_row['id']}")
+                else:
+                    vsi_paths.append("")
+
+            children_df = children_df.with_columns(
+                pl.Series("internal:gdal_vsi", vsi_paths)
             )
 
         return TacoDataFrame(
