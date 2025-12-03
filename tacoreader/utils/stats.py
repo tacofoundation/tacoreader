@@ -2,34 +2,34 @@
 Statistics aggregation for TACO datasets.
 
 Weighted aggregation of pre-computed stats from internal:stats column.
-Operates on Polars DataFrames for performance.
+Operates on PyArrow Tables.
 """
 
 import warnings
 
 import numpy as np
-import polars as pl
+import pyarrow as pa
 
 from tacoreader._constants import STATS_CONTINUOUS_LENGTH
 
 
 def _extract_stats_and_weights(
-    df: pl.DataFrame,
+    table: pa.Table,
 ) -> tuple[list[list[list[float]]], list[int]]:
     """
     Extract internal:stats and calculate pixel counts as weights.
 
     Uses stac:tensor_shape for weights if available, otherwise equal weights.
     """
-    if "internal:stats" not in df.columns:
-        raise ValueError("DataFrame must contain 'internal:stats' column")
+    if "internal:stats" not in table.schema.names:
+        raise ValueError("Table must contain 'internal:stats' column")
 
-    # Fast extraction (no iterrows overhead)
-    all_stats = df["internal:stats"].to_list()
+    # Fast extraction
+    all_stats = table.column("internal:stats").to_pylist()
 
     # Calculate weights from tensor_shape if available
-    if "stac:tensor_shape" in df.columns:
-        shapes = df["stac:tensor_shape"].to_list()
+    if "stac:tensor_shape" in table.schema.names:
+        shapes = table.column("stac:tensor_shape").to_pylist()
         weights = []
         for i, shape in enumerate(shapes):
             if len(shape) >= 2:
@@ -48,7 +48,7 @@ def _extract_stats_and_weights(
             UserWarning,
             stacklevel=4,
         )
-        weights = [1] * len(df)
+        weights = [1] * table.num_rows
 
     return all_stats, weights
 
@@ -66,13 +66,13 @@ def _is_categorical(stats: list[list[float]]) -> bool:
     return len(stats[0]) != STATS_CONTINUOUS_LENGTH
 
 
-def stats_categorical(df: pl.DataFrame) -> np.ndarray:
+def stats_categorical(table: pa.Table) -> np.ndarray:
     """
     Aggregate categorical probabilities using weighted average.
 
     Returns: Array [n_bands, n_classes] with averaged probabilities
     """
-    all_stats, weights = _extract_stats_and_weights(df)
+    all_stats, weights = _extract_stats_and_weights(table)
 
     if not _is_categorical(all_stats[0]):
         raise ValueError(
@@ -108,9 +108,9 @@ def stats_categorical(df: pl.DataFrame) -> np.ndarray:
     return result
 
 
-def stats_mean(df: pl.DataFrame) -> np.ndarray:
+def stats_mean(table: pa.Table) -> np.ndarray:
     """Aggregate means using weighted average."""
-    all_stats, weights = _extract_stats_and_weights(df)
+    all_stats, weights = _extract_stats_and_weights(table)
 
     if _is_categorical(all_stats[0]):
         raise ValueError(
@@ -131,9 +131,9 @@ def stats_mean(df: pl.DataFrame) -> np.ndarray:
     return result
 
 
-def stats_std(df: pl.DataFrame) -> np.ndarray:
+def stats_std(table: pa.Table) -> np.ndarray:
     """Aggregate standard deviations using pooled variance formula."""
-    all_stats, weights = _extract_stats_and_weights(df)
+    all_stats, weights = _extract_stats_and_weights(table)
 
     if _is_categorical(all_stats[0]):
         raise ValueError(
@@ -141,7 +141,7 @@ def stats_std(df: pl.DataFrame) -> np.ndarray:
         )
 
     n_bands = len(all_stats[0])
-    global_means = stats_mean(df)
+    global_means = stats_mean(table)
     result = np.zeros(n_bands, dtype=np.float32)
     total_weight = sum(weights)
 
@@ -159,9 +159,9 @@ def stats_std(df: pl.DataFrame) -> np.ndarray:
     return result
 
 
-def stats_min(df: pl.DataFrame) -> np.ndarray:
+def stats_min(table: pa.Table) -> np.ndarray:
     """Aggregate minimums (global min across all rows)."""
-    all_stats, _ = _extract_stats_and_weights(df)
+    all_stats, _ = _extract_stats_and_weights(table)
 
     if _is_categorical(all_stats[0]):
         raise ValueError(
@@ -178,9 +178,9 @@ def stats_min(df: pl.DataFrame) -> np.ndarray:
     return result
 
 
-def stats_max(df: pl.DataFrame) -> np.ndarray:
+def stats_max(table: pa.Table) -> np.ndarray:
     """Aggregate maximums (global max across all rows)."""
-    all_stats, _ = _extract_stats_and_weights(df)
+    all_stats, _ = _extract_stats_and_weights(table)
 
     if _is_categorical(all_stats[0]):
         raise ValueError(
@@ -198,14 +198,14 @@ def stats_max(df: pl.DataFrame) -> np.ndarray:
 
 
 def _stats_percentile(
-    df: pl.DataFrame, percentile_idx: int, percentile_name: str
+    table: pa.Table, percentile_idx: int, percentile_name: str
 ) -> np.ndarray:
     """
     Aggregate percentiles using simple average (APPROXIMATION).
 
     WARNING: Not statistically exact. For critical analysis, recompute from raw data.
     """
-    all_stats, _ = _extract_stats_and_weights(df)
+    all_stats, _ = _extract_stats_and_weights(table)
 
     if _is_categorical(all_stats[0]):
         raise ValueError(
@@ -230,21 +230,21 @@ def _stats_percentile(
     return result
 
 
-def stats_p25(df: pl.DataFrame) -> np.ndarray:
+def stats_p25(table: pa.Table) -> np.ndarray:
     """Aggregate 25th percentiles (approximation)."""
-    return _stats_percentile(df, 5, "p25")
+    return _stats_percentile(table, 5, "p25")
 
 
-def stats_p50(df: pl.DataFrame) -> np.ndarray:
+def stats_p50(table: pa.Table) -> np.ndarray:
     """Aggregate 50th percentiles / median (approximation)."""
-    return _stats_percentile(df, 6, "p50")
+    return _stats_percentile(table, 6, "p50")
 
 
-def stats_p75(df: pl.DataFrame) -> np.ndarray:
+def stats_p75(table: pa.Table) -> np.ndarray:
     """Aggregate 75th percentiles (approximation)."""
-    return _stats_percentile(df, 7, "p75")
+    return _stats_percentile(table, 7, "p75")
 
 
-def stats_p95(df: pl.DataFrame) -> np.ndarray:
+def stats_p95(table: pa.Table) -> np.ndarray:
     """Aggregate 95th percentiles (approximation)."""
-    return _stats_percentile(df, 8, "p95")
+    return _stats_percentile(table, 8, "p95")

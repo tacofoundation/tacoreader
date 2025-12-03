@@ -55,8 +55,8 @@ def _collect_level_columns(
         for ds in datasets:
             available_levels = _get_available_levels(ds)
             if level_key in available_levels:
-                df = ds._duckdb.execute(f"SELECT * FROM {level_key}").pl()
-                level_columns[level_key].append(set(df.columns))
+                arrow_table = ds._duckdb.execute(f"SELECT * FROM {level_key}").fetch_arrow_table()
+                level_columns[level_key].append(set(arrow_table.column_names))
 
     return level_columns
 

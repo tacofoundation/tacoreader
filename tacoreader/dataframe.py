@@ -1,7 +1,7 @@
 """
 TacoDataFrame - hierarchical DataFrame wrapper for TACO navigation.
 
-Wraps Polars DataFrame with TACO-specific methods for hierarchical navigation
+Wraps PyArrow Table with TACO-specific methods for hierarchical navigation
 and statistics aggregation. Provides .read() for traversing nested structures
 and stats_*() methods for aggregating pre-computed metadata.
 """
@@ -10,10 +10,10 @@ from __future__ import annotations
 
 from io import BytesIO
 from pathlib import Path
-from typing import Any, cast
 
 import numpy as np
-import polars as pl
+import pyarrow as pa
+import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
 from tacoreader._constants import (
@@ -23,26 +23,6 @@ from tacoreader._constants import (
     PADDING_PREFIX,
     PROTECTED_COLUMNS,
 )
-
-# =============================================================================
-# FORK-SAFETY NOTE (PyTorch DataLoader compatibility)
-# =============================================================================
-# Polars uses Rust/rayon internally for parallel operations. When combined
-# with fork() (default on Linux for multiprocessing), the rayon thread pool
-# mutex state is copied to child processes in a locked state, causing
-# permanent deadlock ☠️.
-#
-# AFFECTED OPERATIONS (DO NOT USE IN WORKERS):
-# - pl.read_parquet() -> uses rayon for parsing
-# - map_elements() -> uses rayon for parallelization
-#
-# FORK-SAFE ALTERNATIVES:
-# - pq.read_table() + pl.from_arrow() -> no rayon
-# - Python loops + pl.Series() -> no rayon
-#
-# Reference: https://docs.pola.rs/user-guide/misc/multiprocessing/
-# Tested: PyArrow 21.0.0, Polars 1.33.1, PyTorch 2.7
-# =============================================================================
 
 
 def _is_protected_column(column_name: str) -> bool:
@@ -55,13 +35,13 @@ def _is_protected_column(column_name: str) -> bool:
     return column_name in PROTECTED_COLUMNS or column_name.startswith("internal:")
 
 
-def _validate_navigation_columns(df: pl.DataFrame, operation: str) -> None:
+def _validate_navigation_columns(table: pa.Table, operation: str) -> None:
     """
     Validate critical columns for navigation are present.
 
     Required: id, type, internal:gdal_vsi
     """
-    current_cols = set(df.columns)
+    current_cols = set(table.column_names)
     missing = NAVIGATION_REQUIRED_COLUMNS - current_cols
 
     if missing:
@@ -71,8 +51,8 @@ def _validate_navigation_columns(df: pl.DataFrame, operation: str) -> None:
             f"Required for navigation: id, type, internal:gdal_vsi\n"
             f"Current columns: {sorted(current_cols)}\n"
             f"\n"
-            f"To drop these, convert to Polars first:\n"
-            f"  df = tdf.to_polars().select(['custom_column'])"
+            f"To drop these, convert to Arrow first:\n"
+            f"  table = tdf.to_arrow().select(['custom_column'])"
         )
 
 
@@ -95,76 +75,61 @@ class TacoDataFrame:
     """
     Hierarchical DataFrame wrapper for TACO navigation.
 
-    Wraps Polars DataFrame with TACO-specific functionality:
+    Wraps PyArrow Table with TACO-specific functionality:
     - Hierarchical navigation via read()
     - Statistics aggregation via stats_*()
-    - Standard DataFrame operations (head, tail, filter, etc.)
-    - Column modification with protection for critical columns
+    - Export to Arrow Table via to_arrow()
 
     Protected columns (cannot be modified):
         - id, type: Core navigation
         - internal:*: All internal columns
 
     Examples:
-        tdf = dataset.collect()
+        tdf = dataset.data
 
         # Navigate
         child = tdf.read(0)  # By position
         child = tdf.read("sample_001")  # By ID
         vsi_path = tdf.read(5)  # Returns str if FILE
 
-        # Modify columns (in-place)
-        tdf["cloud_cover"] = tdf["cloud_cover"] * 100
-
-        # Modify columns (immutable)
-        tdf = tdf.with_column("timestamp", pl.col("timestamp").cast(pl.Datetime))
+        # Export
+        table = tdf.to_arrow()
 
         # Stats
         mean_values = tdf.stats_mean()
     """
 
-    def __init__(self, data: pl.DataFrame, format_type: str):
-        """Initialize with materialized Polars DataFrame."""
+    def __init__(self, data: pa.Table, format_type: str):
+        """Initialize with materialized PyArrow Table."""
         self._data = data
         self._format_type = format_type
 
     def __len__(self) -> int:
         """Number of rows."""
-        return len(self._data)
+        return self._data.num_rows
 
     def __repr__(self) -> str:
         """String representation with format info."""
-        display_df = self._data
+        display_table = self._data
 
         # Filter out padding for cleaner display
-        if "id" in self._data.columns:
-            display_df = self._data.filter(~pl.col("id").str.contains(PADDING_PREFIX))
+        if "id" in self._data.column_names:
+            id_column = self._data.column("id")
+            mask = pc.invert(pc.match_substring(id_column, PADDING_PREFIX))
+            display_table = self._data.filter(mask)
 
-        base_repr = display_df.__repr__()
+        # Simple string representation of Arrow Table
+        base_repr = str(display_table)
         info = f"\n[TacoDataFrame: {len(self)} rows, format={self._format_type}]"
         return base_repr + info
 
     def __getitem__(self, key):
         """
-        Subscripting like Polars DataFrame.
+        Subscripting like PyArrow Table.
 
-        Supports: row/column selection, boolean masks, slicing, tuple indexing.
+        Supports: column selection, slicing.
         """
         return self._data[key]
-
-    def __setitem__(self, key: str, value):
-        """
-        Modify column in-place (pandas-style).
-
-        Protected columns (id, type, internal:*) cannot be modified.
-        For immutable ops, use .with_column().
-        """
-        _validate_not_protected(key)
-
-        if isinstance(value, pl.Series):
-            self._data = self._data.with_columns(value.alias(key))
-        else:
-            self._data = self._data.with_columns(pl.Series(key, value))
 
     # ========================================================================
     # PROPERTIES
@@ -173,99 +138,25 @@ class TacoDataFrame:
     @property
     def columns(self):
         """Column names."""
-        return self._data.columns
+        return self._data.column_names
 
     @property
     def shape(self):
         """Shape tuple: (rows, columns)."""
-        return self._data.shape
+        return (self._data.num_rows, self._data.num_columns)
 
-    def head(self, n: int = DATAFRAME_DEFAULT_HEAD_ROWS) -> pl.DataFrame:
-        """First n rows as Polars DataFrame."""
-        return self._data.head(n)
+    def head(self, n: int = DATAFRAME_DEFAULT_HEAD_ROWS) -> pa.Table:
+        """First n rows as PyArrow Table."""
+        return self._data.slice(0, min(n, self._data.num_rows))
 
-    def tail(self, n: int = DATAFRAME_DEFAULT_TAIL_ROWS) -> pl.DataFrame:
-        """Last n rows as Polars DataFrame."""
-        return self._data.tail(n)
+    def tail(self, n: int = DATAFRAME_DEFAULT_TAIL_ROWS) -> pa.Table:
+        """Last n rows as PyArrow Table."""
+        start = max(0, self._data.num_rows - n)
+        return self._data.slice(start)
 
-    def to_polars(self) -> pl.DataFrame:
-        """Export as Polars DataFrame."""
-        return self._data.clone()
-
-    def to_pandas(self) -> Any:
-        """Export as pandas DataFrame (requires pandas)."""
-        return self._data.to_pandas()
-
-    # ========================================================================
-    # DATAFRAME OPERATIONS
-    # ========================================================================
-
-    def filter(self, *args, **kwargs) -> TacoDataFrame:
-        """
-        Filter rows using Polars expressions.
-
-        Returns new TacoDataFrame preserving navigation.
-        """
-        filtered_df = self._data.filter(*args, **kwargs)
-        _validate_navigation_columns(filtered_df, "filter")
-
-        return TacoDataFrame(
-            data=filtered_df,
-            format_type=self._format_type,
-        )
-
-    def select(self, *args, **kwargs) -> TacoDataFrame:
-        """
-        Select columns using Polars expressions.
-
-        Navigation works if required columns present.
-        """
-        selected_df = self._data.select(*args, **kwargs)
-        _validate_navigation_columns(selected_df, "select")
-
-        return TacoDataFrame(
-            data=selected_df,
-            format_type=self._format_type,
-        )
-
-    def limit(self, n: int) -> TacoDataFrame:
-        """Limit to first n rows."""
-        limited_df = self._data.limit(n)
-        _validate_navigation_columns(limited_df, "limit")
-
-        return TacoDataFrame(
-            data=limited_df,
-            format_type=self._format_type,
-        )
-
-    def sort(self, by, *args, **kwargs) -> TacoDataFrame:
-        """Sort rows by column(s)."""
-        sorted_df = self._data.sort(by, *args, **kwargs)
-        _validate_navigation_columns(sorted_df, "sort")
-
-        return TacoDataFrame(
-            data=sorted_df,
-            format_type=self._format_type,
-        )
-
-    def with_column(self, name: str, expr) -> TacoDataFrame:
-        """
-        Add or replace column (immutable, Polars-style).
-
-        Protected columns (id, type, internal:*) cannot be modified.
-        """
-        _validate_not_protected(name)
-
-        # Handle different input types
-        if isinstance(expr, pl.Expr | pl.Series):
-            new_data = self._data.with_columns(expr.alias(name))
-        else:
-            new_data = self._data.with_columns(pl.Series(name, expr))
-
-        return TacoDataFrame(
-            data=new_data,
-            format_type=self._format_type,
-        )
+    def to_arrow(self) -> pa.Table:
+        """Export as PyArrow Table."""
+        return self._data
 
     # ========================================================================
     # HIERARCHICAL NAVIGATION
@@ -279,7 +170,7 @@ class TacoDataFrame:
         FOLDER samples: reads __meta__ and returns TacoDataFrame with children
         """
         position = self._get_position(key)
-        row = self._data.row(position, named=True)
+        row = self._data.to_pylist()[position]
 
         if row["type"] == "FILE":
             return row["internal:gdal_vsi"]
@@ -289,12 +180,12 @@ class TacoDataFrame:
     def _get_position(self, key: int | str) -> int:
         """Convert key to integer position."""
         if isinstance(key, int):
-            if key < 0 or key >= len(self):
-                raise IndexError(f"Position {key} out of range [0, {len(self)-1}]")
+            if key < 0 or key >= self._data.num_rows:
+                raise IndexError(f"Position {key} out of range [0, {self._data.num_rows-1}]")
             return key
 
         # Search by ID
-        ids = self._data["id"].to_list()
+        ids = self._data.column("id").to_pylist()
         if key not in ids:
             raise KeyError(f"ID '{key}' not found")
 
@@ -307,10 +198,6 @@ class TacoDataFrame:
         Handles:
         - /vsisubfile/ paths (ZIP, TacoCat): Read Parquet from offset
         - Direct paths (FOLDER): Read Parquet from filesystem
-
-        NOTE: Uses PyArrow + pure Python loops for fork-safety.
-        CANNOT use pl.read_parquet() or map_elements() - they trigger
-        rayon which deadlocks with fork(). See module docstring.
         """
         from tacoreader.remote_io import download_bytes, download_range
         from tacoreader.utils.format import is_remote
@@ -330,14 +217,12 @@ class TacoDataFrame:
                     f.seek(offset)
                     parquet_bytes = f.read(size)
 
-            children_df = cast(
-                pl.DataFrame, pl.from_arrow(pq.read_table(BytesIO(parquet_bytes)))
-            )
+            children_table = pq.read_table(BytesIO(parquet_bytes))
 
             # Build VSI paths
             vsi_paths = []
-            for i in range(len(children_df)):
-                child_row = children_df.row(i, named=True)
+            for i in range(children_table.num_rows):
+                child_row = children_table.to_pylist()[i]
                 if "internal:offset" in child_row and "internal:size" in child_row:
                     child_offset = child_row["internal:offset"]
                     child_size = child_row["internal:size"]
@@ -347,9 +232,8 @@ class TacoDataFrame:
                 else:
                     vsi_paths.append("")
 
-            children_df = children_df.with_columns(
-                pl.Series("internal:gdal_vsi", vsi_paths)
-            )
+            vsi_array = pa.array(vsi_paths, type=pa.string())
+            children_table = children_table.append_column("internal:gdal_vsi", vsi_array)
 
         else:
             # FOLDER: Read Parquet from __meta__
@@ -359,9 +243,7 @@ class TacoDataFrame:
                 else:
                     meta_bytes = download_bytes(vsi_path, "__meta__")
 
-                children_df = cast(
-                    pl.DataFrame, pl.from_arrow(pq.read_table(BytesIO(meta_bytes)))
-                )
+                children_table = pq.read_table(BytesIO(meta_bytes))
             else:
                 meta_path = (
                     vsi_path
@@ -369,9 +251,7 @@ class TacoDataFrame:
                     else str(Path(vsi_path) / "__meta__")
                 )
 
-                children_df = cast(
-                    pl.DataFrame, pl.from_arrow(pq.read_table(meta_path))
-                )
+                children_table = pq.read_table(meta_path)
 
             # Strip /__meta__ suffix for path construction
             parent_path = vsi_path
@@ -380,8 +260,8 @@ class TacoDataFrame:
 
             # Build paths
             vsi_paths = []
-            for i in range(len(children_df)):
-                child_row = children_df.row(i, named=True)
+            for i in range(children_table.num_rows):
+                child_row = children_table.to_pylist()[i]
                 if "internal:relative_path" in child_row:
                     relative = child_row["internal:relative_path"]
                     vsi_paths.append(f"{parent_path}/{relative}")
@@ -390,31 +270,13 @@ class TacoDataFrame:
                 else:
                     vsi_paths.append("")
 
-            children_df = children_df.with_columns(
-                pl.Series("internal:gdal_vsi", vsi_paths)
-            )
+            vsi_array = pa.array(vsi_paths, type=pa.string())
+            children_table = children_table.append_column("internal:gdal_vsi", vsi_array)
 
         return TacoDataFrame(
-            data=children_df,
+            data=children_table,
             format_type=self._format_type,
         )
-
-    def _construct_vsi_path(self, row_struct: dict, zip_path: str) -> str:
-        """Construct /vsisubfile/ path for child in ZIP/TacoCat."""
-        if "internal:offset" in row_struct and "internal:size" in row_struct:
-            offset = row_struct["internal:offset"]
-            size = row_struct["internal:size"]
-            return f"/vsisubfile/{offset}_{size},{zip_path}"
-        return ""
-
-    def _construct_folder_path(self, row_struct: dict, parent_path: str) -> str:
-        """Construct direct path for child in FOLDER."""
-        if "internal:relative_path" in row_struct:
-            relative = row_struct["internal:relative_path"]
-            return f"{parent_path}/{relative}"
-        elif "id" in row_struct:
-            return f"{parent_path}/{row_struct['id']}"
-        return ""
 
     # ========================================================================
     # STATISTICS AGGREGATION

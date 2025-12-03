@@ -86,10 +86,10 @@ class TacoDataset(BaseModel):
         """
         from tacoreader.dataframe import TacoDataFrame
 
-        pdf = self._duckdb.execute(f"SELECT * FROM {self._view_name}").pl()
+        arrow_table = self._duckdb.execute(f"SELECT * FROM {self._view_name}").fetch_arrow_table()
 
         return TacoDataFrame(
-            data=pdf,
+            data=arrow_table,
             format_type=self._format,
         )
 
