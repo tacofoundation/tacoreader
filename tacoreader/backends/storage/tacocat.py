@@ -38,7 +38,7 @@ from tacoreader._constants import (
     TACOCAT_VERSION,
 )
 from tacoreader._logging import get_logger
-from tacoreader.backends.base import TacoBackend
+from tacoreader.backends.storage.base import TacoBackend
 from tacoreader.dataset import TacoDataset
 from tacoreader.remote_io import download_bytes
 from tacoreader.schema import PITSchema
@@ -152,7 +152,7 @@ class TacoCatBackend(TacoBackend):
         """
         Load TacoCat dataset entirely in memory.
 
-        Efficient for metadata-only files (typically <1GB).
+        Efficient for metadata-only files.
         No temp files created during loading.
         """
         t_start = time.time()

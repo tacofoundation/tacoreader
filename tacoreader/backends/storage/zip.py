@@ -27,7 +27,7 @@ from tacoreader._constants import (
     ZIP_MAX_GAP_SIZE,
 )
 from tacoreader._logging import get_logger
-from tacoreader.backends.base import TacoBackend
+from tacoreader.backends.storage.base import TacoBackend
 from tacoreader.dataset import TacoDataset
 from tacoreader.remote_io import download_range
 from tacoreader.utils.vsi import to_vsi_root
@@ -231,14 +231,64 @@ class ZipBackend(TacoBackend):
 
         return level_ids
 
+    def _should_group(
+        self,
+        current_file: tuple[int, int, int],
+        next_file: tuple[int, int, int],
+        max_gap: int = ZIP_MAX_GAP_SIZE,
+    ) -> bool:
+        """
+        Determine if two files should be grouped in same request.
+
+        Strategy:
+        1. Gap must be < max_gap (4MB default)
+        2. Gap must be < 50% of useful data size
+
+        This prevents downloading excessive unused data when files are small
+        but far apart.
+
+        Args:
+            current_file: (idx, offset, size) of current file
+            next_file: (idx, offset, size) of next file
+            max_gap: Maximum allowed gap in bytes
+
+        Returns:
+            True if files should be grouped, False otherwise
+
+        Examples:
+            file1(1KB) -- [3.9MB gap] -- file2(1KB)
+            gap=3.9MB, total_size=2KB, ratio=1950%
+            -> DON'T group (gap > 50% of useful data)
+
+            file1(5MB) -- [2MB gap] -- file2(5MB)
+            gap=2MB, total_size=10MB, ratio=20%
+            -> DO group (gap < 50% of useful data)
+        """
+        _, current_offset, current_size = current_file
+        _, next_offset, next_size = next_file
+
+        gap = next_offset - (current_offset + current_size)
+        total_useful_size = current_size + next_size
+
+        # Hard limit: gap must be < max_gap
+        if gap >= max_gap:
+            return False
+
+        # Efficiency check: gap should not exceed 50% of useful data
+        if gap > total_useful_size * 0.5:
+            return False
+
+        return True
+
     def _group_files_by_proximity(
         self, header: list[tuple[int, int]]
     ) -> list[list[tuple[int, int, int]]]:
         """
-        Group files to minimize HTTP requests.
+        Group files to minimize HTTP requests while avoiding excessive waste.
 
-        Files grouped if gap < ZIP_MAX_GAP_SIZE (4MB).
-        Avoids downloading large unused data while reducing request count.
+        Files grouped if:
+        - Gap < ZIP_MAX_GAP_SIZE (4MB)
+        - Gap < 50% of useful data size
 
         Returns:
             List of groups: [[(idx, offset, size), ...], ...]
@@ -256,17 +306,15 @@ class ZipBackend(TacoBackend):
             if not current_group:
                 current_group.append((i, offset, size))
             else:
-                # Check gap from last file
-                last_idx, last_offset, last_size = current_group[-1]
-                last_end = last_offset + last_size
-                gap = offset - last_end
+                last_file = current_group[-1]
+                next_file = (i, offset, size)
 
-                if gap < ZIP_MAX_GAP_SIZE:
-                    current_group.append((i, offset, size))
+                if self._should_group(last_file, next_file):
+                    current_group.append(next_file)
                 else:
-                    # Large gap: start new group
+                    # Start new group
                     groups.append(current_group)
-                    current_group = [(i, offset, size)]
+                    current_group = [next_file]
 
         if current_group:
             groups.append(current_group)

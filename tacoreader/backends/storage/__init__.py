@@ -1,0 +1,44 @@
+"""
+TACO format backends.
+
+Factory functions for creating backend instances.
+"""
+
+from tacoreader.backends.storage.base import TacoBackend
+from tacoreader.backends.storage.folder import FolderBackend
+from tacoreader.backends.storage.tacocat import TacoCatBackend
+from tacoreader.backends.storage.zip import ZipBackend
+from tacoreader.dataset import TacoDataset
+
+
+def create_backend(format_type: str) -> TacoBackend:
+    """Create backend instance: 'zip', 'folder', or 'tacocat'."""
+    backends: dict[str, type[TacoBackend]] = {
+        "zip": ZipBackend,
+        "folder": FolderBackend,
+        "tacocat": TacoCatBackend,
+    }
+
+    backend_class = backends.get(format_type)
+    if backend_class is None:
+        raise ValueError(
+            f"Unknown format: {format_type}\n"
+            f"Supported: {', '.join(backends.keys())}"
+        )
+
+    return backend_class()
+
+
+def load_dataset(path: str, format_type: str) -> TacoDataset:
+    """Load dataset using specified backend."""
+    backend = create_backend(format_type)
+    return backend.load(path)
+
+
+__all__ = [
+    "FolderBackend",
+    "TacoCatBackend",
+    "ZipBackend",
+    "create_backend",
+    "load_dataset",
+]

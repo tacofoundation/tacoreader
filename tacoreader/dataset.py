@@ -3,6 +3,9 @@ TacoDataset - metadata container with lazy SQL interface.
 
 Provides STAC-like metadata with DuckDB connection for lazy SQL queries.
 Queries not executed until .data is called.
+
+Backend-agnostic: Uses factory pattern to create TacoDataFrame instances
+without importing specific backend implementations.
 """
 
 import re
@@ -11,11 +14,11 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, PrivateAttr
 
-from tacoreader._constants import DEFAULT_VIEW_NAME
+from tacoreader._constants import DEFAULT_VIEW_NAME, SQL_JOIN_PATTERN
 from tacoreader.schema import PITSchema
 
 if TYPE_CHECKING:
-    from tacoreader.dataframe import TacoDataFrame
+    from tacoreader.backends.dataframe.base import TacoDataFrame
 
 
 class TacoDataset(BaseModel):
@@ -31,7 +34,7 @@ class TacoDataset(BaseModel):
 
     Private attributes:
         _path, _format, _collection, _duckdb, _view_name, _root_path,
-        _has_level1_joins, _joined_levels
+        _dataframe_backend, _has_level1_joins, _joined_levels
 
     Examples:
         ds = load("data.tacozip")
@@ -65,6 +68,7 @@ class TacoDataset(BaseModel):
     _duckdb: Any = PrivateAttr(default=None)
     _view_name: str = PrivateAttr(default=DEFAULT_VIEW_NAME)
     _root_path: str = PrivateAttr(default="")
+    _dataframe_backend: str = PrivateAttr(default="pyarrow")
 
     # JOIN tracking (for export validation in tacotoolbox)
     _has_level1_joins: bool = PrivateAttr(default=False)
@@ -83,13 +87,20 @@ class TacoDataset(BaseModel):
 
         Executes DuckDB query, loads data into memory.
         This is where lazy evaluation ends.
+
+        Uses backend factory to create appropriate TacoDataFrame instance.
         """
-        from tacoreader.dataframe import TacoDataFrame
+        from tacoreader.backends.dataframe import create_dataframe
 
-        arrow_table = self._duckdb.execute(f"SELECT * FROM {self._view_name}").fetch_arrow_table()
+        # DuckDB always returns PyArrow Table
+        arrow_table = self._duckdb.execute(
+            f"SELECT * FROM {self._view_name}"
+        ).fetch_arrow_table()
 
-        return TacoDataFrame(
-            data=arrow_table,
+        # Factory creates backend-specific TacoDataFrame
+        return create_dataframe(
+            backend=self._dataframe_backend,
+            arrow_table=arrow_table,
             format_type=self._format,
         )
 
@@ -137,8 +148,7 @@ class TacoDataset(BaseModel):
         new_schema = self.pit_schema.with_n(new_n)
 
         # Detect JOINs with level1+ tables (case insensitive)
-        join_pattern = r"\b(?:JOIN|FROM)\s+(level[1-5])\b"
-        matches = re.findall(join_pattern, query, re.IGNORECASE)
+        matches = re.findall(SQL_JOIN_PATTERN, query, re.IGNORECASE)
 
         # Track if this query introduces level1+ JOINs
         has_new_joins = len(matches) > 0
@@ -170,8 +180,9 @@ class TacoDataset(BaseModel):
             _duckdb=self._duckdb,
             _view_name=new_view_name,
             _root_path=self._root_path,
-            _has_level1_joins=final_has_joins,  # Track JOINs for export validation
-            _joined_levels=final_joined_levels,  # Track which levels were joined
+            _dataframe_backend=self._dataframe_backend,
+            _has_level1_joins=final_has_joins,
+            _joined_levels=final_joined_levels,
         )
 
     # ========================================================================

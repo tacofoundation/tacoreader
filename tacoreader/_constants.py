@@ -2,6 +2,7 @@
 Global constants for tacoreader.
 
 Organization:
+- DataFrame Backend: Backend selection and configuration
 - Cloud Storage & Protocols: Protocol mappings, VSI paths, remote detection
 - File Extensions: Format detection, valid extensions
 - Sample Types: FILE/FOLDER constants and validation
@@ -15,6 +16,21 @@ Organization:
 - Statistics: Aggregation constants
 - ISTAC/STAC: Geometry and time column priorities
 """
+
+from typing import Literal
+
+# =============================================================================
+# DataFrame Backend Configuration
+# =============================================================================
+
+DataFrameBackend = Literal["pyarrow", "polars", "pandas"]
+"""Valid DataFrame backend types."""
+
+DEFAULT_DATAFRAME_BACKEND: DataFrameBackend = "pyarrow"
+"""Default DataFrame backend used by tacoreader."""
+
+AVAILABLE_BACKENDS: tuple[DataFrameBackend, ...] = ("pyarrow", "polars", "pandas")
+"""All supported DataFrame backends (registered or not)."""
 
 # =============================================================================
 # Cloud Storage & Protocols

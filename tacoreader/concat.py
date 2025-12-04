@@ -55,7 +55,9 @@ def _collect_level_columns(
         for ds in datasets:
             available_levels = _get_available_levels(ds)
             if level_key in available_levels:
-                arrow_table = ds._duckdb.execute(f"SELECT * FROM {level_key}").fetch_arrow_table()
+                arrow_table = ds._duckdb.execute(
+                    f"SELECT * FROM {level_key}"
+                ).fetch_arrow_table()
                 level_columns[level_key].append(set(arrow_table.column_names))
 
     return level_columns
@@ -449,11 +451,58 @@ def concat(
 
     Returns:
         TacoDataset with consolidated data and lazy SQL
+
+    Raises:
+        ValueError: If datasets have incompatible schemas or mixed backends/formats
     """
     if len(datasets) < 2:
         raise ValueError(f"Need at least 2 datasets to concat, got {len(datasets)}")
 
     logger.info(f"Concatenating {len(datasets)} datasets...")
+
+    # Verify all datasets use the same backend
+    backends = {ds._dataframe_backend for ds in datasets}
+    if len(backends) > 1:
+        backend_info = [
+            f"  Dataset {i}: {ds._dataframe_backend} (from {ds._path})"
+            for i, ds in enumerate(datasets)
+        ]
+        raise ValueError(
+            f"Cannot concatenate datasets with different DataFrame backends.\n"
+            f"\n"
+            f"Found {len(backends)} different backends: {sorted(backends)}\n"
+            f"\n"
+            f"Backend per dataset:\n" + "\n".join(backend_info) + "\n"
+            "\n"
+            "All datasets must use the same backend.\n"
+            "Solution: Set backend before loading datasets:\n"
+            "  tacoreader.use('pyarrow')  # or 'polars', 'pandas'\n"
+            "  ds1 = tacoreader.load('data1.taco')\n"
+            "  ds2 = tacoreader.load('data2.taco')\n"
+            "  result = tacoreader.concat([ds1, ds2])"
+        )
+
+    # Verify all datasets use the same format
+    formats = {ds._format for ds in datasets}
+    if len(formats) > 1:
+        format_info = [
+            f"  Dataset {i}: {ds._format} (from {ds._path})"
+            for i, ds in enumerate(datasets)
+        ]
+        raise ValueError(
+            f"Cannot concatenate datasets with different formats.\n"
+            f"\n"
+            f"Found {len(formats)} different formats: {sorted(formats)}\n"
+            f"\n"
+            f"Format per dataset:\n" + "\n".join(format_info) + "\n"
+            "\n"
+            "All datasets must use the same format (zip/folder/tacocat).\n"
+            "Mixing formats breaks GDAL VSI path construction and navigation."
+        )
+
+    # Use backend from first dataset (all are the same at this point)
+    backend = datasets[0]._dataframe_backend
+    logger.debug(f"Using DataFrame backend: {backend}")
 
     # Validate PIT schemas
     reference_schema = datasets[0].pit_schema
@@ -536,6 +585,7 @@ def concat(
         _duckdb=db,
         _view_name=DEFAULT_VIEW_NAME,
         _root_path=datasets[0]._root_path,
+        _dataframe_backend=backend,
     )
 
     return dataset

@@ -28,7 +28,7 @@ from tacoreader._constants import (
     SAMPLE_TYPE_FOLDER,
 )
 from tacoreader._logging import get_logger
-from tacoreader.backends.base import TacoBackend
+from tacoreader.backends.storage.base import TacoBackend
 from tacoreader.dataset import TacoDataset
 from tacoreader.remote_io import download_bytes
 from tacoreader.utils.vsi import to_vsi_root
