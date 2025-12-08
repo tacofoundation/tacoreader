@@ -10,6 +10,7 @@ Main class:
 
 import mmap
 import time
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -26,13 +27,36 @@ from tacoreader._constants import (
     METADATA_SIZE,
     ZIP_MAX_GAP_SIZE,
 )
+from tacoreader._exceptions import TacoFormatError
 from tacoreader._logging import get_logger
-from tacoreader.backends.storage.base import TacoBackend
+from tacoreader._remote_io import download_range
+from tacoreader._vsi import to_vsi_root
 from tacoreader.dataset import TacoDataset
-from tacoreader.remote_io import download_range
-from tacoreader.utils.vsi import to_vsi_root
+from tacoreader.storage.base import TacoBackend
 
 logger = get_logger(__name__)
+
+
+@lru_cache(maxsize=64)
+def _read_taco_header_cached(path: str) -> list[tuple[int, int]]:
+    """
+    Read and cache TACO_HEADER (256 bytes).
+
+    Cached because headers are tiny and frequently accessed
+    when exploring remote datasets.
+
+    Args:
+        path: Path to .tacozip file (local or remote)
+
+    Returns:
+        List of (offset, size) tuples for embedded files
+    """
+    if Path(path).exists():
+        return tacozip.read_header(path)
+
+    # Remote: read first 256 bytes only
+    header_bytes = download_range(path, 0, 256)
+    return tacozip.read_header(header_bytes)
 
 
 class ZipBackend(TacoBackend):
@@ -60,10 +84,10 @@ class ZipBackend(TacoBackend):
         t_start = time.time()
         logger.debug(f"Loading ZIP from {path}")
 
-        # Read TACO_HEADER to get offsets
+        # Read TACO_HEADER to get offsets (uses cache)
         header = self._read_taco_header(path)
         if not header:
-            raise ValueError(f"Empty TACO_HEADER in {path}")
+            raise TacoFormatError(f"Empty TACO_HEADER in {path}")
         logger.debug(f"Read TACO_HEADER with {len(header)} entries")
 
         # Download all files
@@ -79,7 +103,7 @@ class ZipBackend(TacoBackend):
         level_ids = self._register_parquet_tables(db, all_files_data, header)
 
         if not level_ids:
-            raise ValueError(f"No metadata levels found in ZIP: {path}")
+            raise TacoFormatError(f"No metadata levels found in ZIP: {path}")
 
         # Finalize dataset
         root_path = to_vsi_root(path)
@@ -99,13 +123,13 @@ class ZipBackend(TacoBackend):
         header = self._read_taco_header(path)
 
         if not header:
-            raise ValueError(f"Empty TACO_HEADER in {path}")
+            raise TacoFormatError(f"Empty TACO_HEADER in {path}")
 
         # COLLECTION.json is always last entry
         collection_offset, collection_size = header[-1]
 
         if collection_size == 0:
-            raise ValueError(f"Empty COLLECTION.json in {path}")
+            raise TacoFormatError(f"Empty COLLECTION.json in {path}")
 
         is_local = Path(path).exists()
 
@@ -147,9 +171,13 @@ class ZipBackend(TacoBackend):
             """
             )
 
-    # ========================================================================
-    # INTERNAL HELPERS
-    # ========================================================================
+    def _read_taco_header(self, path: str) -> list[tuple[int, int]]:
+        """
+        Read TACO_HEADER with caching.
+
+        Delegates to cached function for efficiency.
+        """
+        return _read_taco_header_cached(path)
 
     def _download_all_files(
         self, path: str, header: list[tuple[int, int]]
@@ -270,15 +298,10 @@ class ZipBackend(TacoBackend):
         gap = next_offset - (current_offset + current_size)
         total_useful_size = current_size + next_size
 
-        # Hard limit: gap must be < max_gap
-        if gap >= max_gap:
-            return False
-
-        # Efficiency check: gap should not exceed 50% of useful data
-        if gap > total_useful_size * 0.5:
-            return False
-
-        return True
+        # Both conditions must be true to group files:
+        # 1. Gap must be < max_gap (hard limit)
+        # 2. Gap must be < 50% of useful data (efficiency)
+        return gap < max_gap and gap <= total_useful_size * 0.5
 
     def _group_files_by_proximity(
         self, header: list[tuple[int, int]]
@@ -332,20 +355,3 @@ class ZipBackend(TacoBackend):
     def _read_blob_remote(self, path: str, offset: int, size: int) -> bytes:
         """Read blob from remote ZIP via HTTP range request."""
         return download_range(path, offset, size)
-
-    def _read_taco_header(self, path: str) -> list[tuple[int, int]]:
-        """
-        Read TACO_HEADER from beginning of ZIP.
-
-        TACO_HEADER: 256-byte structure with array of (offset, size) pairs.
-        Last entry is always COLLECTION.json.
-
-        Returns:
-            List of (offset, size) tuples for embedded files
-        """
-        if Path(path).exists():
-            return tacozip.read_header(path)
-
-        # Remote: read first 256 bytes
-        header_bytes = download_range(path, 0, 256)
-        return tacozip.read_header(header_bytes)

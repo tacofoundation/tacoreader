@@ -2,9 +2,10 @@ import importlib.metadata as _metadata
 import logging
 
 from tacoreader._constants import DEFAULT_DATAFRAME_BACKEND, DataFrameBackend
+from tacoreader._exceptions import TacoBackendError
 from tacoreader._logging import disable_logging, setup_basic_logging
-from tacoreader.backends.dataframe.base import TacoDataFrame
 from tacoreader.concat import concat
+from tacoreader.dataframe.base import TacoDataFrame
 from tacoreader.dataset import TacoDataset
 from tacoreader.loader import load
 
@@ -27,7 +28,35 @@ def use(backend: str):
         backend: Backend name to use
 
     Raises:
-        ValueError: If backend is unknown
+        TacoBackendError: If backend is unknown
+
+    Warning - Thread/Fork Safety:
+        This function modifies a global variable and is NOT thread-safe or fork-safe.
+
+        Multiprocessing issues (PyTorch DataLoader, concurrent.futures):
+        - Workers inherit the backend value at fork/spawn time
+        - Changes in main process after fork are NOT visible to workers
+        - This causes inconsistent behavior if load() is called inside workers
+
+        Safe pattern (RECOMMENDED):
+            class MyDataset(torch.utils.data.Dataset):
+                def __init__(self, path):
+                    tacoreader.use('pyarrow')  # Set BEFORE fork
+                    self.ds = tacoreader.load(path)  # Load in __init__
+
+                def __getitem__(self, idx):
+                    return self.ds.data[idx]  # Workers only read, no load()
+
+        Unsafe pattern (AVOID):
+            class BadDataset(torch.utils.data.Dataset):
+                def __getitem__(self, idx):
+                    # BAD: load() in worker sees stale backend!
+                    ds = tacoreader.load('data.taco')
+                    return ds.data[idx]
+
+        Thread-safe alternative:
+            Pass backend explicitly to bypass global:
+                tacoreader.load('data.taco', backend='pyarrow')
 
     Examples:
         >>> import tacoreader
@@ -37,20 +66,19 @@ def use(backend: str):
         >>> reader = tacoreader.load('data.taco')
         >>> df = reader.data  # Returns PyArrow Table
         >>>
-        >>> # Use Polars (when available)
-        >>> tacoreader.use('polars')
+        >>> # Use Pandas (when available)
+        >>> tacoreader.use('pandas')
         >>> reader = tacoreader.load('data.taco')
-        >>> df = reader.data  # Returns Polars DataFrame
+        >>> df = reader.data  # Returns Pandas DataFrame
     """
     global _DATAFRAME_BACKEND
 
-    # Import registry to check available backends
-    from tacoreader.backends.dataframe import get_available_backends
+    from tacoreader.dataframe import get_available_backends
 
     available = get_available_backends()
 
     if backend not in available:
-        raise ValueError(
+        raise TacoBackendError(
             f"Unknown backend: '{backend}'\n"
             f"Available backends: {available}\n"
             f"\n"
@@ -111,9 +139,47 @@ def verbose(level=True):
         )
 
 
+def clear_cache():
+    """
+    Clear all metadata caches (headers, COLLECTION.json).
+
+    Cached metadata includes:
+    - ZIP headers (256 bytes)
+    - COLLECTION.json files (~10-50 KB)
+    - TacoCat files (complete metadata, typically a few MB)
+
+    Use this when remote files have changed and you want to force
+    re-download on next load().
+
+    Note: This does NOT clear any data caches (Parquet tables, rasters).
+    Only small metadata files are cached.
+
+    Examples:
+        >>> import tacoreader
+        >>>
+        >>> # Load dataset (caches metadata)
+        >>> ds1 = tacoreader.load("s3://bucket/data.tacozip")
+        >>>
+        >>> # Load again - uses cache (fast!)
+        >>> ds2 = tacoreader.load("s3://bucket/data.tacozip")
+        >>>
+        >>> # File changed remotely, need fresh data
+        >>> tacoreader.clear_cache()
+        >>> ds3 = tacoreader.load("s3://bucket/data.tacozip")  # Re-downloads
+    """
+    from tacoreader.storage.folder import _read_collection_folder_cached
+    from tacoreader.storage.tacocat import _read_tacocat_file_cached
+    from tacoreader.storage.zip import _read_taco_header_cached
+
+    _read_taco_header_cached.cache_clear()
+    _read_collection_folder_cached.cache_clear()
+    _read_tacocat_file_cached.cache_clear()
+
+
 __all__ = [
     "TacoDataFrame",
     "TacoDataset",
+    "clear_cache",
     "concat",
     "get_backend",
     "load",

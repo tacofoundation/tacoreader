@@ -8,6 +8,10 @@ instances. Dataset.py uses create_dataframe() to remain backend-agnostic.
 from typing import Any, Protocol
 
 from tacoreader._constants import AVAILABLE_BACKENDS, DataFrameBackend
+from tacoreader._exceptions import TacoBackendError
+
+# Re-export base class for type hints and isinstance checks
+from tacoreader.dataframe.base import TacoDataFrame
 
 
 class BackendFactory(Protocol):
@@ -54,18 +58,18 @@ def create_dataframe(backend: str, arrow_table: Any, format_type: str):
         Backend-specific TacoDataFrame instance
 
     Raises:
-        ValueError: If backend is not registered or unknown
+        TacoBackendError: If backend is not registered or unknown
 
     Example:
         # In dataset.py
-        from tacoreader.backends.dataframe import create_dataframe
+        from tacoreader.dataframe import create_dataframe
 
         arrow_table = self._duckdb.execute(query).fetch_arrow_table()
         return create_dataframe('pyarrow', arrow_table, self._format)
     """
     # Validate backend type first
     if backend not in AVAILABLE_BACKENDS:
-        raise ValueError(
+        raise TacoBackendError(
             f"Unknown backend: '{backend}'\n"
             f"Available backends: {AVAILABLE_BACKENDS}\n"
             f"\n"
@@ -76,7 +80,7 @@ def create_dataframe(backend: str, arrow_table: Any, format_type: str):
 
     # Check if backend is registered
     if backend not in _BACKENDS:
-        raise ValueError(
+        raise TacoBackendError(
             f"Backend '{backend}' is not registered.\n"
             f"Registered backends: {list(_BACKENDS.keys())}\n"
             f"\n"
@@ -98,27 +102,26 @@ def get_available_backends() -> list[DataFrameBackend]:
     return list(_BACKENDS.keys())
 
 
-# Auto-register PyArrow backend (default, no dependencies)
-from tacoreader.backends.dataframe.pyarrow import TacoDataFrameArrow
+def _register_all_backends() -> None:
+    """Register all available backends on module import."""
+    # PyArrow (default, always available)
+    from tacoreader.dataframe.pyarrow import TacoDataFrameArrow
 
-register_backend("pyarrow", TacoDataFrameArrow.from_arrow)
+    register_backend("pyarrow", TacoDataFrameArrow.from_arrow)
 
-# Re-export base class for backward compatibility
-from tacoreader.backends.dataframe.base import TacoDataFrame
+    # Polars (optional)
+    from tacoreader.dataframe.polars import TacoDataFramePolars
 
-# Future backends will be registered here when their dependencies are available:
-# try:
-#     from tacoreader.backends.dataframe.polars import TacoDataFramePolars
-#     register_backend("polars", TacoDataFramePolars.from_arrow)
-# except ImportError:
-#     pass
-#
-# try:
-#     from tacoreader.backends.dataframe.pandas import TacoDataFramePandas
-#     register_backend("pandas", TacoDataFramePandas.from_arrow)
-# except ImportError:
-#     pass
+    register_backend("polars", TacoDataFramePolars.from_arrow)
 
+    # Pandas (optional)
+    from tacoreader.dataframe.pandas import TacoDataFramePandas
+
+    register_backend("pandas", TacoDataFramePandas.from_arrow)
+
+
+# Auto-register on module import
+_register_all_backends()
 
 __all__ = [
     "TacoDataFrame",

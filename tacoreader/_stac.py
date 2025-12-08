@@ -12,7 +12,7 @@ Main functions:
     - build_cascade_join_sql: Multi-level filtering with JOINs
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from tacoreader._constants import (
@@ -24,14 +24,10 @@ from tacoreader._constants import (
     STAC_GEOMETRY_COLUMN_PRIORITY,
     STAC_TIME_COLUMN_PRIORITY,
 )
+from tacoreader._exceptions import TacoQueryError
 
 if TYPE_CHECKING:
     from tacoreader.dataset import TacoDataset
-
-
-# ============================================================================
-# LEVEL HELPERS
-# ============================================================================
 
 
 def validate_level_exists(dataset: "TacoDataset", level: int) -> None:
@@ -39,7 +35,7 @@ def validate_level_exists(dataset: "TacoDataset", level: int) -> None:
     max_level = dataset.pit_schema.max_depth()
 
     if level < 0 or level > max_level:
-        raise ValueError(
+        raise TacoQueryError(
             f"Level {level} does not exist.\n" f"Available levels: 0 to {max_level}"
         )
 
@@ -116,11 +112,6 @@ def build_cascade_join_sql(
     """
 
 
-# ============================================================================
-# AUTO-DETECTION
-# ============================================================================
-
-
 def detect_geometry_column(columns: list[str]) -> str:
     """
     Auto-detect best geometry column.
@@ -131,7 +122,7 @@ def detect_geometry_column(columns: list[str]) -> str:
         if col in columns:
             return col
 
-    raise ValueError(
+    raise TacoQueryError(
         "No geometry column found.\n"
         f"Expected one of: {', '.join(STAC_GEOMETRY_COLUMN_PRIORITY)}\n"
         f"Available: {columns}"
@@ -148,16 +139,11 @@ def detect_time_column(columns: list[str]) -> str:
         if col in columns:
             return col
 
-    raise ValueError(
+    raise TacoQueryError(
         "No time column found.\n"
         f"Expected one of: {', '.join(STAC_TIME_COLUMN_PRIORITY)}\n"
         f"Available: {columns}"
     )
-
-
-# ============================================================================
-# INPUT CONVERSION
-# ============================================================================
 
 
 def parse_datetime(
@@ -177,49 +163,120 @@ def parse_datetime(
     if isinstance(dt_input, str):
         if "/" in dt_input:
             start_str, end_str = dt_input.split("/", 1)
-            start_dt = datetime.fromisoformat(start_str.replace("Z", "+00:00"))
-            end_dt = datetime.fromisoformat(end_str.replace("Z", "+00:00"))
+            start_dt = _parse_iso_string(start_str)
+            end_dt = _parse_iso_string(end_str)
 
             start_ts = int(start_dt.timestamp())
             end_ts = int(end_dt.timestamp())
 
             if start_ts > end_ts:
-                raise ValueError(
+                raise TacoQueryError(
                     f"Invalid range: start ({start_str}) > end ({end_str})"
                 )
 
             return start_ts, end_ts
         else:
             # Single date string
-            start_dt = datetime.fromisoformat(dt_input.replace("Z", "+00:00"))
+            start_dt = _parse_iso_string(dt_input)
             return int(start_dt.timestamp()), None
 
     # Single datetime object
     elif isinstance(dt_input, datetime):
-        return int(dt_input.timestamp()), None
+        dt_utc = _ensure_utc(dt_input)
+        return int(dt_utc.timestamp()), None
 
     # Tuple of datetime objects
     elif isinstance(dt_input, tuple) and len(dt_input) == 2:
         start_dt, end_dt = dt_input
-        start_ts = int(start_dt.timestamp())
-        end_ts = int(end_dt.timestamp())
+        start_utc = _ensure_utc(start_dt)
+        end_utc = _ensure_utc(end_dt)
+
+        start_ts = int(start_utc.timestamp())
+        end_ts = int(end_utc.timestamp())
 
         if start_ts > end_ts:
-            raise ValueError("Invalid range: start > end")
+            raise TacoQueryError("Invalid range: start > end")
 
         return start_ts, end_ts
 
     else:
-        raise ValueError(
+        raise TacoQueryError(
             f"Invalid datetime: {dt_input}\n"
             f"Expected: string range ('2023-01-01/2023-12-31'), "
             f"datetime object, or tuple"
         )
 
 
-# ============================================================================
-# SQL BUILDERS
-# ============================================================================
+def _parse_iso_string(dt_str: str) -> datetime:
+    """Parse ISO 8601 string to UTC datetime."""
+    # Replace 'Z' with UTC offset for fromisoformat()
+    dt_str_normalized = dt_str.replace("Z", "+00:00")
+
+    dt = datetime.fromisoformat(dt_str_normalized)
+
+    # If naive (no timezone), assume UTC
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+
+    # Convert to UTC if needed
+    dt_utc = dt.astimezone(timezone.utc)
+
+    return dt_utc
+
+
+def _ensure_utc(dt: datetime) -> datetime:
+    """Ensure datetime is UTC-aware."""
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    else:
+        return dt.astimezone(timezone.utc)
+
+
+def _apply_stac_filter(
+    dataset: "TacoDataset",
+    level: int,
+    column_name: str,
+    column_auto_detect_fn,
+    sql_builder_fn,
+    sql_builder_args: tuple,
+) -> "TacoDataset":
+    """
+    Base method for STAC-like filtering operations.
+
+    Abstracts common pattern:
+    1. Validate level exists
+    2. Get columns for target level
+    3. Auto-detect or validate column
+    4. Build SQL filter
+    5. Apply filter (level 0 direct, level N with JOINs)
+    """
+    validate_level_exists(dataset, level)
+
+    # Get columns for target level
+    current_cols = (
+        dataset.data.columns if level == 0 else get_columns_for_level(dataset, level)
+    )
+
+    # Auto-detect or validate column
+    if column_name == "auto":
+        column_name = column_auto_detect_fn(current_cols)
+    else:
+        if column_name not in current_cols:
+            raise TacoQueryError(
+                f"Column '{column_name}' not found.\nAvailable: {current_cols}"
+            )
+
+    # Build SQL filter
+    sql_filter = sql_builder_fn(*sql_builder_args, column_name, level)
+
+    # Apply filter
+    if level == 0:
+        return dataset.sql(f"SELECT * FROM {DEFAULT_VIEW_NAME} WHERE {sql_filter}")
+    else:
+        full_query = build_cascade_join_sql(
+            dataset._view_name, level, sql_filter, dataset._format
+        )
+        return dataset.sql(full_query)
 
 
 def build_bbox_sql(
@@ -269,13 +326,15 @@ def build_datetime_sql(
     """
     col_ref = f'l{level}."{time_col}"' if level > 0 else f'"{time_col}"'
 
-    # Convert epoch to ISO string - DuckDB parses it automatically
-    start_str = datetime.fromtimestamp(start).isoformat()
+    # Convert epoch to UTC datetime, then to ISO string
+    start_dt = datetime.fromtimestamp(start, tz=timezone.utc)
+    start_str = start_dt.isoformat()
 
     if end is None:
         # Point-in-time query
         return f"({col_ref} = '{start_str}')"
     else:
         # Range query
-        end_str = datetime.fromtimestamp(end).isoformat()
+        end_dt = datetime.fromtimestamp(end, tz=timezone.utc)
+        end_str = end_dt.isoformat()
         return f"({col_ref} BETWEEN '{start_str}' AND '{end_str}')"

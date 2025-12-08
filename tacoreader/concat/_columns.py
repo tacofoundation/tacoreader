@@ -17,6 +17,7 @@ from tacoreader._constants import (
     METADATA_SOURCE_FILE,
     PROTECTED_COLUMNS,
 )
+from tacoreader._exceptions import TacoQueryError, TacoSchemaError
 from tacoreader._logging import get_logger
 
 if TYPE_CHECKING:
@@ -42,16 +43,17 @@ def validate_column_compatibility(
         Dict mapping level_key -> list of final columns for that level
 
     Raises:
-        ValueError: If critical columns missing or strict mode violations
+        TacoQueryError: If invalid column mode specified
+        TacoSchemaError: If critical columns missing or strict mode violations
     """
     if mode not in ("intersection", "fill_missing", "strict"):
-        raise ValueError(
+        raise TacoQueryError(
             f"Invalid column_mode: '{mode}'\n"
             f"Valid options: 'intersection' (default), 'fill_missing', 'strict'"
         )
 
     # Collect all available levels
-    all_levels = set()
+    all_levels: set[str] = set()
     for ds in datasets:
         max_depth = ds.pit_schema.max_depth()
         all_levels.update(f"{LEVEL_VIEW_PREFIX}{i}" for i in range(max_depth + 1))
@@ -84,11 +86,6 @@ def validate_column_compatibility(
             )
 
     return final_columns
-
-
-# ============================================================================
-# INTERNAL: Data Collection
-# ============================================================================
 
 
 def _collect_level_columns(
@@ -137,11 +134,6 @@ def _compute_column_lists(
     return common_cols_list, all_cols_list
 
 
-# ============================================================================
-# INTERNAL: Validation
-# ============================================================================
-
-
 def _validate_critical_columns(
     level_key: str, column_sets: list[set[str]], common_cols: list[str]
 ) -> None:
@@ -162,7 +154,7 @@ def _validate_critical_columns(
             if missing:
                 problematic.append(f"  - Dataset {i}: missing {sorted(missing)}")
 
-        raise ValueError(
+        raise TacoSchemaError(
             f"Cannot concat: Critical columns missing in {level_key}\n"
             f"\n"
             f"Required columns for navigation:\n"
@@ -174,11 +166,6 @@ def _validate_critical_columns(
             f"Problems found:\n" + "\n".join(problematic) + "\n"
             "These columns are required for .read() and hierarchical navigation."
         )
-
-
-# ============================================================================
-# INTERNAL: Mode Handlers
-# ============================================================================
 
 
 def _handle_strict_mode(
@@ -210,7 +197,7 @@ def _handle_strict_mode(
             f"  3. Align columns with SQL before concat:\n"
             f"     ds1 = ds1.sql('SELECT col1, col2, ... FROM {DEFAULT_VIEW_NAME}')"
         )
-        raise ValueError(error_msg)
+        raise TacoSchemaError(error_msg)
 
 
 def _handle_intersection_mode(

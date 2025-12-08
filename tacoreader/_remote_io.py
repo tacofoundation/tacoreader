@@ -9,6 +9,7 @@ TODO: The use of obstore is temporary until get time to review OpenDAL properly.
 import obstore as obs
 
 from tacoreader._constants import PROTOCOL_MAPPINGS
+from tacoreader._exceptions import TacoIOError
 
 
 def _create_store(url: str):
@@ -38,7 +39,7 @@ def _create_store(url: str):
 
     # Build error message with all supported protocols
     supported = sorted({PROTOCOL_MAPPINGS[p]["standard"] for p in PROTOCOL_MAPPINGS})
-    raise ValueError(
+    raise TacoIOError(
         f"Unsupported URL scheme: {url}\n" f"Supported: {', '.join(supported)}"
     )
 
@@ -59,7 +60,7 @@ def download_bytes(url: str, subpath: str = "") -> bytes:
         result = obs.get(store, subpath)
         return bytes(result.bytes())
     except Exception as e:
-        raise OSError(f"Failed to download {url}{subpath}: {e}") from e
+        raise TacoIOError(f"Failed to download {url}{subpath}: {e}") from e
 
 
 def download_range(url: str, offset: int, size: int, subpath: str = "") -> bytes:
@@ -83,7 +84,7 @@ def download_range(url: str, offset: int, size: int, subpath: str = "") -> bytes
         result = obs.get_range(store, subpath, start=offset, length=size)
         return bytes(result)
     except Exception as e:
-        raise OSError(
+        raise TacoIOError(
             f"Failed to download range [{offset}:{offset+size}] from {url}{subpath}: {e}"
         ) from e
 

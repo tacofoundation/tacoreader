@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 import duckdb
 
 from tacoreader._constants import DEFAULT_VIEW_NAME, LEVEL_VIEW_PREFIX
+from tacoreader._exceptions import TacoQueryError
 from tacoreader._logging import get_logger
 from tacoreader.concat._validation import validate_datasets
 from tacoreader.concat._view_builder import ViewBuilder
@@ -45,25 +46,20 @@ def concat(
         TacoDataset with consolidated data and lazy SQL
 
     Raises:
-        ValueError: If datasets have incompatible schemas or mixed backends/formats
+        TacoQueryError: If less than 2 datasets provided
+        TacoBackendError: If datasets have incompatible backends
+        TacoSchemaError: If datasets have incompatible schemas or formats
     """
     if len(datasets) < 2:
-        raise ValueError(f"Need at least 2 datasets to concat, got {len(datasets)}")
+        raise TacoQueryError(f"Need at least 2 datasets to concat, got {len(datasets)}")
 
     logger.info(f"Concatenating {len(datasets)} datasets...")
 
-    # ========================================================================
-    # PHASE 1: VALIDATION
-    # ========================================================================
     validate_datasets(datasets)
 
     # Use backend from first dataset (all are the same after validation)
     backend = datasets[0]._dataframe_backend
     logger.debug(f"Using DataFrame backend: {backend}")
-
-    # ========================================================================
-    # PHASE 2: PREPARATION
-    # ========================================================================
 
     # Validate columns and get target columns
     logger.debug(f"Validating columns (mode={column_mode})...")
@@ -77,10 +73,6 @@ def concat(
     # Merge schemas
     consolidated_schema = _merge_schemas(datasets)
     logger.debug("Merged schemas")
-
-    # ========================================================================
-    # PHASE 3: CONSTRUCTION
-    # ========================================================================
 
     logger.debug("Building DuckDB views...")
 
@@ -101,10 +93,6 @@ def concat(
 
     # Create 'data' view pointing to level0
     db.execute(f"CREATE VIEW {DEFAULT_VIEW_NAME} AS SELECT * FROM {LEVEL_VIEW_PREFIX}0")
-
-    # ========================================================================
-    # PHASE 4: FINALIZATION
-    # ========================================================================
 
     total_samples = consolidated_schema.root["n"]
     logger.info(
@@ -136,11 +124,6 @@ def concat(
     return dataset
 
 
-# ============================================================================
-# INTERNAL HELPERS
-# ============================================================================
-
-
 def _setup_duckdb_connection() -> duckdb.DuckDBPyConnection:
     """Create DuckDB connection with spatial extension if available."""
     db = duckdb.connect(":memory:")
@@ -157,7 +140,7 @@ def _setup_duckdb_connection() -> duckdb.DuckDBPyConnection:
 
 def _get_all_levels(datasets: list["TacoDataset"]) -> set[str]:
     """Get union of all available level views across datasets."""
-    all_levels = set()
+    all_levels: set[str] = set()
     for ds in datasets:
         max_depth = ds.pit_schema.max_depth()
         all_levels.update(f"{LEVEL_VIEW_PREFIX}{i}" for i in range(max_depth + 1))
@@ -167,7 +150,7 @@ def _get_all_levels(datasets: list["TacoDataset"]) -> set[str]:
 def _merge_schemas(datasets: list["TacoDataset"]) -> PITSchema:
     """Merge compatible schemas by summing n values."""
     if not datasets:
-        raise ValueError("Need at least one dataset to merge")
+        raise TacoQueryError("Need at least one dataset to merge")
 
     reference = datasets[0].pit_schema
     merged_dict = reference.to_dict()

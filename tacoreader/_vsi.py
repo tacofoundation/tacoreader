@@ -8,7 +8,8 @@ No I/O operations - only string transformations.
 from pathlib import Path
 
 from tacoreader._constants import ALL_VSI_PREFIXES, PROTOCOL_MAPPINGS
-from tacoreader.utils.format import is_local
+from tacoreader._exceptions import TacoFormatError
+from tacoreader._format import is_local
 
 
 def to_vsi_root(path: str) -> str:
@@ -81,21 +82,21 @@ def parse_vsi_subfile(vsi_path: str) -> tuple[str, int, int]:
     Format: /vsisubfile/{offset}_{size},{root_path}
     """
     if not vsi_path.startswith("/vsisubfile/"):
-        raise ValueError(
+        raise TacoFormatError(
             f"Invalid VSI subfile path: must start with '/vsisubfile/', got: {vsi_path}"
         )
 
     content = vsi_path[len("/vsisubfile/") :]
 
     if "," not in content:
-        raise ValueError(
+        raise TacoFormatError(
             f"Invalid VSI subfile path: missing comma separator, got: {vsi_path}"
         )
 
     offset_size_part, root_path = content.split(",", 1)
 
     if "_" not in offset_size_part:
-        raise ValueError(
+        raise TacoFormatError(
             f"Invalid VSI subfile path: missing underscore in offset_size, got: {vsi_path}"
         )
 
@@ -104,7 +105,7 @@ def parse_vsi_subfile(vsi_path: str) -> tuple[str, int, int]:
         offset = int(offset_str)
         size = int(size_str)
     except ValueError as e:
-        raise ValueError(
+        raise TacoFormatError(
             f"Invalid VSI subfile path: offset or size not integers, got: {vsi_path}"
         ) from e
 

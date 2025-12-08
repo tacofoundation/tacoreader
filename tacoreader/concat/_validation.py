@@ -9,6 +9,7 @@ Validates:
 
 from typing import TYPE_CHECKING
 
+from tacoreader._exceptions import TacoBackendError, TacoSchemaError
 from tacoreader._logging import get_logger
 
 if TYPE_CHECKING:
@@ -22,7 +23,8 @@ def validate_datasets(datasets: list["TacoDataset"]) -> None:
     Run all validations on datasets before concatenation.
 
     Raises:
-        ValueError: If any validation fails
+        TacoBackendError: If backends are incompatible
+        TacoSchemaError: If formats or schemas are incompatible
     """
     _validate_backends(datasets)
     _validate_formats(datasets)
@@ -42,7 +44,7 @@ def _validate_backends(datasets: list["TacoDataset"]) -> None:
         for i, ds in enumerate(datasets)
     ]
 
-    raise ValueError(
+    raise TacoBackendError(
         f"Cannot concatenate datasets with different DataFrame backends.\n"
         f"\n"
         f"Found {len(backends)} different backends: {sorted(backends)}\n"
@@ -70,7 +72,7 @@ def _validate_formats(datasets: list["TacoDataset"]) -> None:
         for i, ds in enumerate(datasets)
     ]
 
-    raise ValueError(
+    raise TacoSchemaError(
         f"Cannot concatenate datasets with different formats.\n"
         f"\n"
         f"Found {len(formats)} different formats: {sorted(formats)}\n"
@@ -88,7 +90,7 @@ def _validate_schemas(datasets: list["TacoDataset"]) -> None:
 
     for i, ds in enumerate(datasets[1:], 1):
         if not reference_schema.is_compatible(ds.pit_schema):
-            raise ValueError(
+            raise TacoSchemaError(
                 f"Dataset {i} has incompatible schema. "
                 f"All datasets must share same hierarchy structure.\n"
                 f"Reference: {reference_schema}\n"

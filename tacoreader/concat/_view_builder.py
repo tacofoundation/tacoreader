@@ -25,6 +25,7 @@ from tacoreader._constants import (
     TACOCAT_FILENAME,
     UNION_VIEW_SUFFIX,
 )
+from tacoreader._exceptions import TacoFormatError
 from tacoreader._logging import get_logger
 
 if TYPE_CHECKING:
@@ -68,10 +69,6 @@ class ViewBuilder:
         self._create_format_views()
 
         logger.debug("Created all DuckDB views")
-
-    # ========================================================================
-    # UNION ALL VIEWS (format-agnostic)
-    # ========================================================================
 
     def _create_union_views(self) -> None:
         """Create UNION ALL views for each level."""
@@ -140,10 +137,6 @@ class ViewBuilder:
                 select_parts.append(f'NULL AS "{col}"')
         return select_parts
 
-    # ========================================================================
-    # FORMAT-SPECIFIC VIEWS (strategy pattern)
-    # ========================================================================
-
     def _create_format_views(self) -> None:
         """Create format-specific views with GDAL VSI paths."""
         # Strategy pattern: delegate to format-specific method
@@ -154,7 +147,7 @@ class ViewBuilder:
         elif self.format_type == "tacocat":
             self._create_tacocat_views()
         else:
-            raise ValueError(f"Unknown format: {self.format_type}")
+            raise TacoFormatError(f"Unknown format: {self.format_type}")
 
     def _create_zip_views(self) -> None:
         """Create final views for ZIP format."""
@@ -229,10 +222,6 @@ class ViewBuilder:
                 WHERE {COLUMN_ID} NOT LIKE '{PADDING_PREFIX}%'
             """
             )
-
-    # ========================================================================
-    # HELPERS
-    # ========================================================================
 
     def _view_exists(self, level_key: str) -> bool:
         """Check if union view exists for given level."""

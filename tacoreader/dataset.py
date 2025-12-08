@@ -10,6 +10,7 @@ without importing specific backend implementations.
 
 import re
 import uuid
+from contextlib import suppress
 from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, PrivateAttr
@@ -18,7 +19,7 @@ from tacoreader._constants import DEFAULT_VIEW_NAME, SQL_JOIN_PATTERN
 from tacoreader.schema import PITSchema
 
 if TYPE_CHECKING:
-    from tacoreader.backends.dataframe.base import TacoDataFrame
+    from tacoreader.dataframe.base import TacoDataFrame
 
 
 class TacoDataset(BaseModel):
@@ -28,13 +29,31 @@ class TacoDataset(BaseModel):
     Metadata container with lazy query via DuckDB. Queries create views
     without materializing data until .data is accessed.
 
+    Connection Management:
+        Datasets own their DuckDB connection. Use context manager for
+        automatic cleanup (recommended):
+
+        # Automatic cleanup (recommended)
+        with tacoreader.load("data.taco") as ds:
+            result = ds.sql("SELECT * WHERE ...").data
+
+        # Manual cleanup
+        ds = tacoreader.load("data.taco")
+        try:
+            result = ds.sql("SELECT * WHERE ...").data
+        finally:
+            ds.close()
+
+        Note: Child datasets from .sql() share parent's connection.
+        Note: Without explicit close(), connection persists until process exit.
+
     Public attributes (STAC-like):
         id, version, description, tasks, extent, providers, licenses,
         title, curators, keywords, pit_schema
 
     Private attributes:
         _path, _format, _collection, _duckdb, _view_name, _root_path,
-        _dataframe_backend, _has_level1_joins, _joined_levels
+        _dataframe_backend, _owns_connection, _has_level1_joins, _joined_levels
 
     Examples:
         ds = load("data.tacozip")
@@ -69,6 +88,7 @@ class TacoDataset(BaseModel):
     _view_name: str = PrivateAttr(default=DEFAULT_VIEW_NAME)
     _root_path: str = PrivateAttr(default="")
     _dataframe_backend: str = PrivateAttr(default="pyarrow")
+    _owns_connection: bool = PrivateAttr(default=True)
 
     # JOIN tracking (for export validation in tacotoolbox)
     _has_level1_joins: bool = PrivateAttr(default=False)
@@ -76,9 +96,37 @@ class TacoDataset(BaseModel):
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    # ========================================================================
-    # PROPERTIES
-    # ========================================================================
+    def close(self):
+        """
+        Close DuckDB connection and cleanup views.
+
+        Only closes the connection if this dataset owns it.
+        Datasets created with .sql() share the parent's connection.
+
+        Note: Prefer using context manager (with statement) over manual close().
+        """
+        if not hasattr(self, "_duckdb") or self._duckdb is None:
+            return
+
+        # Always drop temp views
+        if hasattr(self, "_view_name") and self._view_name != DEFAULT_VIEW_NAME:
+            with suppress(Exception):
+                self._duckdb.execute(f"DROP VIEW IF EXISTS {self._view_name}")
+
+        # Close connection only if owner
+        if hasattr(self, "_owns_connection") and self._owns_connection:
+            with suppress(Exception):
+                self._duckdb.close()
+            self._duckdb = None
+
+    def __enter__(self):
+        """Context manager entry."""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit - cleanup resources."""
+        self.close()
+        return False
 
     @property
     def data(self) -> "TacoDataFrame":
@@ -90,7 +138,7 @@ class TacoDataset(BaseModel):
 
         Uses backend factory to create appropriate TacoDataFrame instance.
         """
-        from tacoreader.backends.dataframe import create_dataframe
+        from tacoreader.dataframe import create_dataframe
 
         # DuckDB always returns PyArrow Table
         arrow_table = self._duckdb.execute(
@@ -113,10 +161,6 @@ class TacoDataset(BaseModel):
     def collection(self) -> dict[str, Any]:
         """Complete COLLECTION.json content with all metadata."""
         return self._collection.copy()
-
-    # ========================================================================
-    # LAZY SQL INTERFACE
-    # ========================================================================
 
     def sql(self, query: str) -> "TacoDataset":
         """
@@ -181,13 +225,10 @@ class TacoDataset(BaseModel):
             _view_name=new_view_name,
             _root_path=self._root_path,
             _dataframe_backend=self._dataframe_backend,
+            _owns_connection=False,  # Child datasets don't own connection
             _has_level1_joins=final_has_joins,
             _joined_levels=final_joined_levels,
         )
-
-    # ========================================================================
-    # STAC SHORTCUTS
-    # ========================================================================
 
     def filter_bbox(
         self,
@@ -203,40 +244,20 @@ class TacoDataset(BaseModel):
 
         When level > 0, filters level0 samples based on children's metadata.
         """
-        from tacoreader.stac import (
+        from tacoreader._stac import (
+            _apply_stac_filter,
             build_bbox_sql,
-            build_cascade_join_sql,
             detect_geometry_column,
-            get_columns_for_level,
-            validate_level_exists,
         )
 
-        validate_level_exists(self, level)
-
-        # Get columns for target level
-        current_cols = (
-            self.data.columns if level == 0 else get_columns_for_level(self, level)
+        return _apply_stac_filter(
+            dataset=self,
+            level=level,
+            column_name=geometry_col,
+            column_auto_detect_fn=detect_geometry_column,
+            sql_builder_fn=build_bbox_sql,
+            sql_builder_args=(minx, miny, maxx, maxy),
         )
-
-        # Detect or validate geometry column
-        if geometry_col == "auto":
-            geometry_col = detect_geometry_column(current_cols)
-        else:
-            if geometry_col not in current_cols:
-                raise ValueError(
-                    f"Geometry column '{geometry_col}' not found.\n"
-                    f"Available: {current_cols}"
-                )
-
-        sql_filter = build_bbox_sql(minx, miny, maxx, maxy, geometry_col, level)
-
-        if level == 0:
-            return self.sql(f"SELECT * FROM {DEFAULT_VIEW_NAME} WHERE {sql_filter}")
-        else:
-            full_query = build_cascade_join_sql(
-                self._view_name, level, sql_filter, self._format
-            )
-            return self.sql(full_query)
 
     def filter_datetime(
         self,
@@ -251,44 +272,23 @@ class TacoDataset(BaseModel):
         All temporal columns are native TIMESTAMP type.
         When level > 0, filters level0 samples based on children's metadata.
         """
-        from tacoreader.stac import (
-            build_cascade_join_sql,
+        from tacoreader._stac import (
+            _apply_stac_filter,
             build_datetime_sql,
             detect_time_column,
-            get_columns_for_level,
             parse_datetime,
-            validate_level_exists,
         )
-
-        validate_level_exists(self, level)
-
-        current_cols = (
-            self.data.columns if level == 0 else get_columns_for_level(self, level)
-        )
-
-        if time_col == "auto":
-            time_col = detect_time_column(current_cols)
-        else:
-            if time_col not in current_cols:
-                raise ValueError(
-                    f"Time column '{time_col}' not found.\n"
-                    f"Available: {current_cols}"
-                )
 
         start, end = parse_datetime(datetime_range)
-        sql_filter = build_datetime_sql(start, end, time_col, level)
 
-        if level == 0:
-            return self.sql(f"SELECT * FROM {DEFAULT_VIEW_NAME} WHERE {sql_filter}")
-        else:
-            full_query = build_cascade_join_sql(
-                self._view_name, level, sql_filter, self._format
-            )
-            return self.sql(full_query)
-
-    # ========================================================================
-    # REPRESENTATION
-    # ========================================================================
+        return _apply_stac_filter(
+            dataset=self,
+            level=level,
+            column_name=time_col,
+            column_auto_detect_fn=detect_time_column,
+            sql_builder_fn=build_datetime_sql,
+            sql_builder_args=(start, end),
+        )
 
     def __repr__(self) -> str:
         """Rich text representation of dataset metadata."""

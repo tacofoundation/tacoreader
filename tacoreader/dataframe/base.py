@@ -10,6 +10,8 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any
 
+from tacoreader._exceptions import TacoNavigationError
+
 
 class TacoDataFrame(ABC):
     """
@@ -39,10 +41,6 @@ class TacoDataFrame(ABC):
         self._data = data
         self._format_type = format_type
 
-    # ========================================================================
-    # FACTORY METHOD (backend-specific)
-    # ========================================================================
-
     @classmethod
     @abstractmethod
     def from_arrow(cls, arrow_table, format_type: str) -> TacoDataFrame:
@@ -60,10 +58,6 @@ class TacoDataFrame(ABC):
             Backend-specific TacoDataFrame instance
         """
         pass
-
-    # ========================================================================
-    # ABSTRACT METHODS (backend-specific implementations)
-    # ========================================================================
 
     @abstractmethod
     def __len__(self) -> int:
@@ -126,9 +120,37 @@ class TacoDataFrame(ABC):
         """
         pass
 
-    # ========================================================================
-    # SHARED NAVIGATION (same for all backends)
-    # ========================================================================
+    def _get_position(self, key: int | str) -> int:
+        """
+        Convert key to integer position.
+
+        This method is SHARED - works with any backend via _to_arrow_for_stats().
+        Uses PyArrow for efficient ID search.
+        """
+        if isinstance(key, int):
+            if key < 0 or key >= len(self):
+                raise TacoNavigationError(
+                    f"Position {key} out of range [0, {len(self)-1}]"
+                )
+            return key
+
+        # Search by ID using PyArrow
+        import pyarrow.compute as pc
+
+        arrow_table = self._to_arrow_for_stats()
+
+        if "id" not in arrow_table.column_names:
+            raise TacoNavigationError("Cannot search by ID: 'id' column not found")
+
+        id_col = arrow_table.column("id")
+        mask = pc.equal(id_col, key)
+
+        # Find first True index
+        for i, val in enumerate(mask):
+            if val.as_py():
+                return i
+
+        raise TacoNavigationError(f"ID '{key}' not found")
 
     def read(self, key: int | str) -> TacoDataFrame | str:
         """
@@ -147,25 +169,6 @@ class TacoDataFrame(ABC):
 
         return self._read_meta(row)
 
-    def _get_position(self, key: int | str) -> int:
-        """
-        Convert key to integer position.
-
-        This method is SHARED - works with any backend via _get_row().
-        """
-        if isinstance(key, int):
-            if key < 0 or key >= len(self):
-                raise IndexError(f"Position {key} out of range [0, {len(self)-1}]")
-            return key
-
-        # Search by ID (backend-specific via _get_row)
-        for i in range(len(self)):
-            row = self._get_row(i)
-            if row.get("id") == key:
-                return i
-
-        raise KeyError(f"ID '{key}' not found")
-
     def _read_meta(self, row: dict) -> TacoDataFrame:
         """
         Read __meta__ file for FOLDER sample.
@@ -178,7 +181,7 @@ class TacoDataFrame(ABC):
         - Direct paths (FOLDER): Read Parquet from filesystem
 
         Raises:
-            ValueError: If required metadata columns are missing
+            TacoNavigationError: If required metadata columns are missing
         """
         vsi_path = row["internal:gdal_vsi"]
 
@@ -204,16 +207,16 @@ class TacoDataFrame(ABC):
             PyArrow Table with children + internal:gdal_vsi column
 
         Raises:
-            ValueError: If children missing internal:offset or internal:size
+            TacoNavigationError: If children missing internal:offset or internal:size
         """
         from io import BytesIO
 
         import pyarrow as pa
         import pyarrow.parquet as pq
 
-        from tacoreader.remote_io import download_range
-        from tacoreader.utils.format import is_remote
-        from tacoreader.utils.vsi import parse_vsi_subfile, strip_vsi_prefix
+        from tacoreader._format import is_remote
+        from tacoreader._remote_io import download_range
+        from tacoreader._vsi import parse_vsi_subfile, strip_vsi_prefix
 
         # Parse /vsisubfile/ path
         root_path, offset, size = parse_vsi_subfile(vsi_path)
@@ -236,7 +239,7 @@ class TacoDataFrame(ABC):
 
             # Missing required columns for ZIP/TacoCat
             if "internal:offset" not in child_row or "internal:size" not in child_row:
-                raise ValueError(
+                raise TacoNavigationError(
                     f"Missing required metadata in ZIP/TacoCat format.\n"
                     f"Row {i} (id={child_row.get('id', 'unknown')}) is missing "
                     f"'internal:offset' or 'internal:size'.\n"
@@ -264,7 +267,7 @@ class TacoDataFrame(ABC):
             PyArrow Table with children + internal:gdal_vsi column
 
         Raises:
-            ValueError: If children missing both internal:relative_path and id
+            TacoNavigationError: If children missing both internal:relative_path and id
         """
         from io import BytesIO
         from pathlib import Path
@@ -272,8 +275,8 @@ class TacoDataFrame(ABC):
         import pyarrow as pa
         import pyarrow.parquet as pq
 
-        from tacoreader.remote_io import download_bytes
-        from tacoreader.utils.format import is_remote
+        from tacoreader._format import is_remote
+        from tacoreader._remote_io import download_bytes
 
         # Read Parquet from __meta__
         if is_remote(vsi_path):
@@ -309,7 +312,7 @@ class TacoDataFrame(ABC):
                 vsi_paths.append(f"{parent_path}/{child_row['id']}")
             else:
                 # Missing path information
-                raise ValueError(
+                raise TacoNavigationError(
                     f"Missing path information in FOLDER format.\n"
                     f"Row {i} (type={child_row.get('type', 'unknown')}) has neither "
                     f"'internal:relative_path' nor 'id'.\n"
@@ -319,76 +322,72 @@ class TacoDataFrame(ABC):
         vsi_array = pa.array(vsi_paths, type=pa.string())
         return children_table.append_column("internal:gdal_vsi", vsi_array)
 
-    # ========================================================================
-    # STATISTICS (shared - convert to Arrow internally)
-    # ========================================================================
-
     def stats_categorical(self):
         """Aggregate categorical probabilities using weighted average."""
-        from tacoreader.utils.stats import stats_categorical
+        from tacoreader.dataframe._stats import stats_categorical
 
         arrow_table = self._to_arrow_for_stats()
         return stats_categorical(arrow_table)
 
     def stats_mean(self):
         """Aggregate means using weighted average."""
-        from tacoreader.utils.stats import stats_mean
+        from tacoreader.dataframe._stats import stats_mean
 
         arrow_table = self._to_arrow_for_stats()
         return stats_mean(arrow_table)
 
     def stats_std(self):
         """Aggregate standard deviations using pooled std formula."""
-        from tacoreader.utils.stats import stats_std
+        from tacoreader.dataframe._stats import stats_std
 
         arrow_table = self._to_arrow_for_stats()
         return stats_std(arrow_table)
 
     def stats_min(self):
         """Aggregate minimums (global min across all rows)."""
-        from tacoreader.utils.stats import stats_min
+        from tacoreader.dataframe._stats import stats_min
 
         arrow_table = self._to_arrow_for_stats()
         return stats_min(arrow_table)
 
     def stats_max(self):
         """Aggregate maximums (global max across all rows)."""
-        from tacoreader.utils.stats import stats_max
+        from tacoreader.dataframe._stats import stats_max
 
         arrow_table = self._to_arrow_for_stats()
         return stats_max(arrow_table)
 
     def stats_p25(self):
         """Aggregate 25th percentiles using simple average."""
-        from tacoreader.utils.stats import stats_p25
+        from tacoreader.dataframe._stats import stats_p25
 
         arrow_table = self._to_arrow_for_stats()
         return stats_p25(arrow_table)
 
     def stats_p50(self):
         """Aggregate 50th percentiles (median) using simple average."""
-        from tacoreader.utils.stats import stats_p50
+        from tacoreader.dataframe._stats import stats_p50
 
         arrow_table = self._to_arrow_for_stats()
         return stats_p50(arrow_table)
 
     def stats_median(self):
         """Aggregate medians using simple average (alias for stats_p50)."""
-        from tacoreader.utils.stats import stats_p50
+        from tacoreader.dataframe._stats import stats_p50
 
         arrow_table = self._to_arrow_for_stats()
         return stats_p50(arrow_table)
 
     def stats_p75(self):
         """Aggregate 75th percentiles using simple average."""
-        from tacoreader.utils.stats import stats_p75
+        from tacoreader.dataframe._stats import stats_p75
 
         arrow_table = self._to_arrow_for_stats()
         return stats_p75(arrow_table)
 
     def stats_p95(self):
         """Aggregate 95th percentiles using simple average."""
-        from tacoreader.utils.stats import stats_p95
+        from tacoreader.dataframe._stats import stats_p95
 
         arrow_table = self._to_arrow_for_stats()
         return stats_p95(arrow_table)

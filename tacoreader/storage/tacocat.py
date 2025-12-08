@@ -15,6 +15,7 @@ Main classes:
 import mmap
 import struct
 import time
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -37,12 +38,12 @@ from tacoreader._constants import (
     TACOCAT_TOTAL_HEADER_SIZE,
     TACOCAT_VERSION,
 )
+from tacoreader._exceptions import TacoFormatError, TacoIOError
 from tacoreader._logging import get_logger
-from tacoreader.backends.storage.base import TacoBackend
+from tacoreader._remote_io import download_bytes
+from tacoreader._vsi import to_vsi_root
 from tacoreader.dataset import TacoDataset
-from tacoreader.remote_io import download_bytes
-from tacoreader.schema import PITSchema
-from tacoreader.utils.vsi import to_vsi_root
+from tacoreader.storage.base import TacoBackend
 
 logger = get_logger(__name__)
 
@@ -73,7 +74,7 @@ class TacoCatHeader:
     def __init__(self, header_bytes: bytes):
         """Parse TacoCat header from raw bytes."""
         if len(header_bytes) < TACOCAT_TOTAL_HEADER_SIZE:
-            raise ValueError(
+            raise TacoFormatError(
                 f"Header too short: {len(header_bytes)} bytes\n"
                 f"Expected: {TACOCAT_TOTAL_HEADER_SIZE} bytes"
             )
@@ -81,7 +82,7 @@ class TacoCatHeader:
         # Validate magic number
         magic = header_bytes[0:8]
         if magic != TACOCAT_MAGIC:
-            raise ValueError(
+            raise TacoFormatError(
                 f"Invalid TacoCat magic: {magic!r}\n" f"Expected: {TACOCAT_MAGIC!r}"
             )
 
@@ -90,13 +91,13 @@ class TacoCatHeader:
         self.max_depth = struct.unpack("<I", header_bytes[12:16])[0]
 
         if self.version != TACOCAT_VERSION:
-            raise ValueError(
+            raise TacoFormatError(
                 f"Unsupported version: {self.version}\n"
                 f"This reader supports: {TACOCAT_VERSION}"
             )
 
         if self.max_depth > 5:
-            raise ValueError(f"Invalid max_depth: {self.max_depth}")
+            raise TacoFormatError(f"Invalid max_depth: {self.max_depth}")
 
         # Parse level index (6 levels + collection = 7 entries)
         self.level_index = {}
@@ -123,7 +124,7 @@ class TacoCatHeader:
         )[0]
 
         if self.collection_offset == 0 or self.collection_size == 0:
-            raise ValueError("Header missing COLLECTION.json entry")
+            raise TacoFormatError("Header missing COLLECTION.json entry")
 
     def __repr__(self) -> str:
         return (
@@ -131,6 +132,39 @@ class TacoCatHeader:
             f"levels={list(self.level_index.keys())}, "
             f"collection_offset={self.collection_offset})"
         )
+
+
+@lru_cache(maxsize=32)
+def _read_tacocat_file_cached(path: str) -> tuple[bytes, TacoCatHeader]:
+    """
+    Read and cache complete TacoCat file (header + metadata + COLLECTION).
+
+    Cached because TacoCat files are pure metadata (typically a few MB)
+    and are frequently accessed during dataset exploration.
+
+    Args:
+        path: Path to __TACOCAT__ file (local or remote)
+
+    Returns:
+        Tuple of (full_file_bytes, parsed_header)
+    """
+    if Path(path).exists():
+        logger.debug(f"Reading local TacoCat: {path}")
+        with open(path, "rb") as f, mmap.mmap(
+            f.fileno(), 0, access=mmap.ACCESS_READ
+        ) as mm:
+            full_bytes = bytes(mm[:])
+    else:
+        try:
+            logger.debug(f"Downloading remote TacoCat: {path}")
+            full_bytes = download_bytes(path)
+        except Exception as e:
+            raise TacoIOError(f"Failed to download TacoCat from {path}: {e}") from e
+
+    # Parse header
+    header = TacoCatHeader(full_bytes[0:TACOCAT_TOTAL_HEADER_SIZE])
+
+    return full_bytes, header
 
 
 class TacoCatBackend(TacoBackend):
@@ -158,17 +192,15 @@ class TacoCatBackend(TacoBackend):
         t_start = time.time()
         logger.debug(f"Loading TacoCat from {path}")
 
-        # Download entire file to memory
+        # Download entire file to memory (uses cache)
         t_download = time.time()
-        full_bytes = self._get_full_file(path)
+        full_bytes, header = _read_tacocat_file_cached(path)
         download_time = time.time() - t_download
         file_size_mb = len(full_bytes) / (1024 * 1024)
         logger.debug(
-            f"Downloaded {file_size_mb:.1f}MB in {download_time:.2f}s ({file_size_mb/download_time:.1f}MB/s)"
+            f"Loaded {file_size_mb:.1f}MB in {download_time:.2f}s ({file_size_mb/download_time:.1f}MB/s)"
         )
 
-        # Parse header
-        header = TacoCatHeader(full_bytes[0:TACOCAT_TOTAL_HEADER_SIZE])
         logger.debug(
             f"Parsed header: version={header.version}, max_depth={header.max_depth}, levels={list(header.level_index.keys())}"
         )
@@ -203,7 +235,7 @@ class TacoCatBackend(TacoBackend):
             logger.debug(f"Registered {table_name} in DuckDB ({size} bytes)")
 
         if not level_ids:
-            raise ValueError(f"No metadata levels found in TacoCat: {path}")
+            raise TacoFormatError(f"No metadata levels found in TacoCat: {path}")
 
         # Finalize dataset using common method
         root_path = to_vsi_root(path)
@@ -216,16 +248,16 @@ class TacoCatBackend(TacoBackend):
 
     def read_collection(self, path: str) -> dict[str, Any]:
         """
-        Read COLLECTION.json from TacoCat file.
+        Read COLLECTION.json from TacoCat file with caching.
 
         COLLECTION.json stored at offset from header's 7th index entry.
         Contains consolidated metadata from all source ZIPs.
         """
-        full_bytes = self._get_full_file(path)
-        header = TacoCatHeader(full_bytes[0:TACOCAT_TOTAL_HEADER_SIZE])
+        # Use cached file read
+        full_bytes, header = _read_tacocat_file_cached(path)
 
         if header.collection_size == 0:
-            raise ValueError(f"Empty COLLECTION.json in TacoCat: {path}")
+            raise TacoFormatError(f"Empty COLLECTION.json in TacoCat: {path}")
 
         collection_bytes = full_bytes[
             header.collection_offset : header.collection_offset + header.collection_size
@@ -264,30 +296,6 @@ class TacoCatBackend(TacoBackend):
                 WHERE {filter_clause}
             """
             )
-
-    # ========================================================================
-    # INTERNAL HELPERS
-    # ========================================================================
-
-    def _get_full_file(self, path: str) -> bytes:
-        """
-        Get entire TacoCat file as bytes.
-
-        Local: mmap for efficiency
-        Remote: simple download
-        """
-        if Path(path).exists():
-            logger.debug(f"Reading local TacoCat: {path}")
-            with open(path, "rb") as f, mmap.mmap(
-                f.fileno(), 0, access=mmap.ACCESS_READ
-            ) as mm:
-                return bytes(mm[:])
-        else:
-            try:
-                logger.debug(f"Downloading remote TacoCat: {path}")
-                return download_bytes(path)
-            except Exception as e:
-                raise OSError(f"Failed to download TacoCat from {path}: {e}") from e
 
     def _extract_base_path(self, root_path: str) -> str:
         """

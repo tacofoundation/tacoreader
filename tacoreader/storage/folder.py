@@ -10,6 +10,7 @@ Main class:
 
 import json
 import time
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -27,13 +28,54 @@ from tacoreader._constants import (
     SAMPLE_TYPE_FILE,
     SAMPLE_TYPE_FOLDER,
 )
+from tacoreader._exceptions import TacoFormatError, TacoIOError
 from tacoreader._logging import get_logger
-from tacoreader.backends.storage.base import TacoBackend
+from tacoreader._remote_io import download_bytes
+from tacoreader._vsi import to_vsi_root
 from tacoreader.dataset import TacoDataset
-from tacoreader.remote_io import download_bytes
-from tacoreader.utils.vsi import to_vsi_root
+from tacoreader.storage.base import TacoBackend
 
 logger = get_logger(__name__)
+
+
+@lru_cache(maxsize=32)
+def _read_collection_folder_cached(path: str) -> dict[str, Any]:
+    """
+    Read and cache COLLECTION.json for FOLDER format.
+
+    Cached because COLLECTION.json is small (~10-50KB typically)
+    and accessed frequently during dataset exploration.
+
+    Args:
+        path: Path to FOLDER dataset (local or remote)
+
+    Returns:
+        Parsed COLLECTION.json as dictionary
+    """
+    if Path(path).exists():
+        # Local filesystem
+        collection_path = Path(path) / "COLLECTION.json"
+        if not collection_path.exists():
+            raise TacoFormatError(
+                f"COLLECTION.json not found in {path}\n" f"Expected: {collection_path}"
+            )
+
+        with open(collection_path) as f:
+            collection_bytes = f.read().encode("utf-8")
+    else:
+        # Remote storage - download_bytes is NOT cached (generic function)
+        try:
+            collection_bytes = download_bytes(path, "COLLECTION.json")
+        except Exception as e:
+            raise TacoIOError(f"Failed to read COLLECTION.json from {path}: {e}") from e
+
+    # Parse JSON
+    try:
+        return json.loads(collection_bytes)
+    except json.JSONDecodeError as e:
+        raise TacoFormatError(
+            f"Invalid COLLECTION.json in folder format at {path}: {e.msg}"
+        ) from e
 
 
 class FolderBackend(TacoBackend):
@@ -62,7 +104,7 @@ class FolderBackend(TacoBackend):
         t_start = time.time()
         logger.debug(f"Loading FOLDER from {path}")
 
-        # Read collection
+        # Read collection (uses cache)
         collection = self.read_collection(path)
         logger.debug("Parsed COLLECTION.json")
 
@@ -78,7 +120,7 @@ class FolderBackend(TacoBackend):
             metadata_dir = base_path / "METADATA"
 
             if not metadata_dir.exists():
-                raise ValueError(
+                raise TacoFormatError(
                     f"METADATA directory not found in {path}\n"
                     f"Expected: {metadata_dir}"
                 )
@@ -124,7 +166,7 @@ class FolderBackend(TacoBackend):
                     break  # Stop at first missing level
 
         if not level_ids:
-            raise ValueError(
+            raise TacoFormatError(
                 f"No metadata files found in {path}/METADATA/\n"
                 f"Expected at least {LEVEL_VIEW_PREFIX}0.parquet"
             )
@@ -140,31 +182,11 @@ class FolderBackend(TacoBackend):
 
     def read_collection(self, path: str) -> dict[str, Any]:
         """
-        Read COLLECTION.json from FOLDER root.
+        Read COLLECTION.json from FOLDER root with caching.
 
         Supports local filesystem and remote storage (S3/GCS/Azure).
         """
-        if Path(path).exists():
-            # Local filesystem
-            collection_path = Path(path) / "COLLECTION.json"
-            if not collection_path.exists():
-                raise ValueError(
-                    f"COLLECTION.json not found in {path}\n"
-                    f"Expected: {collection_path}"
-                )
-
-            with open(collection_path) as f:
-                collection_bytes = f.read().encode("utf-8")
-                return self._parse_collection_json(collection_bytes, path)
-
-        # Remote storage
-        try:
-            collection_bytes = download_bytes(path, "COLLECTION.json")
-            return self._parse_collection_json(collection_bytes, path)
-        except json.JSONDecodeError:
-            raise  # Already has consistent error message
-        except Exception as e:
-            raise OSError(f"Failed to read COLLECTION.json from {path}: {e}") from e
+        return _read_collection_folder_cached(path)
 
     def setup_duckdb_views(
         self,

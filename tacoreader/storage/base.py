@@ -95,10 +95,6 @@ class TacoBackend(ABC):
         """
         pass
 
-    # ========================================================================
-    # COMMON UTILITIES
-    # ========================================================================
-
     def _setup_duckdb_connection(self) -> duckdb.DuckDBPyConnection:
         """Create DuckDB connection with spatial extension if available."""
         db = duckdb.connect(":memory:")

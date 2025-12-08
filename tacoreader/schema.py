@@ -1,12 +1,12 @@
 """
-Position-Isomorphic Tree (PIT) schema for TACO datasets.
+Position-Invariant Tree (PIT) schema for TACO datasets.
 
 Enforces structural homogeneity: all samples at same level have identical structure
 (same types, same child counts, same child IDs). Enables predictable navigation
 and efficient vectorized operations.
 
 Core concepts:
-    - Position-Isomorphic: All nodes at same level have identical structure
+    - Position-Invariant: All nodes at same level have identical structure
     - Homogeneity: All folders at same level have same children (type and ID)
     - Padding: __TACOPAD__ samples maintain uniformity when counts differ
     - Compatibility: Datasets can be concatenated if schemas match structurally
@@ -36,6 +36,7 @@ from tacoreader._constants import (
     SAMPLE_TYPE_FOLDER,
     VALID_SAMPLE_TYPES,
 )
+from tacoreader._exceptions import TacoSchemaError
 
 
 class PITRootLevel(TypedDict):
@@ -49,7 +50,7 @@ class PITPattern(TypedDict):
     """
     Pattern descriptor for hierarchy level.
 
-    Position-isomorphic: if folder A has children [X, Y, Z],
+    Position-Invariant: if folder A has children [X, Y, Z],
     ALL folders at that level have children [X, Y, Z].
     """
 
@@ -86,7 +87,7 @@ class PITSchema:
         """Validate a single pattern at given depth."""
         # Check required fields
         if "type" not in pattern or "id" not in pattern:
-            raise ValueError(
+            raise TacoSchemaError(
                 f"Depth {depth_str}, pattern {pattern_idx}: missing required field\n"
                 f"Patterns must have both 'type' and 'id'"
             )
@@ -96,18 +97,18 @@ class PITSchema:
 
         # Check non-empty arrays
         if not types:
-            raise ValueError(
+            raise TacoSchemaError(
                 f"Depth {depth_str}, pattern {pattern_idx}: type array empty"
             )
 
         if not ids:
-            raise ValueError(
+            raise TacoSchemaError(
                 f"Depth {depth_str}, pattern {pattern_idx}: id array empty"
             )
 
         # Check same length
         if len(types) != len(ids):
-            raise ValueError(
+            raise TacoSchemaError(
                 f"Depth {depth_str}, pattern {pattern_idx}: type and id arrays differ\n"
                 f"Type: {len(types)}, ID: {len(ids)}"
             )
@@ -115,7 +116,7 @@ class PITSchema:
         # Validate child types
         for child_type in types:
             if child_type not in VALID_SAMPLE_TYPES:
-                raise ValueError(
+                raise TacoSchemaError(
                     f"Depth {depth_str}, pattern {pattern_idx}: invalid type '{child_type}'"
                 )
 
@@ -132,7 +133,7 @@ class PITSchema:
         """
         # Validate root type
         if self.root["type"] not in VALID_SAMPLE_TYPES:
-            raise ValueError(
+            raise TacoSchemaError(
                 f"Invalid root type: {self.root['type']}\n"
                 f"Must be '{SAMPLE_TYPE_FILE}' or '{SAMPLE_TYPE_FOLDER}'"
             )
@@ -140,7 +141,7 @@ class PITSchema:
         # Validate hierarchy
         for depth_str, patterns in self.hierarchy.items():
             if not depth_str.isdigit():
-                raise ValueError(
+                raise TacoSchemaError(
                     f"Invalid depth key: {depth_str}\n"
                     f"Depth keys must be numeric strings"
                 )

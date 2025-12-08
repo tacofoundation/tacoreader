@@ -6,11 +6,12 @@ Supports single files or lists (automatically concatenated).
 """
 
 from tacoreader._constants import DEFAULT_VIEW_NAME, LEVEL_VIEW_PREFIX
+from tacoreader._exceptions import TacoQueryError
+from tacoreader._format import detect_format
 from tacoreader._legacy import is_legacy_format, raise_legacy_error
-from tacoreader.backends.storage import create_backend, load_dataset
+from tacoreader._vsi import to_vsi_root
 from tacoreader.dataset import TacoDataset
-from tacoreader.utils.format import detect_format
-from tacoreader.utils.vsi import to_vsi_root
+from tacoreader.storage import create_backend, load_dataset
 
 
 def load(
@@ -56,7 +57,7 @@ def load(
     # Handle list of paths
     if isinstance(path, list):
         if len(path) == 0:
-            raise ValueError("Cannot load empty list of paths")
+            raise TacoQueryError("Cannot load empty list of paths")
 
         if len(path) == 1:
             return load(path[0], base_path, backend)

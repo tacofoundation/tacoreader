@@ -5,6 +5,8 @@ Detects TACO v1 formats (.taco, .tortilla, tacofoundation:) and provides
 clear migration path to v2 (.tacozip).
 """
 
+from tacoreader._exceptions import TacoFormatError
+
 
 def is_legacy_format(path: str) -> bool:
     """Check if path is legacy TACO v1 format."""
@@ -15,7 +17,7 @@ def raise_legacy_error(path: str) -> None:
     """
     Raise error with migration instructions for legacy format.
 
-    Always raises ValueError with colored terminal output showing:
+    Always raises TacoFormatError with colored terminal output showing:
     - Why it failed (v1 not supported in v2+)
     - How to read legacy files (install tacoreader<1.0)
     - How to migrate (use tacotoolbox 2.0)
@@ -44,4 +46,4 @@ def raise_legacy_error(path: str) -> None:
         f"for better performance.{RESET}"
     )
 
-    raise ValueError(message)
+    raise TacoFormatError(message)

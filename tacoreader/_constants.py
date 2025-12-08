@@ -1,28 +1,13 @@
 """
 Global constants for tacoreader.
 
-Organization:
-- DataFrame Backend: Backend selection and configuration
-- Cloud Storage & Protocols: Protocol mappings, VSI paths, remote detection
-- File Extensions: Format detection, valid extensions
-- Sample Types: FILE/FOLDER constants and validation
-- Metadata Columns: Internal column names (shared with tacotoolbox)
-- Protected Columns: Navigation-critical columns that cannot be modified
-- Hierarchy Limits: Max depth, levels (shared with tacotoolbox)
-- Padding: Auto-generated padding identifiers (shared with tacotoolbox)
-- TacoCat Format: Binary format specification (shared with tacotoolbox)
-- DuckDB: View names, SQL patterns, configuration
-- DataFrame: Display limits, operation defaults
-- Statistics: Aggregation constants
-- ISTAC/STAC: Geometry and time column priorities
+Organized by: DataFrame Backend, Cloud Storage, File Extensions,
+Sample Types, Metadata, Hierarchy, TacoCat, DuckDB, Statistics, STAC.
 """
 
 from typing import Literal
 
-# =============================================================================
 # DataFrame Backend Configuration
-# =============================================================================
-
 DataFrameBackend = Literal["pyarrow", "polars", "pandas"]
 """Valid DataFrame backend types."""
 
@@ -32,10 +17,8 @@ DEFAULT_DATAFRAME_BACKEND: DataFrameBackend = "pyarrow"
 AVAILABLE_BACKENDS: tuple[DataFrameBackend, ...] = ("pyarrow", "polars", "pandas")
 """All supported DataFrame backends (registered or not)."""
 
-# =============================================================================
-# Cloud Storage & Protocols
-# =============================================================================
 
+# Cloud Storage & Protocols
 PROTOCOL_MAPPINGS = {
     "s3": {"standard": "s3://", "vsi": "/vsis3/"},
     "gcs": {"standard": "gs://", "vsi": "/vsigs/"},
@@ -67,10 +50,8 @@ VSI_SPECIAL = ("/vsizip/", "/vsisubfile/")
 ALL_VSI_PREFIXES = VSI_PROTOCOLS + VSI_SPECIAL
 """All valid VSI prefixes (cloud + special)."""
 
-# =============================================================================
-# File Extensions
-# =============================================================================
 
+# File Extensions
 TACOZIP_EXTENSIONS = (".tacozip", ".zip")
 """Valid file extensions for ZIP format."""
 
@@ -80,10 +61,8 @@ PARQUET_EXTENSION = ".parquet"
 COLLECTION_JSON = "COLLECTION.json"
 """Standard filename for dataset metadata."""
 
-# =============================================================================
-# Sample Types (shared with tacotoolbox)
-# =============================================================================
 
+# Sample Types (shared with tacotoolbox)
 SAMPLE_TYPE_FILE = "FILE"
 """Sample type for file-based data (leaf nodes in hierarchy)."""
 
@@ -93,10 +72,8 @@ SAMPLE_TYPE_FOLDER = "FOLDER"
 VALID_SAMPLE_TYPES = frozenset({SAMPLE_TYPE_FILE, SAMPLE_TYPE_FOLDER})
 """All valid sample type values."""
 
-# =============================================================================
-# Metadata Columns (shared with tacotoolbox)
-# =============================================================================
 
+# Metadata Columns (shared with tacotoolbox)
 METADATA_PARENT_ID = "internal:parent_id"
 """Parent sample ID in previous level (enables relational queries)."""
 
@@ -115,20 +92,16 @@ METADATA_GDAL_VSI = "internal:gdal_vsi"
 METADATA_SOURCE_FILE = "internal:source_file"
 """Source file name for TacoCat consolidated datasets."""
 
-# =============================================================================
-# Core Columns (shared with tacotoolbox)
-# =============================================================================
 
+# Core Columns (shared with tacotoolbox)
 COLUMN_ID = "id"
 """Unique sample identifier."""
 
 COLUMN_TYPE = "type"
 """Sample type (FILE or FOLDER)."""
 
-# =============================================================================
-# Protected Columns (tacoreader navigation)
-# =============================================================================
 
+# Protected Columns (tacoreader navigation)
 PROTECTED_COLUMNS = frozenset(
     {
         # Core columns (modifying breaks references and navigation)
@@ -163,20 +136,16 @@ Without these columns, TacoDataFrame cannot:
 - Distinguish between FILE and FOLDER samples
 """
 
-# =============================================================================
-# Hierarchy Limits (shared with tacotoolbox)
-# =============================================================================
 
+# Hierarchy Limits (shared with tacotoolbox)
 SHARED_MAX_DEPTH = 5
 """Maximum hierarchy depth"""
 
 SHARED_MAX_LEVELS = 6
 """Total number of possible levels + COLLECTION (level0-5 + COLLECTION)."""
 
-# =============================================================================
-# Padding (shared with tacotoolbox)
-# =============================================================================
 
+# Padding (shared with tacotoolbox)
 PADDING_PREFIX = "__TACOPAD__"
 """
 Prefix for auto-generated padding sample IDs.
@@ -186,10 +155,8 @@ different parents have varying numbers of children. They are filtered
 out from user-facing views.
 """
 
-# =============================================================================
-# TacoCat Format Specification (shared with tacotoolbox)
-# =============================================================================
 
+# TacoCat Format Specification (shared with tacotoolbox)
 TACOCAT_MAGIC = b"TACOCAT\x00"
 """Magic number identifying TacoCat files (8 bytes)."""
 
@@ -216,10 +183,8 @@ TACOCAT_TOTAL_HEADER_SIZE = TACOCAT_HEADER_SIZE + TACOCAT_INDEX_SIZE  # 128
 TACOCAT_FILENAME = "__TACOCAT__"
 """Fixed filename for TacoCat consolidated files."""
 
-# =============================================================================
-# DuckDB Configuration
-# =============================================================================
 
+# DuckDB Configuration
 DEFAULT_VIEW_NAME = "data"
 """
 Default view name aliasing level0.
@@ -245,10 +210,8 @@ Used to track when queries involve multi-level relationships,
 which affects certain optimizations and validations.
 """
 
-# =============================================================================
-# Network & Performance (tacoreader-specific)
-# =============================================================================
 
+# Network & Performance
 ZIP_MAX_GAP_SIZE = 4 * 1024 * 1024  # 4 MB
 """
 Maximum gap between files in ZIP before splitting into separate requests.
@@ -258,20 +221,19 @@ than this amount are fetched in a single HTTP range request to minimize
 request count while avoiding excessive unused data transfer.
 """
 
-# =============================================================================
-# DataFrame Limits (tacoreader-specific)
-# =============================================================================
 
+# DataFrame Limits
 DATAFRAME_DEFAULT_HEAD_ROWS = 5
 """Default number of rows for .head()"""
 
 DATAFRAME_DEFAULT_TAIL_ROWS = 5
 """Default number of rows for .tail()"""
 
-# =============================================================================
-# Statistics Aggregation (tacoreader-specific)
-# =============================================================================
+DATAFRAME_MAX_REPR_ROWS = 100
+"""Maximum rows to display in TacoDataFrame.__repr__()"""
 
+
+# Statistics Aggregation
 STATS_CONTINUOUS_LENGTH = 9
 """
 Expected length for continuous stats arrays.
@@ -281,10 +243,8 @@ Format: [min, max, mean, std, valid%, p25, p50, p75, p95]
 Stats with different lengths are interpreted as categorical (class probabilities).
 """
 
-# =============================================================================
-# STAC / Geometry (tacoreader-specific)
-# =============================================================================
 
+# STAC Geometry & Time Columns
 STAC_GEOMETRY_COLUMN_PRIORITY = [
     "istac:geometry",  # Most precise - full geometry
     "stac:centroid",  # Point representation for STAC

@@ -4,11 +4,12 @@ TACO format backends.
 Factory functions for creating backend instances.
 """
 
-from tacoreader.backends.storage.base import TacoBackend
-from tacoreader.backends.storage.folder import FolderBackend
-from tacoreader.backends.storage.tacocat import TacoCatBackend
-from tacoreader.backends.storage.zip import ZipBackend
+from tacoreader._exceptions import TacoFormatError
 from tacoreader.dataset import TacoDataset
+from tacoreader.storage.base import TacoBackend
+from tacoreader.storage.folder import FolderBackend
+from tacoreader.storage.tacocat import TacoCatBackend
+from tacoreader.storage.zip import ZipBackend
 
 
 def create_backend(format_type: str) -> TacoBackend:
@@ -21,7 +22,7 @@ def create_backend(format_type: str) -> TacoBackend:
 
     backend_class = backends.get(format_type)
     if backend_class is None:
-        raise ValueError(
+        raise TacoFormatError(
             f"Unknown format: {format_type}\n"
             f"Supported: {', '.join(backends.keys())}"
         )
