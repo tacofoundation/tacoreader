@@ -146,7 +146,7 @@ def clear_cache():
     Cached metadata includes:
     - ZIP headers (256 bytes)
     - COLLECTION.json files (~10-50 KB)
-    - TacoCat files (complete metadata, typically a few MB)
+    - TacoCat COLLECTION.json
 
     Use this when remote files have changed and you want to force
     re-download on next load().
@@ -168,12 +168,12 @@ def clear_cache():
         >>> ds3 = tacoreader.load("s3://bucket/data.tacozip")  # Re-downloads
     """
     from tacoreader.storage.folder import _read_collection_folder_cached
-    from tacoreader.storage.tacocat import _read_tacocat_file_cached
+    from tacoreader.storage.tacocat import _read_tacocat_collection_cached
     from tacoreader.storage.zip import _read_taco_header_cached
 
     _read_taco_header_cached.cache_clear()
     _read_collection_folder_cached.cache_clear()
-    _read_tacocat_file_cached.cache_clear()
+    _read_tacocat_collection_cached.cache_clear()
 
 
 __all__ = [

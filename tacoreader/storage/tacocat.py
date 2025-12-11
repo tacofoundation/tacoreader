@@ -1,20 +1,19 @@
 """
 TacoCat backend for consolidated TACO datasets.
 
-Consolidates metadata from 100+ .tacozip files into a single high-performance file.
-Enables querying terabytes of data without opening each ZIP individually.
+Consolidates metadata from multiple .tacozip files into .tacocat/ folder
+with unified Parquet files optimized for DuckDB queries.
 
-Format: Fixed 128-byte header + consolidated Parquet metadata + COLLECTION.json
+Format: .tacocat/ folder with level*.parquet + COLLECTION.json
 internal:source_file column tracks origin ZIP for each sample.
 
-Main classes:
-    TacoCatHeader: Binary header parser
-    TacoCatBackend: Backend for TacoCat format
+Main class:
+    TacoCatBackend: Backend for TacoCat folder format
 """
 
-import mmap
-import struct
+import json
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -24,21 +23,18 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from tacoreader._constants import (
+    COLLECTION_JSON,
     LEVEL_TABLE_SUFFIX,
     LEVEL_VIEW_PREFIX,
     METADATA_GDAL_VSI,
     METADATA_OFFSET,
     METADATA_SIZE,
     METADATA_SOURCE_FILE,
-    TACOCAT_FILENAME,
-    TACOCAT_HEADER_SIZE,
-    TACOCAT_INDEX_ENTRY_SIZE,
-    TACOCAT_MAGIC,
+    TACOCAT_FOLDER_NAME,
     TACOCAT_MAX_LEVELS,
-    TACOCAT_TOTAL_HEADER_SIZE,
-    TACOCAT_VERSION,
 )
 from tacoreader._exceptions import TacoFormatError, TacoIOError
+from tacoreader._format import is_local
 from tacoreader._logging import get_logger
 from tacoreader._remote_io import download_bytes
 from tacoreader._vsi import to_vsi_root
@@ -48,134 +44,86 @@ from tacoreader.storage.base import TacoBackend
 logger = get_logger(__name__)
 
 
-class TacoCatHeader:
-    """
-    Parser for TacoCat binary header.
-
-    Format (128 bytes fixed):
-    ┌─────────────────────────────────────────┐
-    │ MAGIC: "TACOCAT\x00" (8 bytes)          │
-    │ VERSION: uint32 (4 bytes)               │
-    │ MAX_DEPTH: uint32 (4 bytes)             │
-    ├─────────────────────────────────────────┤
-    │ INDEX: 7 entries x (offset + size)      │
-    │   - LEVEL0...LEVEL5 (6 entries)         │
-    │   - COLLECTION (1 entry)                │
-    └─────────────────────────────────────────┘
-
-    Attributes:
-        version: TacoCat format version
-        max_depth: Maximum hierarchy depth (0-5)
-        level_index: {level: (offset, size)}
-        collection_offset: Byte offset of COLLECTION.json
-        collection_size: Size of COLLECTION.json
-    """
-
-    def __init__(self, header_bytes: bytes):
-        """Parse TacoCat header from raw bytes."""
-        if len(header_bytes) < TACOCAT_TOTAL_HEADER_SIZE:
-            raise TacoFormatError(
-                f"Header too short: {len(header_bytes)} bytes\n"
-                f"Expected: {TACOCAT_TOTAL_HEADER_SIZE} bytes"
-            )
-
-        # Validate magic number
-        magic = header_bytes[0:8]
-        if magic != TACOCAT_MAGIC:
-            raise TacoFormatError(
-                f"Invalid TacoCat magic: {magic!r}\n" f"Expected: {TACOCAT_MAGIC!r}"
-            )
-
-        # Parse version and max_depth
-        self.version = struct.unpack("<I", header_bytes[8:12])[0]
-        self.max_depth = struct.unpack("<I", header_bytes[12:16])[0]
-
-        if self.version != TACOCAT_VERSION:
-            raise TacoFormatError(
-                f"Unsupported version: {self.version}\n"
-                f"This reader supports: {TACOCAT_VERSION}"
-            )
-
-        if self.max_depth > 5:
-            raise TacoFormatError(f"Invalid max_depth: {self.max_depth}")
-
-        # Parse level index (6 levels + collection = 7 entries)
-        self.level_index = {}
-
-        for level in range(TACOCAT_MAX_LEVELS):
-            offset_pos = TACOCAT_HEADER_SIZE + (level * TACOCAT_INDEX_ENTRY_SIZE)
-            offset = struct.unpack("<Q", header_bytes[offset_pos : offset_pos + 8])[0]
-            size = struct.unpack("<Q", header_bytes[offset_pos + 8 : offset_pos + 16])[
-                0
-            ]
-
-            if offset > 0 and size > 0:
-                self.level_index[level] = (offset, size)
-
-        # Parse collection entry
-        col_offset_pos = TACOCAT_HEADER_SIZE + (
-            TACOCAT_MAX_LEVELS * TACOCAT_INDEX_ENTRY_SIZE
-        )
-        self.collection_offset = struct.unpack(
-            "<Q", header_bytes[col_offset_pos : col_offset_pos + 8]
-        )[0]
-        self.collection_size = struct.unpack(
-            "<Q", header_bytes[col_offset_pos + 8 : col_offset_pos + 16]
-        )[0]
-
-        if self.collection_offset == 0 or self.collection_size == 0:
-            raise TacoFormatError("Header missing COLLECTION.json entry")
-
-    def __repr__(self) -> str:
-        return (
-            f"TacoCatHeader(version={self.version}, max_depth={self.max_depth}, "
-            f"levels={list(self.level_index.keys())}, "
-            f"collection_offset={self.collection_offset})"
-        )
-
-
 @lru_cache(maxsize=32)
-def _read_tacocat_file_cached(path: str) -> tuple[bytes, TacoCatHeader]:
+def _read_tacocat_collection_cached(path: str) -> dict[str, Any]:
     """
-    Read and cache complete TacoCat file (header + metadata + COLLECTION).
+    Read and cache COLLECTION.json from .tacocat folder.
 
-    Cached because TacoCat files are pure metadata (typically a few MB)
-    and are frequently accessed during dataset exploration.
+    Cached because COLLECTION.json is small (~10-50KB) and frequently accessed
+    during dataset exploration and metadata queries.
 
     Args:
-        path: Path to __TACOCAT__ file (local or remote)
+        path: Path to .tacocat folder (local or remote)
 
     Returns:
-        Tuple of (full_file_bytes, parsed_header)
+        Parsed COLLECTION.json as dict
+
+    Raises:
+        TacoIOError: If file cannot be read
+        json.JSONDecodeError: If JSON is malformed
     """
-    if Path(path).exists():
-        logger.debug(f"Reading local TacoCat: {path}")
-        with open(path, "rb") as f, mmap.mmap(
-            f.fileno(), 0, access=mmap.ACCESS_READ
-        ) as mm:
-            full_bytes = bytes(mm[:])
+    if is_local(path):
+        collection_path = Path(path) / COLLECTION_JSON
+        if not collection_path.exists():
+            raise TacoIOError(f"COLLECTION.json not found in {path}")
+        return json.loads(collection_path.read_bytes())
     else:
-        try:
-            logger.debug(f"Downloading remote TacoCat: {path}")
-            full_bytes = download_bytes(path)
-        except Exception as e:
-            raise TacoIOError(f"Failed to download TacoCat from {path}: {e}") from e
+        collection_bytes = download_bytes(path, COLLECTION_JSON)
+        return json.loads(collection_bytes)
 
-    # Parse header
-    header = TacoCatHeader(full_bytes[0:TACOCAT_TOTAL_HEADER_SIZE])
 
-    return full_bytes, header
+def _fetch_level_file(level_id: int, base_path: str) -> tuple[int, bytes | None]:
+    """
+    Attempt to download single level*.parquet file.
+
+    Used by ThreadPoolExecutor to fetch files in parallel.
+    Returns None if file doesn't exist (expected for max_depth < 5).
+
+    Args:
+        level_id: Level number (0-5)
+        base_path: Base path to .tacocat folder
+
+    Returns:
+        Tuple of (level_id, bytes) if found, (level_id, None) if not found
+    """
+    filename = f"level{level_id}.parquet"
+
+    try:
+        if is_local(base_path):
+            file_path = Path(base_path) / filename
+            if file_path.exists():
+                return level_id, file_path.read_bytes()
+            else:
+                return level_id, None
+        else:
+            data = download_bytes(base_path, filename)
+            return level_id, data
+    except (FileNotFoundError, TacoIOError):
+        return level_id, None
+    except Exception as e:
+        logger.debug(f"Failed to fetch {filename}: {e}")
+        return level_id, None
 
 
 class TacoCatBackend(TacoBackend):
     """
-    Backend for TacoCat consolidated format.
+    Backend for TacoCat consolidated format (.tacocat folder).
 
-    Consolidates metadata from multiple .tacozip files into single file.
-    Queries across hundreds of ZIPs without opening each file individually.
+    Consolidates metadata from multiple .tacozip files into unified folder.
+    Queries across hundreds of ZIPs without opening each individually.
 
-    All data loaded to memory, no temp files created.
+    Parallel loading: all level*.parquet files fetched concurrently.
     internal:source_file column identifies origin ZIP for each sample.
+
+    Physical layout:
+        .tacocat/
+        ├── level0.parquet  (consolidated metadata from all ZIPs)
+        ├── level1.parquet  (if max_depth >= 1)
+        ├── level2.parquet  (if max_depth >= 2)
+        └── COLLECTION.json (consolidated metadata)
+
+    Each row in level*.parquet contains internal:source_file pointing to
+    the original .tacozip file containing the actual raster data.
     """
 
     @property
@@ -184,47 +132,48 @@ class TacoCatBackend(TacoBackend):
 
     def load(self, path: str) -> TacoDataset:
         """
-        Load TacoCat dataset entirely in memory.
+        Load TacoCat dataset (.tacocat folder).
 
-        Efficient for metadata-only files.
-        No temp files created during loading.
+        Strategy:
+        1. Parallel fetch all level*.parquet (ThreadPoolExecutor)
+        2. Parse Parquet from bytes, register in DuckDB
+        3. Load COLLECTION.json metadata
+        4. Create views with internal:gdal_vsi
+
+        All data loaded into memory, no temp files created.
+
+        Args:
+            path: Path to .tacocat folder (local or remote)
+
+        Returns:
+            Fully loaded TacoDataset instance
+
+        Raises:
+            TacoFormatError: If no level files found or format invalid
+            TacoIOError: If files cannot be read
         """
         t_start = time.time()
         logger.debug(f"Loading TacoCat from {path}")
 
-        # Download entire file to memory (uses cache)
-        t_download = time.time()
-        full_bytes, header = _read_tacocat_file_cached(path)
-        download_time = time.time() - t_download
-        file_size_mb = len(full_bytes) / (1024 * 1024)
+        # Parallel fetch all level files
+        t_fetch = time.time()
+        levels_bytes = self._fetch_all_levels(path)
+        fetch_time = time.time() - t_fetch
+
+        total_mb = sum(len(b) for b in levels_bytes.values()) / (1024 * 1024)
         logger.debug(
-            f"Loaded {file_size_mb:.1f}MB in {download_time:.2f}s ({file_size_mb/download_time:.1f}MB/s)"
+            f"Fetched {len(levels_bytes)} levels ({total_mb:.1f}MB) "
+            f"in {fetch_time:.2f}s ({total_mb/fetch_time:.1f}MB/s)"
         )
 
-        logger.debug(
-            f"Parsed header: version={header.version}, max_depth={header.max_depth}, levels={list(header.level_index.keys())}"
-        )
-
-        # Parse COLLECTION.json from memory
-        collection_bytes = full_bytes[
-            header.collection_offset : header.collection_offset + header.collection_size
-        ]
-        collection = self._parse_collection_json(collection_bytes, path)
-        logger.debug("Parsed COLLECTION.json")
-
-        # Setup DuckDB with spatial
+        # Setup DuckDB
         db = self._setup_duckdb_connection()
 
-        # Register Parquet tables directly from memory
+        # Register Parquet tables from bytes
         level_ids = []
-        for level_id, (offset, size) in header.level_index.items():
-            if size == 0:
-                continue
+        for level_id in sorted(levels_bytes.keys()):
+            parquet_bytes = levels_bytes[level_id]
 
-            # Extract parquet bytes from memory
-            parquet_bytes = full_bytes[offset : offset + size]
-
-            # Read with PyArrow and register in DuckDB
             reader = pa.BufferReader(parquet_bytes)
             arrow_table = pq.read_table(reader)
 
@@ -232,12 +181,18 @@ class TacoCatBackend(TacoBackend):
             db.register(table_name, arrow_table)
             level_ids.append(level_id)
 
-            logger.debug(f"Registered {table_name} in DuckDB ({size} bytes)")
+            logger.debug(
+                f"Registered {table_name}: {arrow_table.num_rows} rows x "
+                f"{arrow_table.num_columns} cols"
+            )
 
         if not level_ids:
-            raise TacoFormatError(f"No metadata levels found in TacoCat: {path}")
+            raise TacoFormatError(f"No level*.parquet files found in: {path}")
 
-        # Finalize dataset using common method
+        # Load COLLECTION.json
+        collection = self.read_collection(path)
+
+        # Finalize dataset
         root_path = to_vsi_root(path)
         dataset = self._finalize_dataset(db, path, root_path, collection, level_ids)
 
@@ -246,24 +201,64 @@ class TacoCatBackend(TacoBackend):
 
         return dataset
 
+    def _fetch_all_levels(self, base_path: str) -> dict[int, bytes]:
+        """
+        Fetch all level*.parquet files in parallel using ThreadPoolExecutor.
+
+        Attempts to download level0-5.parquet concurrently.
+        Missing files are ignored (expected if max_depth < 5).
+
+        For local paths, uses simple sequential reads (fast enough).
+        For remote paths, uses parallel downloads with thread pool.
+
+        Args:
+            base_path: Path to .tacocat folder
+
+        Returns:
+            Dict of {level_id: parquet_bytes} for found levels
+        """
+        if is_local(base_path):
+            # Local: simple sequential reads (I/O is fast, no need for threads)
+            levels = {}
+            base = Path(base_path)
+            for i in range(TACOCAT_MAX_LEVELS):
+                file = base / f"level{i}.parquet"
+                if file.exists():
+                    levels[i] = file.read_bytes()
+            return levels
+
+        # Remote: parallel downloads with ThreadPoolExecutor
+        levels = {}
+        with ThreadPoolExecutor(max_workers=TACOCAT_MAX_LEVELS) as executor:
+            futures = {
+                executor.submit(_fetch_level_file, i, base_path): i
+                for i in range(TACOCAT_MAX_LEVELS)
+            }
+
+            for future in as_completed(futures):
+                level_id, data = future.result()
+                if data is not None:
+                    levels[level_id] = data
+
+        return levels
+
     def read_collection(self, path: str) -> dict[str, Any]:
         """
-        Read COLLECTION.json from TacoCat file with caching.
+        Read COLLECTION.json from .tacocat folder with caching.
 
-        COLLECTION.json stored at offset from header's 7th index entry.
-        Contains consolidated metadata from all source ZIPs.
+        Contains consolidated metadata from all source ZIPs including:
+        - Dataset ID, version, description
+        - PIT schema (hierarchy structure)
+        - Field schema (column definitions)
+        - Spatial/temporal extent
+
+        Args:
+            path: Path to .tacocat folder
+
+        Returns:
+            Parsed COLLECTION.json as dict
         """
-        # Use cached file read
-        full_bytes, header = _read_tacocat_file_cached(path)
-
-        if header.collection_size == 0:
-            raise TacoFormatError(f"Empty COLLECTION.json in TacoCat: {path}")
-
-        collection_bytes = full_bytes[
-            header.collection_offset : header.collection_offset + header.collection_size
-        ]
-
-        return self._parse_collection_json(collection_bytes, path)
+        return _read_tacocat_collection_cached(path)
 
     def setup_duckdb_views(
         self,
@@ -275,11 +270,19 @@ class TacoCatBackend(TacoBackend):
         Create DuckDB views with GDAL VSI paths for TacoCat format.
 
         Path format: /vsisubfile/{offset}_{size},{base_path}{source_file}
-        Allows samples to point to their specific origin ZIP file.
+
+        Allows samples to point back to their specific origin .tacozip file
+        using the internal:source_file column.
+
+        Example VSI path:
+            /vsisubfile/2048_6000,/vsis3/bucket/data/part0001.tacozip
+
+        Args:
+            db: DuckDB connection
+            level_ids: List of level IDs to create views for
+            root_path: VSI root path (used to extract base directory)
         """
         base_path = self._extract_base_path(root_path)
-
-        # Get filter condition
         filter_clause = self._build_view_filter()
 
         for level_id in level_ids:
@@ -299,18 +302,33 @@ class TacoCatBackend(TacoBackend):
 
     def _extract_base_path(self, root_path: str) -> str:
         """
-        Extract base directory from __TACOCAT__ path.
+        Extract base directory from .tacocat/ path.
 
-        The base path is the directory containing both __TACOCAT__ and
-        source .tacozip files. Used to construct VSI paths to individual ZIPs.
+        The base path is the directory containing both .tacocat/ folder
+        and source .tacozip files. Used to construct VSI paths to individual ZIPs.
 
-        Example:
-            /vsis3/bucket/data/__TACOCAT__ -> /vsis3/bucket/data/
-            s3://bucket/data/ -> s3://bucket/data/
+        Examples:
+            /vsis3/bucket/data/.tacocat/ → /vsis3/bucket/data/
+            /vsis3/bucket/data/.tacocat → /vsis3/bucket/data/
+            s3://bucket/data/.tacocat → s3://bucket/data/
+            /local/path/.tacocat → /local/path/
+
+        Args:
+            root_path: Path to .tacocat folder (may or may not have trailing slash)
+
+        Returns:
+            Base directory path with trailing slash
         """
-        if root_path.endswith(TACOCAT_FILENAME):
-            base_path = root_path[: -len(TACOCAT_FILENAME)]
+        # Remove .tacocat suffix and trailing slash
+        if root_path.endswith(f"/{TACOCAT_FOLDER_NAME}"):
+            base_path = root_path[: -(len(TACOCAT_FOLDER_NAME) + 1)]
+        elif root_path.endswith(TACOCAT_FOLDER_NAME):
+            base_path = root_path[: -len(TACOCAT_FOLDER_NAME)]
         else:
-            base_path = root_path if root_path.endswith("/") else root_path + "/"
+            base_path = root_path
+
+        # Ensure trailing slash for path concatenation
+        if not base_path.endswith("/"):
+            base_path += "/"
 
         return base_path

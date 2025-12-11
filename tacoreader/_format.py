@@ -1,8 +1,5 @@
 """
 Format detection and path type utilities.
-
-Low-level utilities with no tacoreader dependencies (avoids circular imports).
-Pure string operations - no I/O, no side effects.
 """
 
 from typing import Literal
@@ -10,23 +7,40 @@ from typing import Literal
 from tacoreader._constants import (
     ALL_VSI_PREFIXES,
     CLOUD_PROTOCOLS,
-    TACOCAT_FILENAME,
+    TACOCAT_FOLDER_NAME,
     TACOZIP_EXTENSIONS,
 )
 
 
 def detect_format(path: str) -> Literal["zip", "folder", "tacocat"]:
-    """Detect TACO format from path"""
+    """
+    Detect TACO format from path.
 
+    Rules:
+    - .tacocat folder → TacoCat consolidated format
+    - .tacozip or .zip → ZIP format
+    - Everything else → FOLDER format
+
+    Examples:
+        detect_format("data.tacozip") → "zip"
+        detect_format("/path/to/.tacocat") → "tacocat"
+        detect_format("/path/to/.tacocat/") → "tacocat"
+        detect_format("s3://bucket/.tacocat") → "tacocat"
+        detect_format("dataset/") → "folder"
+    """
     clean_path = path.rstrip("/")
-    filename = clean_path.split("/")[-1]
 
-    # TacoCat has fixed name
-    if filename == TACOCAT_FILENAME:
+    # Normalize path separators for cross-platform support
+    normalized = clean_path.replace("\\", "/")
+    parts = normalized.split("/")
+    last_part = parts[-1] if parts else ""
+
+    # TacoCat: folder named .tacocat (exact match)
+    if last_part == TACOCAT_FOLDER_NAME:
         return "tacocat"
 
-    # ZIP format - check all valid extensions
-    if filename.endswith(TACOZIP_EXTENSIONS):
+    # ZIP format: check all valid extensions
+    if last_part.endswith(TACOZIP_EXTENSIONS):
         return "zip"
 
     # FOLDER format (default)
@@ -34,9 +48,12 @@ def detect_format(path: str) -> Literal["zip", "folder", "tacocat"]:
 
 
 def is_remote(path: str) -> bool:
-    """Check if path requires network access"""
+    """
+    Check if path requires network access.
 
-    # Combine cloud protocols and VSI prefixes, filtering out None values
+    Returns True for cloud storage (s3://, gs://, etc.) and VSI paths.
+    Returns False for local filesystem paths.
+    """
     remote_prefixes = tuple(
         p for p in CLOUD_PROTOCOLS + ALL_VSI_PREFIXES if p is not None
     )
@@ -44,5 +61,5 @@ def is_remote(path: str) -> bool:
 
 
 def is_local(path: str) -> bool:
-    """Check if path is local filesystem"""
+    """Check if path is local filesystem."""
     return not is_remote(path)

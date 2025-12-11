@@ -22,7 +22,7 @@ from tacoreader._constants import (
     PADDING_PREFIX,
     SAMPLE_TYPE_FILE,
     SAMPLE_TYPE_FOLDER,
-    TACOCAT_FILENAME,
+    TACOCAT_FOLDER_NAME,
     UNION_VIEW_SUFFIX,
 )
 from tacoreader._exceptions import TacoFormatError
@@ -233,8 +233,30 @@ class ViewBuilder:
         )
 
     def _extract_base_path(self) -> str:
-        """Extract base directory for TacoCat format."""
-        if self.root_path.endswith(TACOCAT_FILENAME):
-            return self.root_path[: -len(TACOCAT_FILENAME)]
+        """
+        Extract base directory for TacoCat format.
 
-        return self.root_path if self.root_path.endswith("/") else self.root_path + "/"
+        Removes .tacocat folder suffix to get parent directory containing
+        both .tacocat/ and source .tacozip files.
+
+        Examples:
+            /vsis3/bucket/data/.tacocat → /vsis3/bucket/data/
+            /vsis3/bucket/data/.tacocat/ → /vsis3/bucket/data/
+            /local/path/.tacocat → /local/path/
+        """
+        # Remove trailing slash if present
+        clean_path = self.root_path.rstrip("/")
+
+        # Remove .tacocat folder name
+        if clean_path.endswith(f"/{TACOCAT_FOLDER_NAME}"):
+            base_path = clean_path[: -(len(TACOCAT_FOLDER_NAME) + 1)]
+        elif clean_path.endswith(TACOCAT_FOLDER_NAME):
+            base_path = clean_path[: -len(TACOCAT_FOLDER_NAME)]
+        else:
+            base_path = clean_path
+
+        # Ensure trailing slash for path concatenation
+        if not base_path.endswith("/"):
+            base_path += "/"
+
+        return base_path

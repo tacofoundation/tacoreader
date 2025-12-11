@@ -157,31 +157,26 @@ out from user-facing views.
 
 
 # TacoCat Format Specification (shared with tacotoolbox)
-TACOCAT_MAGIC = b"TACOCAT\x00"
-"""Magic number identifying TacoCat files (8 bytes)."""
+TACOCAT_FOLDER_NAME = ".tacocat"
+"""
+Fixed folder name for TacoCat consolidated format.
 
-TACOCAT_VERSION = 1
-"""TacoCat format version (uint32)."""
+This name is RESERVED and cannot be used for regular FOLDER format datasets.
+Any dataset folder named .tacocat will be interpreted as TacoCat format.
+"""
 
 TACOCAT_MAX_LEVELS = 6
-"""Fixed number of level entries in TacoCat index (level0-5 + COLLECTION)."""
+"""Maximum number of hierarchy levels in TacoCat (level0-5)."""
 
-TACOCAT_HEADER_SIZE = 16
-"""TacoCat header size: Magic(8) + Version(4) + MaxDepth(4)."""
+RESERVED_FOLDER_NAMES = frozenset({TACOCAT_FOLDER_NAME, "DATA", "METADATA"})
+"""
+Folder names reserved by TACO specification.
 
-TACOCAT_INDEX_ENTRY_SIZE = 16
-"""Size of each index entry: Offset(8) + Size(8)."""
-
-TACOCAT_INDEX_SIZE = (
-    TACOCAT_MAX_LEVELS * TACOCAT_INDEX_ENTRY_SIZE + TACOCAT_INDEX_ENTRY_SIZE
-)  # 112
-"""Total index block size: 7 entries x 16 bytes."""
-
-TACOCAT_TOTAL_HEADER_SIZE = TACOCAT_HEADER_SIZE + TACOCAT_INDEX_SIZE  # 128
-"""Total header + index size (data starts at byte 128)."""
-
-TACOCAT_FILENAME = "__TACOCAT__"
-"""Fixed filename for TacoCat consolidated files."""
+These names cannot be used as dataset folder names:
+- .tacocat: Reserved for TacoCat consolidated format
+- DATA: Reserved for FOLDER format data directory
+- METADATA: Reserved for FOLDER format metadata directory
+"""
 
 
 # DuckDB Configuration
