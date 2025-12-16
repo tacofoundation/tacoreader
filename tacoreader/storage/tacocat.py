@@ -319,13 +319,18 @@ class TacoCatBackend(TacoBackend):
         Returns:
             Base directory path with trailing slash
         """
-        # Remove .tacocat suffix and trailing slash
-        if root_path.endswith(f"/{TACOCAT_FOLDER_NAME}"):
-            base_path = root_path[: -(len(TACOCAT_FOLDER_NAME) + 1)]
-        elif root_path.endswith(TACOCAT_FOLDER_NAME):
-            base_path = root_path[: -len(TACOCAT_FOLDER_NAME)]
+        # FIX: Normalize trailing slashes FIRST
+        # This prevents issues where remote paths have trailing slash
+        # but local paths don't (Path.resolve() removes them)
+        clean_path = root_path.rstrip("/")
+
+        # Remove .tacocat suffix
+        if clean_path.endswith(f"/{TACOCAT_FOLDER_NAME}"):
+            base_path = clean_path[: -(len(TACOCAT_FOLDER_NAME) + 1)]
+        elif clean_path.endswith(TACOCAT_FOLDER_NAME):
+            base_path = clean_path[: -len(TACOCAT_FOLDER_NAME)]
         else:
-            base_path = root_path
+            base_path = clean_path
 
         # Ensure trailing slash for path concatenation
         if not base_path.endswith("/"):

@@ -7,7 +7,7 @@ Supports single files or lists (automatically concatenated).
 
 from tacoreader._constants import DEFAULT_VIEW_NAME, LEVEL_VIEW_PREFIX
 from tacoreader._exceptions import TacoQueryError
-from tacoreader._format import detect_format
+from tacoreader._format import detect_and_resolve_format
 from tacoreader._legacy import is_legacy_format, raise_legacy_error
 from tacoreader._vsi import to_vsi_root
 from tacoreader.dataset import TacoDataset
@@ -73,13 +73,13 @@ def load(
     if is_legacy_format(path):
         raise_legacy_error(path)
 
-    # Single path
-    format_type = detect_format(path)
+    # Detect and resolve format (handles TacoCat fallback)
+    format_type, resolved_path = detect_and_resolve_format(path)
 
     # TacoCat with base_path override: rebuild views with new base
     if format_type == "tacocat" and base_path is not None:
         backend_obj = create_backend("tacocat")
-        dataset = backend_obj.load(path)
+        dataset = backend_obj.load(resolved_path)
         dataset._dataframe_backend = backend
 
         base_vsi = to_vsi_root(base_path)
@@ -102,15 +102,15 @@ def load(
 
         return dataset
 
-    # Standard loading
+    # Standard loading with resolved path
     backend_obj = create_backend(format_type)
 
     # Load dataset and set backend
     if format_type == "tacocat":
-        dataset = backend_obj.load(path)
+        dataset = backend_obj.load(resolved_path)
         dataset._dataframe_backend = backend
         return dataset
     else:
-        dataset = load_dataset(path, format_type)
+        dataset = load_dataset(resolved_path, format_type)
         dataset._dataframe_backend = backend
         return dataset
