@@ -149,12 +149,11 @@ class ZipBackend(TacoBackend):
         root_path: str,
     ) -> None:
         """
-        Create DuckDB views with GDAL VSI paths for ZIP format.
+        Create DuckDB views with GDAL VSI paths.
 
+        Views simply expose parquet data with GDAL VSI paths for raster access.
         Path format: /vsisubfile/{offset}_{size},{zip_path}
-        Enables GDAL to read embedded files without extraction.
         """
-        # Get filter condition
         filter_clause = self._build_view_filter()
 
         for level_id in level_ids:
@@ -163,7 +162,8 @@ class ZipBackend(TacoBackend):
             db.execute(
                 f"""
                 CREATE VIEW {view_name} AS
-                SELECT *,
+                SELECT
+                  *,
                   '/vsisubfile/' || "{METADATA_OFFSET}" || '_' ||
                   "{METADATA_SIZE}" || ',{root_path}' as "{METADATA_GDAL_VSI}"
                 FROM {table_name}

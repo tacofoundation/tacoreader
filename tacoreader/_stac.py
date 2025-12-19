@@ -1,26 +1,22 @@
 """
-STAC-style spatiotemporal filtering for TacoDataset.
+Simple STAC filtering for level0 (no JOINs).
 
-Simple API for filtering by spatial and temporal criteria.
-All spatial ops use DuckDB Spatial extension with WKB columns.
-All temporal ops use native Parquet TIMESTAMP columns.
+Provides spatial and temporal filtering on level0 without hierarchical JOINs.
+Works for all formats: ZIP, FOLDER, TacoCat.
 
-Main functions:
-    - detect_geometry_column / detect_time_column: Auto-detection
-    - build_bbox_sql: Spatial bounding box filter
-    - build_datetime_sql: Temporal filter (TIMESTAMP native)
-    - build_cascade_join_sql: Multi-level filtering with JOINs
+Functions:
+    - apply_simple_bbox_filter: Spatial filtering on level0
+    - apply_simple_datetime_filter: Temporal filtering on level0
+    - detect_geometry_column: Auto-detect geometry column
+    - detect_time_column: Auto-detect time column
+    - parse_datetime: Parse datetime ranges to epochs
 """
 
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from tacoreader._constants import (
-    COLUMN_ID,
     DEFAULT_VIEW_NAME,
-    LEVEL_VIEW_PREFIX,
-    METADATA_PARENT_ID,
-    METADATA_SOURCE_FILE,
     STAC_GEOMETRY_COLUMN_PRIORITY,
     STAC_TIME_COLUMN_PRIORITY,
 )
@@ -30,119 +26,184 @@ if TYPE_CHECKING:
     from tacoreader.dataset import TacoDataset
 
 
-def validate_level_exists(dataset: "TacoDataset", level: int) -> None:
-    """Validate level exists in dataset using pit_schema.max_depth()."""
-    max_level = dataset.pit_schema.max_depth()
-
-    if level < 0 or level > max_level:
-        raise TacoQueryError(
-            f"Level {level} does not exist.\n" f"Available levels: 0 to {max_level}"
-        )
-
-
-def get_columns_for_level(dataset: "TacoDataset", level: int) -> list[str]:
-    """Get available columns for a specific level by querying DuckDB."""
-    validate_level_exists(dataset, level)
-
-    level_view = f"{LEVEL_VIEW_PREFIX}{level}" if level > 0 else DEFAULT_VIEW_NAME
-    result = dataset._duckdb.execute(f"DESCRIBE {level_view}").fetchall()
-
-    # Result: [(column_name, column_type, null, key, default, extra), ...]
-    return [row[0] for row in result]
-
-
-def build_cascade_join_sql(
-    current_view: str, target_level: int, where_clause: str, format_type: str = "zip"
-) -> str:
+def apply_simple_bbox_filter(
+    dataset: "TacoDataset",
+    minx: float,
+    miny: float,
+    maxx: float,
+    maxy: float,
+    geometry_col: str = "auto",
+) -> "TacoDataset":
     """
-    Build SQL with cascading JOINs from level0 to target level.
+    Filter level0 by bounding box.
 
-    Creates INNER JOINs: level0 → level1 → level2 → ... → target_level
-    using internal:parent_id foreign keys. Returns DISTINCT level0 samples.
+    Uses DuckDB Spatial extension with ST_Intersects for bbox intersection.
+    Works with WKB-encoded geometry columns.
 
-    JOIN strategy by format:
-    - ZIP/FOLDER: parent_id references parent's ID string
-    - TacoCat: parent_id is local index + source_file for disambiguation
+    Args:
+        dataset: TacoDataset to filter
+        minx: Minimum X coordinate (longitude)
+        miny: Minimum Y coordinate (latitude)
+        maxx: Maximum X coordinate (longitude)
+        maxy: Maximum Y coordinate (latitude)
+        geometry_col: Geometry column name ("auto" for auto-detection)
 
-    Example hierarchy:
-        Level0 (id: "sample_001")
-          └── Level1 (id: "s2_l1c", parent_id: "sample_001")
-               └── Level2 (id: "band_B04", parent_id: "s2_l1c")
-    """
-    if target_level == 0:
-        # No JOINs needed - filter directly on level0
-        return f"""
-            SELECT *
-            FROM {current_view}
-            WHERE {where_clause}
-        """
+    Returns:
+        Filtered TacoDataset
 
-    # Build cascading JOINs
-    joins = []
-
-    # First JOIN: current_view (level0) → level1
-    if format_type == "tacocat":
-        # TacoCat: parent_id is local index, need source_file
-        joins.append(
-            f"INNER JOIN {LEVEL_VIEW_PREFIX}1 l1\n"
-            f'      ON l1."{METADATA_PARENT_ID}" = l0."{METADATA_PARENT_ID}"\n'
-            f'     AND l1."{METADATA_SOURCE_FILE}" = l0."{METADATA_SOURCE_FILE}"'
+    Example:
+        # Filter samples within Pacific region
+        filtered = dataset.filter_bbox(
+            minx=120, miny=20, maxx=170, maxy=55,
+            geometry_col="istac:geometry"
         )
+    """
+    # Auto-detect or validate geometry column
+    if geometry_col == "auto":
+        geometry_col = detect_geometry_column(dataset.data.columns)
     else:
-        # ZIP/FOLDER: parent_id references parent's ID
-        joins.append(
-            f'INNER JOIN {LEVEL_VIEW_PREFIX}1 l1 ON l1."{METADATA_PARENT_ID}" = l0.{COLUMN_ID}'
-        )
+        if geometry_col not in dataset.data.columns:
+            raise TacoQueryError(
+                f"Column '{geometry_col}' not found in level0.\n"
+                f"Available columns: {dataset.data.columns}"
+            )
 
-    # Subsequent JOINs: level1 → level2 → level3 ...
-    for level in range(2, target_level + 1):
-        prev_level = level - 1
-        joins.append(
-            f"INNER JOIN {LEVEL_VIEW_PREFIX}{level} l{level} "
-            f'ON l{level}."{METADATA_PARENT_ID}" = l{prev_level}.{COLUMN_ID}'
-        )
+    # Build spatial WHERE clause
+    where_clause = (
+        f"ST_Intersects("
+        f'ST_GeomFromWKB("{geometry_col}"), '
+        f"ST_MakeEnvelope({float(minx)}, {float(miny)}, {float(maxx)}, {float(maxy)})"
+        f")"
+    )
 
-    join_clause = "\n    ".join(joins)
+    # Execute simple query on level0
+    return dataset.sql(f"SELECT * FROM {DEFAULT_VIEW_NAME} WHERE {where_clause}")
 
-    return f"""
-        SELECT DISTINCT l0.*
-        FROM {current_view} l0
-        {join_clause}
-        WHERE {where_clause}
+
+def apply_simple_datetime_filter(
+    dataset: "TacoDataset",
+    datetime_range: str | datetime | tuple[datetime, datetime],
+    time_col: str = "auto",
+) -> "TacoDataset":
     """
+    Filter level0 by datetime.
+
+    Automatically handles both TIMESTAMP and STRING date columns via TRY_CAST.
+    Supports various datetime input formats.
+
+    Args:
+        dataset: TacoDataset to filter
+        datetime_range: Temporal range as:
+            - String range: "2023-01-01/2023-12-31"
+            - Single datetime: datetime(2023, 1, 1)
+            - Tuple: (start_dt, end_dt)
+        time_col: Time column name ("auto" for auto-detection)
+
+    Returns:
+        Filtered TacoDataset
+
+    Example:
+        # Filter by date range
+        filtered = dataset.filter_datetime(
+            "2023-04-01/2023-04-30",
+            time_col="timestamp"
+        )
+
+        # Filter by single date
+        filtered = dataset.filter_datetime(
+            datetime(2023, 4, 15),
+            time_col="istac:time_start"
+        )
+    """
+    # Auto-detect or validate time column
+    if time_col == "auto":
+        time_col = detect_time_column(dataset.data.columns)
+    else:
+        if time_col not in dataset.data.columns:
+            raise TacoQueryError(
+                f"Column '{time_col}' not found in level0.\n"
+                f"Available columns: {dataset.data.columns}"
+            )
+
+    # Parse datetime range to epochs
+    start, end = parse_datetime(datetime_range)
+
+    # Build temporal WHERE clause with TRY_CAST
+    # Handles both TIMESTAMP columns and STRING date columns
+    col_cast = f'TRY_CAST("{time_col}" AS DATE)'
+
+    start_dt = datetime.fromtimestamp(start, tz=timezone.utc)
+    start_str = start_dt.strftime("%Y-%m-%d")
+
+    if end is None:
+        # Point-in-time query
+        where_clause = f"({col_cast} = DATE '{start_str}')"
+    else:
+        # Range query
+        end_dt = datetime.fromtimestamp(end, tz=timezone.utc)
+        end_str = end_dt.strftime("%Y-%m-%d")
+        where_clause = f"({col_cast} BETWEEN DATE '{start_str}' AND DATE '{end_str}')"
+
+    # Execute simple query on level0
+    return dataset.sql(f"SELECT * FROM {DEFAULT_VIEW_NAME} WHERE {where_clause}")
 
 
 def detect_geometry_column(columns: list[str]) -> str:
     """
-    Auto-detect best geometry column.
+    Auto-detect geometry column from available columns.
 
-    Priority: istac:geometry > stac:centroid > istac:centroid
+    Priority order:
+        1. istac:geometry (full geometry, most precise)
+        2. stac:centroid (point representation for STAC)
+        3. istac:centroid (point representation for ISTAC)
+
+    Args:
+        columns: List of available column names
+
+    Returns:
+        First matching geometry column name
+
+    Raises:
+        TacoQueryError: If no geometry column found
     """
     for col in STAC_GEOMETRY_COLUMN_PRIORITY:
         if col in columns:
             return col
 
     raise TacoQueryError(
-        "No geometry column found.\n"
+        "No geometry column found in level0.\n"
         f"Expected one of: {', '.join(STAC_GEOMETRY_COLUMN_PRIORITY)}\n"
-        f"Available: {columns}"
+        f"Available columns: {columns}"
     )
 
 
 def detect_time_column(columns: list[str]) -> str:
     """
-    Auto-detect time column (always time_start, not middle/end).
+    Auto-detect time column from available columns.
 
-    Priority: istac:time_start > stac:time_start
+    Always uses time_start (not middle/end) for temporal filtering.
+
+    Priority order:
+        1. istac:time_start
+        2. stac:time_start
+
+    Args:
+        columns: List of available column names
+
+    Returns:
+        First matching time column name
+
+    Raises:
+        TacoQueryError: If no time column found
     """
     for col in STAC_TIME_COLUMN_PRIORITY:
         if col in columns:
             return col
 
     raise TacoQueryError(
-        "No time column found.\n"
+        "No time column found in level0.\n"
         f"Expected one of: {', '.join(STAC_TIME_COLUMN_PRIORITY)}\n"
-        f"Available: {columns}"
+        f"Available columns: {columns}"
     )
 
 
@@ -150,14 +211,33 @@ def parse_datetime(
     dt_input: str | datetime | tuple[datetime, datetime]
 ) -> tuple[int, int | None]:
     """
-    Parse datetime to (start_epoch, end_epoch).
+    Parse datetime input to (start_epoch, end_epoch) tuple.
 
-    Formats:
-    - String range: "2023-01-01/2023-12-31"
-    - Single datetime: datetime(2023, 1, 1)
-    - Tuple: (start_dt, end_dt)
+    Supports multiple input formats:
+        - String range: "2023-01-01/2023-12-31"
+        - Single datetime: datetime(2023, 1, 1)
+        - Tuple: (start_dt, end_dt)
 
-    Returns end_epoch=None for single datetime.
+    Args:
+        dt_input: Datetime specification in one of the supported formats
+
+    Returns:
+        Tuple of (start_epoch, end_epoch) where:
+            - start_epoch: Unix timestamp (seconds) for start
+            - end_epoch: Unix timestamp (seconds) for end, or None for point query
+
+    Raises:
+        TacoQueryError: If datetime format is invalid or range is invalid
+
+    Examples:
+        >>> parse_datetime("2023-01-01/2023-12-31")
+        (1672531200, 1704067199)
+
+        >>> parse_datetime(datetime(2023, 1, 1))
+        (1672531200, None)
+
+        >>> parse_datetime((datetime(2023, 1, 1), datetime(2023, 12, 31)))
+        (1672531200, 1704067199)
     """
     # String range: "2023-01-01/2023-12-31"
     if isinstance(dt_input, str):
@@ -171,7 +251,7 @@ def parse_datetime(
 
             if start_ts > end_ts:
                 raise TacoQueryError(
-                    f"Invalid range: start ({start_str}) > end ({end_str})"
+                    f"Invalid datetime range: start ({start_str}) > end ({end_str})"
                 )
 
             return start_ts, end_ts
@@ -195,20 +275,31 @@ def parse_datetime(
         end_ts = int(end_utc.timestamp())
 
         if start_ts > end_ts:
-            raise TacoQueryError("Invalid range: start > end")
+            raise TacoQueryError("Invalid datetime range: start > end")
 
         return start_ts, end_ts
 
     else:
         raise TacoQueryError(
-            f"Invalid datetime: {dt_input}\n"
+            f"Invalid datetime input: {dt_input}\n"
             f"Expected: string range ('2023-01-01/2023-12-31'), "
-            f"datetime object, or tuple"
+            f"datetime object, or tuple of datetime objects"
         )
 
 
 def _parse_iso_string(dt_str: str) -> datetime:
-    """Parse ISO 8601 string to UTC datetime."""
+    """
+    Parse ISO 8601 string to UTC datetime.
+
+    Handles various ISO formats including 'Z' suffix.
+    Assumes UTC if no timezone specified.
+
+    Args:
+        dt_str: ISO 8601 datetime string
+
+    Returns:
+        UTC-aware datetime object
+    """
     # Replace 'Z' with UTC offset for fromisoformat()
     dt_str_normalized = dt_str.replace("Z", "+00:00")
 
@@ -225,116 +316,16 @@ def _parse_iso_string(dt_str: str) -> datetime:
 
 
 def _ensure_utc(dt: datetime) -> datetime:
-    """Ensure datetime is UTC-aware."""
+    """
+    Ensure datetime is UTC-aware.
+
+    Args:
+        dt: Datetime object (naive or aware)
+
+    Returns:
+        UTC-aware datetime object
+    """
     if dt.tzinfo is None:
         return dt.replace(tzinfo=timezone.utc)
     else:
         return dt.astimezone(timezone.utc)
-
-
-def _apply_stac_filter(
-    dataset: "TacoDataset",
-    level: int,
-    column_name: str,
-    column_auto_detect_fn,
-    sql_builder_fn,
-    sql_builder_args: tuple,
-) -> "TacoDataset":
-    """
-    Base method for STAC-like filtering operations.
-
-    Abstracts common pattern:
-    1. Validate level exists
-    2. Get columns for target level
-    3. Auto-detect or validate column
-    4. Build SQL filter
-    5. Apply filter (level 0 direct, level N with JOINs)
-    """
-    validate_level_exists(dataset, level)
-
-    # Get columns for target level
-    current_cols = (
-        dataset.data.columns if level == 0 else get_columns_for_level(dataset, level)
-    )
-
-    # Auto-detect or validate column
-    if column_name == "auto":
-        column_name = column_auto_detect_fn(current_cols)
-    else:
-        if column_name not in current_cols:
-            raise TacoQueryError(
-                f"Column '{column_name}' not found.\nAvailable: {current_cols}"
-            )
-
-    # Build SQL filter
-    sql_filter = sql_builder_fn(*sql_builder_args, column_name, level)
-
-    # Apply filter
-    if level == 0:
-        return dataset.sql(f"SELECT * FROM {DEFAULT_VIEW_NAME} WHERE {sql_filter}")
-    else:
-        full_query = build_cascade_join_sql(
-            dataset._view_name, level, sql_filter, dataset._format
-        )
-        return dataset.sql(full_query)
-
-
-def build_bbox_sql(
-    minx: float,
-    miny: float,
-    maxx: float,
-    maxy: float,
-    geometry_col: str,
-    level: int = 0,
-) -> str:
-    """
-    Build bounding box filter SQL.
-
-    Uses ST_Within + ST_MakeEnvelope for bbox check.
-    Prefixes column with level alias if level > 0.
-    """
-    col_ref = f'l{level}."{geometry_col}"' if level > 0 else f'"{geometry_col}"'
-
-    return (
-        f"ST_Within("
-        f"ST_GeomFromWKB({col_ref}), "
-        f"ST_MakeEnvelope({float(minx)}, {float(miny)}, {float(maxx)}, {float(maxy)})"
-        f")"
-    )
-
-
-def build_datetime_sql(
-    start: int,
-    end: int | None,
-    time_col: str,
-    level: int,
-) -> str:
-    """
-    Build temporal filter SQL with native TIMESTAMP comparison.
-
-    All temporal columns are stored as Parquet TIMESTAMP type.
-    DuckDB automatically parses ISO 8601 strings when comparing with TIMESTAMP columns.
-
-    Args:
-        start: Unix epoch seconds
-        end: Unix epoch seconds (None for point-in-time query)
-        time_col: Column name (e.g., "stac:time_start")
-        level: Level number for multi-level filtering
-
-    Returns:
-        SQL WHERE clause fragment
-    """
-    col_ref = f'l{level}."{time_col}"' if level > 0 else f'"{time_col}"'
-
-    # Convert epoch to UTC datetime, then to ISO string
-    start_dt = datetime.fromtimestamp(start, tz=timezone.utc)
-    start_str = start_dt.isoformat()
-
-    if end is None:
-        # Point-in-time query
-        return f"({col_ref} = '{start_str}')"
-    else:
-        # Range query
-        end_dt = datetime.fromtimestamp(end, tz=timezone.utc)
-        end_str = end_dt.isoformat()
-        return f"({col_ref} BETWEEN '{start_str}' AND '{end_str}')"

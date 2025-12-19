@@ -242,22 +242,33 @@ class TacoDataset(BaseModel):
         """
         Filter by bounding box (PySTAC-style).
 
-        When level > 0, filters level0 samples based on children's metadata.
-        """
-        from tacoreader._stac import (
-            _apply_stac_filter,
-            build_bbox_sql,
-            detect_geometry_column,
-        )
+        Args:
+            minx: Minimum X coordinate (longitude)
+            miny: Minimum Y coordinate (latitude)
+            maxx: Maximum X coordinate (longitude)
+            maxy: Maximum Y coordinate (latitude)
+            geometry_col: Geometry column name (auto-detected if "auto")
+            level: Hierarchy level to filter (0=direct, >0=cascade through children)
 
-        return _apply_stac_filter(
-            dataset=self,
-            level=level,
-            column_name=geometry_col,
-            column_auto_detect_fn=detect_geometry_column,
-            sql_builder_fn=build_bbox_sql,
-            sql_builder_args=(minx, miny, maxx, maxy),
-        )
+        Returns:
+            Filtered TacoDataset
+
+        Routing:
+            - level=0: Simple filtering without JOINs (fast, stable)
+            - level>0: Hierarchical filtering with multi-level JOINs (complex, experimental)
+        """
+        if level == 0:
+            # Simple route: direct filtering on level0 without JOINs
+            from tacoreader._stac import apply_simple_bbox_filter
+
+            return apply_simple_bbox_filter(self, minx, miny, maxx, maxy, geometry_col)
+        else:
+            # Cascade route: hierarchical filtering with JOINs
+            from tacoreader._stac_cascade import apply_cascade_bbox_filter
+
+            return apply_cascade_bbox_filter(
+                self, minx, miny, maxx, maxy, geometry_col, level
+            )
 
     def filter_datetime(
         self,
@@ -268,27 +279,34 @@ class TacoDataset(BaseModel):
         """
         Filter by temporal range (PySTAC-style).
 
-        Always uses time_start column.
-        All temporal columns are native TIMESTAMP type.
-        When level > 0, filters level0 samples based on children's metadata.
+        Args:
+            datetime_range: Temporal range as:
+                - String range: "2023-01-01/2023-12-31"
+                - Single datetime: datetime(2023, 1, 1)
+                - Tuple: (start_dt, end_dt)
+            time_col: Time column name (auto-detected if "auto")
+            level: Hierarchy level to filter (0=direct, >0=cascade through children)
+
+        Returns:
+            Filtered TacoDataset
+
+        Note:
+            Automatically handles both TIMESTAMP and STRING date columns via TRY_CAST.
+
+        Routing:
+            - level=0: Simple filtering without JOINs (fast, stable)
+            - level>0: Hierarchical filtering with multi-level JOINs (complex, experimental)
         """
-        from tacoreader._stac import (
-            _apply_stac_filter,
-            build_datetime_sql,
-            detect_time_column,
-            parse_datetime,
-        )
+        if level == 0:
+            # Simple route: direct filtering on level0 without JOINs
+            from tacoreader._stac import apply_simple_datetime_filter
 
-        start, end = parse_datetime(datetime_range)
+            return apply_simple_datetime_filter(self, datetime_range, time_col)
+        else:
+            # Cascade route: hierarchical filtering with JOINs
+            from tacoreader._stac_cascade import apply_cascade_datetime_filter
 
-        return _apply_stac_filter(
-            dataset=self,
-            level=level,
-            column_name=time_col,
-            column_auto_detect_fn=detect_time_column,
-            sql_builder_fn=build_datetime_sql,
-            sql_builder_args=(start, end),
-        )
+            return apply_cascade_datetime_filter(self, datetime_range, time_col, level)
 
     def __repr__(self) -> str:
         """Rich text representation of dataset metadata."""

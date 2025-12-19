@@ -443,8 +443,8 @@ def _create_child_nodes(
             }
         )
 
-        # Mark first child for expansion if it's a FOLDER
-        if i == 0 and child_type == "FOLDER":
+        # Mark FIRST FOLDER found for expansion (not just index 0)
+        if expanded_child is None and child_type == "FOLDER":
             expanded_child = child_node
 
         current_x += NODE_SPACING_H
