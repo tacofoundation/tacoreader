@@ -64,8 +64,7 @@ def apply_simple_bbox_filter(
     else:
         if geometry_col not in dataset.data.columns:
             raise TacoQueryError(
-                f"Column '{geometry_col}' not found in level0.\n"
-                f"Available columns: {dataset.data.columns}"
+                f"Column '{geometry_col}' not found in level0.\nAvailable columns: {dataset.data.columns}"
             )
 
     # Build spatial WHERE clause
@@ -120,10 +119,7 @@ def apply_simple_datetime_filter(
         time_col = detect_time_column(dataset.data.columns)
     else:
         if time_col not in dataset.data.columns:
-            raise TacoQueryError(
-                f"Column '{time_col}' not found in level0.\n"
-                f"Available columns: {dataset.data.columns}"
-            )
+            raise TacoQueryError(f"Column '{time_col}' not found in level0.\nAvailable columns: {dataset.data.columns}")
 
     # Parse datetime range to epochs
     start, end = parse_datetime(datetime_range)
@@ -207,9 +203,7 @@ def detect_time_column(columns: list[str]) -> str:
     )
 
 
-def parse_datetime(
-    dt_input: str | datetime | tuple[datetime, datetime]
-) -> tuple[int, int | None]:
+def parse_datetime(dt_input: str | datetime | tuple[datetime, datetime]) -> tuple[int, int | None]:
     """
     Parse datetime input to (start_epoch, end_epoch) tuple.
 
@@ -250,9 +244,7 @@ def parse_datetime(
             end_ts = int(end_dt.timestamp())
 
             if start_ts > end_ts:
-                raise TacoQueryError(
-                    f"Invalid datetime range: start ({start_str}) > end ({end_str})"
-                )
+                raise TacoQueryError(f"Invalid datetime range: start ({start_str}) > end ({end_str})")
 
             return start_ts, end_ts
         else:

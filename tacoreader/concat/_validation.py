@@ -39,10 +39,7 @@ def _validate_backends(datasets: list["TacoDataset"]) -> None:
     if len(backends) == 1:
         return
 
-    backend_info = [
-        f"  Dataset {i}: {ds._dataframe_backend} (from {ds._path})"
-        for i, ds in enumerate(datasets)
-    ]
+    backend_info = [f"  Dataset {i}: {ds._dataframe_backend} (from {ds._path})" for i, ds in enumerate(datasets)]
 
     raise TacoBackendError(
         f"Cannot concatenate datasets with different DataFrame backends.\n"
@@ -67,10 +64,7 @@ def _validate_formats(datasets: list["TacoDataset"]) -> None:
     if len(formats) == 1:
         return
 
-    format_info = [
-        f"  Dataset {i}: {ds._format} (from {ds._path})"
-        for i, ds in enumerate(datasets)
-    ]
+    format_info = [f"  Dataset {i}: {ds._format} (from {ds._path})" for i, ds in enumerate(datasets)]
 
     raise TacoSchemaError(
         f"Cannot concatenate datasets with different formats.\n"

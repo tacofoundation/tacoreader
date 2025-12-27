@@ -41,9 +41,7 @@ class TacoDataFrameArrow(TacoDataFrame):
 
     def __repr__(self) -> str:
         # Display first N rows, filter padding for cleaner output
-        display_table = self._data.slice(
-            0, min(DATAFRAME_MAX_REPR_ROWS, self._data.num_rows)
-        )
+        display_table = self._data.slice(0, min(DATAFRAME_MAX_REPR_ROWS, self._data.num_rows))
 
         if "id" in display_table.column_names:
             id_column = display_table.column("id")

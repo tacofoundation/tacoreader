@@ -1,5 +1,6 @@
 # tacoreader
 
+[![codecov](https://codecov.io/gh/tacofoundation/tacoreader/graph/badge.svg?token=S77UEJ70DO)](https://codecov.io/gh/tacofoundation/tacoreader)
 [![PyPI](https://img.shields.io/pypi/v/tacoreader.svg)](https://pypi.python.org/pypi/tacoreader)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![BlueSky](https://img.shields.io/badge/bluesky-tacofoundation-1185fe?labelColor=000000&logo=bluesky)](https://bsky.app/profile/tacofoundation.bsky.social)

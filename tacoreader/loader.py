@@ -95,9 +95,7 @@ def load(
         backend_obj.setup_duckdb_views(dataset._duckdb, level_ids, base_vsi)
 
         # Recreate 'data' view
-        dataset._duckdb.execute(
-            f"CREATE VIEW {DEFAULT_VIEW_NAME} AS SELECT * FROM {LEVEL_VIEW_PREFIX}0"
-        )
+        dataset._duckdb.execute(f"CREATE VIEW {DEFAULT_VIEW_NAME} AS SELECT * FROM {LEVEL_VIEW_PREFIX}0")
         dataset._root_path = base_vsi
 
         return dataset

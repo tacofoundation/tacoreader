@@ -134,9 +134,7 @@ def verbose(level=True):
     elif level == "debug":
         setup_basic_logging(level=logging.DEBUG)
     else:
-        raise ValueError(
-            f"Invalid verbose level: {level}. " "Use True, 'info', 'debug', or False."
-        )
+        raise ValueError(f"Invalid verbose level: {level}. Use True, 'info', 'debug', or False.")
 
 
 def clear_cache():

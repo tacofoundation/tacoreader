@@ -36,10 +36,7 @@ except ImportError:
 def _require_pandas() -> None:
     """Raise ImportError if Pandas is not available."""
     if not HAS_PANDAS:
-        raise TacoBackendError(
-            "Pandas backend requires pandas package.\n"
-            "Install with: pip install pandas"
-        )
+        raise TacoBackendError("Pandas backend requires pandas package.\nInstall with: pip install pandas")
 
 
 class TacoDataFramePandas(TacoDataFrame):
@@ -191,8 +188,7 @@ class TacoDataFramePandas(TacoDataFrame):
         for col_name in kwargs:
             if col_name in PROTECTED_COLUMNS or col_name.startswith("internal:"):
                 raise ValueError(
-                    f"Cannot modify protected column: '{col_name}'\n"
-                    f"Protected: {sorted(PROTECTED_COLUMNS)} + internal:*"
+                    f"Cannot modify protected column: '{col_name}'\nProtected: {sorted(PROTECTED_COLUMNS)} + internal:*"
                 )
 
         new_data = self._data.assign(**kwargs)

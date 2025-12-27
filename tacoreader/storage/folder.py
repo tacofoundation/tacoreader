@@ -56,9 +56,7 @@ def _read_collection_folder_cached(path: str) -> dict[str, Any]:
         # Local filesystem
         collection_path = Path(path) / "COLLECTION.json"
         if not collection_path.exists():
-            raise TacoFormatError(
-                f"COLLECTION.json not found in {path}\n" f"Expected: {collection_path}"
-            )
+            raise TacoFormatError(f"COLLECTION.json not found in {path}\nExpected: {collection_path}")
 
         with open(collection_path) as f:
             collection_bytes = f.read().encode("utf-8")
@@ -73,9 +71,7 @@ def _read_collection_folder_cached(path: str) -> dict[str, Any]:
     try:
         return json.loads(collection_bytes)
     except json.JSONDecodeError as e:
-        raise TacoFormatError(
-            f"Invalid COLLECTION.json in folder format at {path}: {e.msg}"
-        ) from e
+        raise TacoFormatError(f"Invalid COLLECTION.json in folder format at {path}: {e.msg}") from e
 
 
 class FolderBackend(TacoBackend):
@@ -120,10 +116,7 @@ class FolderBackend(TacoBackend):
             metadata_dir = base_path / "METADATA"
 
             if not metadata_dir.exists():
-                raise TacoFormatError(
-                    f"METADATA directory not found in {path}\n"
-                    f"Expected: {metadata_dir}"
-                )
+                raise TacoFormatError(f"METADATA directory not found in {path}\nExpected: {metadata_dir}")
 
             for i in range(6):  # Max 6 levels (0-5)
                 level_file = metadata_dir / f"{LEVEL_VIEW_PREFIX}{i}.parquet"
@@ -133,9 +126,7 @@ class FolderBackend(TacoBackend):
 
                 # Create table reading directly from disk
                 table_name = f"{LEVEL_VIEW_PREFIX}{i}{LEVEL_TABLE_SUFFIX}"
-                db.execute(
-                    f"CREATE TABLE {table_name} AS SELECT * FROM read_parquet('{level_file}')"
-                )
+                db.execute(f"CREATE TABLE {table_name} AS SELECT * FROM read_parquet('{level_file}')")
 
                 level_ids.append(i)
                 logger.debug(f"Loaded {table_name} from disk")
@@ -145,9 +136,7 @@ class FolderBackend(TacoBackend):
             for i in range(6):
                 try:
                     # Download parquet
-                    parquet_bytes = download_bytes(
-                        path, f"METADATA/{LEVEL_VIEW_PREFIX}{i}.parquet"
-                    )
+                    parquet_bytes = download_bytes(path, f"METADATA/{LEVEL_VIEW_PREFIX}{i}.parquet")
 
                     # Load to PyArrow from bytes
                     reader = pa.BufferReader(parquet_bytes)
@@ -158,17 +147,14 @@ class FolderBackend(TacoBackend):
                     db.register(table_name, arrow_table)
 
                     level_ids.append(i)
-                    logger.debug(
-                        f"Registered {table_name} in DuckDB ({len(parquet_bytes)} bytes)"
-                    )
+                    logger.debug(f"Registered {table_name} in DuckDB ({len(parquet_bytes)} bytes)")
 
                 except Exception:
                     break  # Stop at first missing level
 
         if not level_ids:
             raise TacoFormatError(
-                f"No metadata files found in {path}/METADATA/\n"
-                f"Expected at least {LEVEL_VIEW_PREFIX}0.parquet"
+                f"No metadata files found in {path}/METADATA/\nExpected at least {LEVEL_VIEW_PREFIX}0.parquet"
             )
 
         # Finalize dataset using common method

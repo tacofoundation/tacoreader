@@ -82,31 +82,23 @@ def parse_vsi_subfile(vsi_path: str) -> tuple[str, int, int]:
     Format: /vsisubfile/{offset}_{size},{root_path}
     """
     if not vsi_path.startswith("/vsisubfile/"):
-        raise TacoFormatError(
-            f"Invalid VSI subfile path: must start with '/vsisubfile/', got: {vsi_path}"
-        )
+        raise TacoFormatError(f"Invalid VSI subfile path: must start with '/vsisubfile/', got: {vsi_path}")
 
     content = vsi_path[len("/vsisubfile/") :]
 
     if "," not in content:
-        raise TacoFormatError(
-            f"Invalid VSI subfile path: missing comma separator, got: {vsi_path}"
-        )
+        raise TacoFormatError(f"Invalid VSI subfile path: missing comma separator, got: {vsi_path}")
 
     offset_size_part, root_path = content.split(",", 1)
 
     if "_" not in offset_size_part:
-        raise TacoFormatError(
-            f"Invalid VSI subfile path: missing underscore in offset_size, got: {vsi_path}"
-        )
+        raise TacoFormatError(f"Invalid VSI subfile path: missing underscore in offset_size, got: {vsi_path}")
 
     try:
         offset_str, size_str = offset_size_part.split("_", 1)
         offset = int(offset_str)
         size = int(size_str)
     except ValueError as e:
-        raise TacoFormatError(
-            f"Invalid VSI subfile path: offset or size not integers, got: {vsi_path}"
-        ) from e
+        raise TacoFormatError(f"Invalid VSI subfile path: offset or size not integers, got: {vsi_path}") from e
 
     return root_path, offset, size

@@ -163,7 +163,7 @@ class TacoCatBackend(TacoBackend):
         total_mb = sum(len(b) for b in levels_bytes.values()) / (1024 * 1024)
         logger.debug(
             f"Fetched {len(levels_bytes)} levels ({total_mb:.1f}MB) "
-            f"in {fetch_time:.2f}s ({total_mb/fetch_time:.1f}MB/s)"
+            f"in {fetch_time:.2f}s ({total_mb / fetch_time:.1f}MB/s)"
         )
 
         # Setup DuckDB
@@ -181,10 +181,7 @@ class TacoCatBackend(TacoBackend):
             db.register(table_name, arrow_table)
             level_ids.append(level_id)
 
-            logger.debug(
-                f"Registered {table_name}: {arrow_table.num_rows} rows x "
-                f"{arrow_table.num_columns} cols"
-            )
+            logger.debug(f"Registered {table_name}: {arrow_table.num_rows} rows x {arrow_table.num_columns} cols")
 
         if not level_ids:
             raise TacoFormatError(f"No level*.parquet files found in: {path}")
@@ -230,10 +227,7 @@ class TacoCatBackend(TacoBackend):
         # Remote: parallel downloads with ThreadPoolExecutor
         levels = {}
         with ThreadPoolExecutor(max_workers=TACOCAT_MAX_LEVELS) as executor:
-            futures = {
-                executor.submit(_fetch_level_file, i, base_path): i
-                for i in range(TACOCAT_MAX_LEVELS)
-            }
+            futures = {executor.submit(_fetch_level_file, i, base_path): i for i in range(TACOCAT_MAX_LEVELS)}
 
             for future in as_completed(futures):
                 level_id, data = future.result()

@@ -174,9 +174,7 @@ def is_remote(path: str) -> bool:
     Returns True for cloud storage (s3://, gs://, etc.) and VSI paths.
     Returns False for local filesystem paths.
     """
-    remote_prefixes = tuple(
-        p for p in CLOUD_PROTOCOLS + ALL_VSI_PREFIXES if p is not None
-    )
+    remote_prefixes = tuple(p for p in CLOUD_PROTOCOLS + ALL_VSI_PREFIXES if p is not None)
     return path.startswith(remote_prefixes)
 
 

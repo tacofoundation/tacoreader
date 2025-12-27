@@ -181,9 +181,7 @@ def sort_columns_add_geometry(metadata):
     """
     columns = metadata.columns
     prefixes = ["internal:", "tortilla:", "stac:", "rai:"]
-    sorted_columns = [
-        col for prefix in prefixes for col in columns if col.startswith(prefix)
-    ]
+    sorted_columns = [col for prefix in prefixes for col in columns if col.startswith(prefix)]
     rest = [col for col in columns if col not in sorted_columns]
     columns = sorted_columns + rest
     return metadata[columns]
@@ -218,9 +216,7 @@ def partial_load_file(offset: int, path: str, **storage_options) -> pd.DataFrame
         FL: bytes = static_bytes[10:18]
 
         if MB not in {b"#y", b"WX"}:
-            raise ValueError(
-                "Invalid file type: must be either a Tortilla 🫓 or a TACO 🌮"
-            )
+            raise ValueError("Invalid file type: must be either a Tortilla 🫓 or a TACO 🌮")
 
         # Read the NEXT 8 bytes of the file
         footer_offset: int = int.from_bytes(FO, "little") + offset

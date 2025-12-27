@@ -22,10 +22,7 @@ def create_backend(format_type: str) -> TacoBackend:
 
     backend_class = backends.get(format_type)
     if backend_class is None:
-        raise TacoFormatError(
-            f"Unknown format: {format_type}\n"
-            f"Supported: {', '.join(backends.keys())}"
-        )
+        raise TacoFormatError(f"Unknown format: {format_type}\nSupported: {', '.join(backends.keys())}")
 
     return backend_class()
 

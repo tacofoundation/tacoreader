@@ -112,9 +112,7 @@ class TacoBackend(ABC):
         """SQL WHERE clause for filtering padding samples from views."""
         return f"{COLUMN_ID} NOT LIKE '{PADDING_PREFIX}%'"
 
-    def _parse_collection_json(
-        self, collection_bytes: bytes, path: str
-    ) -> dict[str, Any]:
+    def _parse_collection_json(self, collection_bytes: bytes, path: str) -> dict[str, Any]:
         """Parse COLLECTION.json with consistent error handling."""
         try:
             return json.loads(collection_bytes)

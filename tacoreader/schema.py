@@ -81,9 +81,7 @@ class PITSchema:
         self.hierarchy = schema_dict["hierarchy"]
         self._validate()
 
-    def _validate_pattern(
-        self, depth_str: str, pattern_idx: int, pattern: PITPattern
-    ) -> None:
+    def _validate_pattern(self, depth_str: str, pattern_idx: int, pattern: PITPattern) -> None:
         """Validate a single pattern at given depth."""
         # Check required fields
         if "type" not in pattern or "id" not in pattern:
@@ -97,14 +95,10 @@ class PITSchema:
 
         # Check non-empty arrays
         if not types:
-            raise TacoSchemaError(
-                f"Depth {depth_str}, pattern {pattern_idx}: type array empty"
-            )
+            raise TacoSchemaError(f"Depth {depth_str}, pattern {pattern_idx}: type array empty")
 
         if not ids:
-            raise TacoSchemaError(
-                f"Depth {depth_str}, pattern {pattern_idx}: id array empty"
-            )
+            raise TacoSchemaError(f"Depth {depth_str}, pattern {pattern_idx}: id array empty")
 
         # Check same length
         if len(types) != len(ids):
@@ -116,9 +110,7 @@ class PITSchema:
         # Validate child types
         for child_type in types:
             if child_type not in VALID_SAMPLE_TYPES:
-                raise TacoSchemaError(
-                    f"Depth {depth_str}, pattern {pattern_idx}: invalid type '{child_type}'"
-                )
+                raise TacoSchemaError(f"Depth {depth_str}, pattern {pattern_idx}: invalid type '{child_type}'")
 
     def _validate(self) -> None:
         """
@@ -134,17 +126,13 @@ class PITSchema:
         # Validate root type
         if self.root["type"] not in VALID_SAMPLE_TYPES:
             raise TacoSchemaError(
-                f"Invalid root type: {self.root['type']}\n"
-                f"Must be '{SAMPLE_TYPE_FILE}' or '{SAMPLE_TYPE_FOLDER}'"
+                f"Invalid root type: {self.root['type']}\nMust be '{SAMPLE_TYPE_FILE}' or '{SAMPLE_TYPE_FOLDER}'"
             )
 
         # Validate hierarchy
         for depth_str, patterns in self.hierarchy.items():
             if not depth_str.isdigit():
-                raise TacoSchemaError(
-                    f"Invalid depth key: {depth_str}\n"
-                    f"Depth keys must be numeric strings"
-                )
+                raise TacoSchemaError(f"Invalid depth key: {depth_str}\nDepth keys must be numeric strings")
 
             for i, pattern in enumerate(patterns):
                 self._validate_pattern(depth_str, i, pattern)

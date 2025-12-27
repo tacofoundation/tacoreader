@@ -39,9 +39,7 @@ def _create_store(url: str):
 
     # Build error message with all supported protocols
     supported = sorted({PROTOCOL_MAPPINGS[p]["standard"] for p in PROTOCOL_MAPPINGS})
-    raise TacoIOError(
-        f"Unsupported URL scheme: {url}\n" f"Supported: {', '.join(supported)}"
-    )
+    raise TacoIOError(f"Unsupported URL scheme: {url}\nSupported: {', '.join(supported)}")
 
 
 def download_bytes(url: str, subpath: str = "") -> bytes:
@@ -84,9 +82,7 @@ def download_range(url: str, offset: int, size: int, subpath: str = "") -> bytes
         result = obs.get_range(store, subpath, start=offset, length=size)
         return bytes(result)
     except Exception as e:
-        raise TacoIOError(
-            f"Failed to download range [{offset}:{offset+size}] from {url}{subpath}: {e}"
-        ) from e
+        raise TacoIOError(f"Failed to download range [{offset}:{offset + size}] from {url}{subpath}: {e}") from e
 
 
 def get_file_size(url: str, subpath: str = "") -> int | None:

@@ -26,9 +26,7 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
-def validate_column_compatibility(
-    datasets: list["TacoDataset"], mode: str = "intersection"
-) -> dict[str, list[str]]:
+def validate_column_compatibility(datasets: list["TacoDataset"], mode: str = "intersection") -> dict[str, list[str]]:
     """
     Validate column compatibility between datasets.
 
@@ -48,8 +46,7 @@ def validate_column_compatibility(
     """
     if mode not in ("intersection", "fill_missing", "strict"):
         raise TacoQueryError(
-            f"Invalid column_mode: '{mode}'\n"
-            f"Valid options: 'intersection' (default), 'fill_missing', 'strict'"
+            f"Invalid column_mode: '{mode}'\nValid options: 'intersection' (default), 'fill_missing', 'strict'"
         )
 
     # Collect all available levels
@@ -76,21 +73,15 @@ def validate_column_compatibility(
             final_columns[level_key] = common_cols_list
         elif mode == "intersection":
             final_columns[level_key] = common_cols_list
-            _handle_intersection_mode(
-                level_key, column_sets, common_cols_list, all_cols_list
-            )
+            _handle_intersection_mode(level_key, column_sets, common_cols_list, all_cols_list)
         else:  # fill_missing
             final_columns[level_key] = all_cols_list
-            _handle_fill_missing_mode(
-                level_key, column_sets, common_cols_list, all_cols_list
-            )
+            _handle_fill_missing_mode(level_key, column_sets, common_cols_list, all_cols_list)
 
     return final_columns
 
 
-def _collect_level_columns(
-    datasets: list["TacoDataset"], all_levels: set[str]
-) -> dict[str, list[set[str]]]:
+def _collect_level_columns(datasets: list["TacoDataset"], all_levels: set[str]) -> dict[str, list[set[str]]]:
     """Collect column sets for each level across all datasets."""
     level_columns: dict[str, list[set[str]]] = {}
 
@@ -102,9 +93,7 @@ def _collect_level_columns(
             available_levels = [f"{LEVEL_VIEW_PREFIX}{i}" for i in range(max_depth + 1)]
 
             if level_key in available_levels:
-                arrow_table = ds._duckdb.execute(
-                    f"SELECT * FROM {level_key}"
-                ).fetch_arrow_table()
+                arrow_table = ds._duckdb.execute(f"SELECT * FROM {level_key}").fetch_arrow_table()
                 level_columns[level_key].append(set(arrow_table.column_names))
 
     return level_columns
@@ -134,9 +123,7 @@ def _compute_column_lists(
     return common_cols_list, all_cols_list
 
 
-def _validate_critical_columns(
-    level_key: str, column_sets: list[set[str]], common_cols: list[str]
-) -> None:
+def _validate_critical_columns(level_key: str, column_sets: list[set[str]], common_cols: list[str]) -> None:
     """Validate that critical columns are present in all datasets."""
     if level_key == f"{LEVEL_VIEW_PREFIX}0":
         critical_cols = PROTECTED_COLUMNS - {
@@ -263,9 +250,7 @@ def _handle_fill_missing_mode(
 
     details = []
     for col, gaps in sorted(column_gaps.items()):
-        details.append(
-            f"  - '{col}' (missing in dataset(s) {gaps}, will fill with NULL)"
-        )
+        details.append(f"  - '{col}' (missing in dataset(s) {gaps}, will fill with NULL)")
 
     warnings.warn(
         f"\n"

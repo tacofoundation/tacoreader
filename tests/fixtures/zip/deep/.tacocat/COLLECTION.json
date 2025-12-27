@@ -1,0 +1,207 @@
+{
+    "id": "test_dataset",
+    "dataset_version": "1.0.0",
+    "description": "Test fixture with STAC metadata",
+    "licenses": [
+        "CC-BY-4.0"
+    ],
+    "providers": [
+        {
+            "name": "Test",
+            "organization": null,
+            "email": null,
+            "role": null
+        }
+    ],
+    "tasks": [
+        "classification"
+    ],
+    "taco_version": "0.5.0",
+    "title": null,
+    "curators": null,
+    "keywords": null,
+    "extent": {
+        "spatial": [
+            -180.0,
+            -90.0,
+            180.0,
+            90.0
+        ],
+        "temporal": null
+    },
+    "taco:pit_schema": {
+        "root": {
+            "n": 20,
+            "type": "FOLDER"
+        },
+        "hierarchy": {
+            "1": [
+                {
+                    "n": 40,
+                    "type": [
+                        "FOLDER",
+                        "FOLDER"
+                    ],
+                    "id": [
+                        "sensor_A",
+                        "sensor_B"
+                    ]
+                }
+            ],
+            "2": [
+                {
+                    "n": 60,
+                    "type": [
+                        "FILE",
+                        "FILE",
+                        "FILE"
+                    ],
+                    "id": [
+                        "band_R",
+                        "band_G",
+                        "band_B"
+                    ]
+                },
+                {
+                    "n": 60,
+                    "type": [
+                        "FILE",
+                        "FILE",
+                        "FILE"
+                    ],
+                    "id": [
+                        "band_R",
+                        "band_G",
+                        "band_B"
+                    ]
+                }
+            ]
+        }
+    },
+    "taco:field_schema": {
+        "level0": [
+            [
+                "id",
+                "string",
+                "Unique sample identifier within parent scope. Must be unique among siblings."
+            ],
+            [
+                "type",
+                "string",
+                "Sample type discriminator (FILE or FOLDER)."
+            ],
+            [
+                "properties",
+                "struct<cloud_cover: int64, istac:centroid: binary, istac:geometry: binary, istac:time_start: string, location: string>",
+                ""
+            ],
+            [
+                "internal:current_id",
+                "int64",
+                "Current sample position at this level (0-indexed). Enables O(1) random access and relational JOINs (ZIP, FOLDER, TACOCAT)."
+            ],
+            [
+                "internal:parent_id",
+                "int64",
+                "Foreign key referencing parent sample position in previous level (ZIP, FOLDER, TACOCAT)."
+            ]
+        ],
+        "level1": [
+            [
+                "id",
+                "string",
+                "Unique sample identifier within parent scope. Must be unique among siblings."
+            ],
+            [
+                "type",
+                "string",
+                "Sample type discriminator (FILE or FOLDER)."
+            ],
+            [
+                "properties",
+                "struct<resolution_m: int64>",
+                ""
+            ],
+            [
+                "internal:current_id",
+                "int64",
+                "Current sample position at this level (0-indexed). Enables O(1) random access and relational JOINs (ZIP, FOLDER, TACOCAT)."
+            ],
+            [
+                "internal:parent_id",
+                "int64",
+                "Foreign key referencing parent sample position in previous level (ZIP, FOLDER, TACOCAT)."
+            ],
+            [
+                "internal:relative_path",
+                "string",
+                "Relative path from DATA/ directory. Format: {parent_path}/{id} or {id} for level0 (ZIP, FOLDER, TACOCAT)."
+            ]
+        ],
+        "level2": [
+            [
+                "id",
+                "string",
+                "Unique sample identifier within parent scope. Must be unique among siblings."
+            ],
+            [
+                "type",
+                "string",
+                "Sample type discriminator (FILE or FOLDER)."
+            ],
+            [
+                "properties",
+                "struct<stac:tensor_shape: list<item: int64>, wavelength_nm: int64>",
+                ""
+            ],
+            [
+                "internal:current_id",
+                "int64",
+                "Current sample position at this level (0-indexed). Enables O(1) random access and relational JOINs (ZIP, FOLDER, TACOCAT)."
+            ],
+            [
+                "internal:parent_id",
+                "int64",
+                "Foreign key referencing parent sample position in previous level (ZIP, FOLDER, TACOCAT)."
+            ],
+            [
+                "internal:relative_path",
+                "string",
+                "Relative path from DATA/ directory. Format: {parent_path}/{id} or {id} for level0 (ZIP, FOLDER, TACOCAT)."
+            ]
+        ]
+    },
+    "taco:sources": {
+        "count": 2,
+        "ids": [
+            "test_dataset",
+            "test_dataset"
+        ],
+        "files": [
+            "deep_part0001.tacozip",
+            "deep_part0002.tacozip"
+        ],
+        "extents": [
+            {
+                "file": "deep_part0001.tacozip",
+                "id": "test_dataset",
+                "spatial": [
+                    -180.0,
+                    -90.0,
+                    180.0,
+                    90.0
+                ]
+            },
+            {
+                "file": "deep_part0002.tacozip",
+                "id": "test_dataset",
+                "spatial": [
+                    -180.0,
+                    -90.0,
+                    180.0,
+                    90.0
+                ]
+            }
+        ]
+    }
+}

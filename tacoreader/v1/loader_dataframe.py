@@ -87,15 +87,11 @@ def load_files(files: list, **storage_options) -> pd.DataFrame:
         pd.DataFrame: A dataframe containing the concatenated metadata.
     """
     with ThreadPoolExecutor(max_workers=min(len(files), os.cpu_count())) as executor:
-        futures = {
-            executor.submit(load_file, file, **storage_options): file for file in files
-        }
+        futures = {executor.submit(load_file, file, **storage_options): file for file in files}
         results = []
         for future in as_completed(futures):
             try:
                 results.append(future.result())
             except Exception as e:
                 print(f"Error processing file {futures[future]}: {e}")
-    return TortillaDataFrame(
-        pd.concat(results, ignore_index=True).sort_values(by=["tortilla:id"])
-    )
+    return TortillaDataFrame(pd.concat(results, ignore_index=True).sort_values(by=["tortilla:id"]))

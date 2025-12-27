@@ -19,7 +19,7 @@ def compile(
     nworkers: int = 4,
     overwrite: bool = True,
     quiet: bool = False,
-    **storage_options
+    **storage_options,
 ) -> pathlib.Path:
     """Select a subset of a Tortilla or TACO file and write a new "small"
     Tortilla file. If you want to convert this new file to a TACO file,
@@ -58,20 +58,13 @@ def compile(
     dataframe.reset_index(drop=True, inplace=True)
 
     # Compile your tortilla
-    parallel_compile(
-        dataframe, output, chunk_size_iter, nworkers, quiet, **storage_options
-    )
+    parallel_compile(dataframe, output, chunk_size_iter, nworkers, quiet, **storage_options)
 
     return output
 
 
 def parallel_compile(
-    dataframe: pd.DataFrame,
-    output: str,
-    chunk_size_iter: int,
-    nworkers: int,
-    quiet: bool,
-    **storage_options
+    dataframe: pd.DataFrame, output: str, chunk_size_iter: int, nworkers: int, quiet: bool, **storage_options
 ) -> pathlib.Path:
     """Prepare a subset of a Tortilla file and write it to a new file.
 
@@ -88,9 +81,7 @@ def parallel_compile(
     """
 
     # Estimate the new offset
-    dataframe.loc[:, "tortilla:new_offset"] = (
-        dataframe["tortilla:length"].shift(1, fill_value=0).cumsum() + 200
-    )
+    dataframe.loc[:, "tortilla:new_offset"] = dataframe["tortilla:length"].shift(1, fill_value=0).cumsum() + 200
 
     # Create the new FOOTER
     # Remove the columns generated on-the-fly by the load function (internal fields)
@@ -120,10 +111,7 @@ def parallel_compile(
         FOOTER: bytes = sink.getvalue().to_pybytes()
 
     # Calculate the bytes of the data blob (DATA)
-    bytes_counter: int = (
-        dataframe.iloc[-1]["tortilla:new_offset"]
-        + dataframe.iloc[-1]["tortilla:length"]
-    )
+    bytes_counter: int = dataframe.iloc[-1]["tortilla:new_offset"] + dataframe.iloc[-1]["tortilla:length"]
 
     # Prepare the static bytes
     MB: bytes = b"#y"
@@ -177,31 +165,21 @@ def parallel_compile(
             # Convert the VFS path to the original file path
             message = compile_utils.tortilla_message()
             dataframe["internal:filepath"] = dataframe["internal:subfile"].apply(
-                lambda x: compile_utils.transform_from_gdal_vfs(
-                    vfs_path=x.split(",")[-1]
-                )
+                lambda x: compile_utils.transform_from_gdal_vfs(vfs_path=x.split(",")[-1])
             )
             dataframe.sort_values("internal:filepath", inplace=True)
 
             # Write the DATA
-            with concurrent.futures.ThreadPoolExecutor(
-                max_workers=nworkers
-            ) as executor:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=nworkers) as executor:
                 futures = []
                 for idx, item in dataframe.iterrows():
                     # TODO: Check with more detail what this function does
-                    fs, fs_file = fsspec.core.url_to_fs(
-                        item["internal:filepath"], **storage_options
-                    )
+                    fs, fs_file = fsspec.core.url_to_fs(item["internal:filepath"], **storage_options)
 
                     old_offset = item["tortilla:offset"]
                     new_offset = item["tortilla:new_offset"]
                     length = item["tortilla:length"]
-                    futures.append(
-                        executor.submit(
-                            write_file, fs, fs_file, old_offset, length, new_offset
-                        )
-                    )
+                    futures.append(executor.submit(write_file, fs, fs_file, old_offset, length, new_offset))
 
                 # Wait for all futures to complete
                 if not quiet:

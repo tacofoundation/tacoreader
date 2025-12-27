@@ -179,22 +179,16 @@ class ZipBackend(TacoBackend):
         """
         return _read_taco_header_cached(path)
 
-    def _download_all_files(
-        self, path: str, header: list[tuple[int, int]]
-    ) -> dict[int, bytes]:
+    def _download_all_files(self, path: str, header: list[tuple[int, int]]) -> dict[int, bytes]:
         """Download all files from ZIP using grouped requests."""
         is_local = Path(path).exists()
 
         # Group files by proximity for efficient batch downloading
         if is_local:
-            file_groups = [
-                [(i, offset, size)] for i, (offset, size) in enumerate(header)
-            ]
+            file_groups = [[(i, offset, size)] for i, (offset, size) in enumerate(header)]
         else:
             file_groups = self._group_files_by_proximity(header)
-            logger.debug(
-                f"Grouped {len(header)} files into {len(file_groups)} request(s)"
-            )
+            logger.debug(f"Grouped {len(header)} files into {len(file_groups)} request(s)")
 
         # Download and parse all files
         all_files_data = {}
@@ -210,9 +204,7 @@ class ZipBackend(TacoBackend):
             range_end = last_offset + last_size
             range_size = range_end - range_start
 
-            logger.debug(
-                f"Downloading group: {len(group)} files, {range_size/1024:.1f}KB"
-            )
+            logger.debug(f"Downloading group: {len(group)} files, {range_size / 1024:.1f}KB")
 
             # Download entire group as single blob
             blob = (
@@ -253,9 +245,7 @@ class ZipBackend(TacoBackend):
             db.register(table_name, arrow_table)
             level_ids.append(i)
 
-            logger.debug(
-                f"Registered {table_name} in DuckDB ({len(parquet_bytes)} bytes)"
-            )
+            logger.debug(f"Registered {table_name} in DuckDB ({len(parquet_bytes)} bytes)")
 
         return level_ids
 
@@ -303,9 +293,7 @@ class ZipBackend(TacoBackend):
         # 2. Gap must be < 50% of useful data (efficiency)
         return gap < max_gap and gap <= total_useful_size * 0.5
 
-    def _group_files_by_proximity(
-        self, header: list[tuple[int, int]]
-    ) -> list[list[tuple[int, int, int]]]:
+    def _group_files_by_proximity(self, header: list[tuple[int, int]]) -> list[list[tuple[int, int, int]]]:
         """
         Group files to minimize HTTP requests while avoiding excessive waste.
 

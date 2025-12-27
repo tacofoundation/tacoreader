@@ -15,7 +15,4 @@ for _pkg in _REQUIRED_DEPS:
     try:
         importlib.import_module(_pkg)
     except ModuleNotFoundError as e:
-        raise ImportError(
-            f"Missing required dependency '{_pkg}'. "
-            f"Install it with: pip install {_pkg}"
-        ) from e
+        raise ImportError(f"Missing required dependency '{_pkg}'. Install it with: pip install {_pkg}") from e

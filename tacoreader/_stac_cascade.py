@@ -49,10 +49,7 @@ def validate_level_exists(dataset: "TacoDataset", level: int) -> None:
     max_level = dataset.pit_schema.max_depth()
 
     if level < 0 or level > max_level:
-        raise TacoQueryError(
-            f"Level {level} does not exist in dataset.\n"
-            f"Available levels: 0 to {max_level}"
-        )
+        raise TacoQueryError(f"Level {level} does not exist in dataset.\nAvailable levels: 0 to {max_level}")
 
 
 def get_columns_for_level(dataset: "TacoDataset", level: int) -> list[str]:
@@ -127,8 +124,7 @@ def apply_cascade_bbox_filter(
     else:
         if geometry_col not in target_cols:
             raise TacoQueryError(
-                f"Column '{geometry_col}' not found in level {level}.\n"
-                f"Available columns: {target_cols}"
+                f"Column '{geometry_col}' not found in level {level}.\nAvailable columns: {target_cols}"
             )
 
     # Build spatial WHERE clause for target level
@@ -191,10 +187,7 @@ def apply_cascade_datetime_filter(
         time_col = detect_time_column(target_cols)
     else:
         if time_col not in target_cols:
-            raise TacoQueryError(
-                f"Column '{time_col}' not found in level {level}.\n"
-                f"Available columns: {target_cols}"
-            )
+            raise TacoQueryError(f"Column '{time_col}' not found in level {level}.\nAvailable columns: {target_cols}")
 
     # Parse datetime range
     start, end = parse_datetime(datetime_range)
@@ -280,10 +273,7 @@ def build_cascade_join_sql(
         )
     else:
         # ZIP/FOLDER: Use internal:current_id column
-        joins.append(
-            f"INNER JOIN {LEVEL_VIEW_PREFIX}1 l1 "
-            f'ON l1."{METADATA_PARENT_ID}" = l0."internal:current_id"'
-        )
+        joins.append(f'INNER JOIN {LEVEL_VIEW_PREFIX}1 l1 ON l1."{METADATA_PARENT_ID}" = l0."internal:current_id"')
 
     # Subsequent JOINs: level1 → level2 → level3 ...
     # All levelN parquets have internal:current_id

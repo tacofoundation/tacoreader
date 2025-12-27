@@ -129,9 +129,7 @@ class TacoDataFrame(ABC):
         """
         if isinstance(key, int):
             if key < 0 or key >= len(self):
-                raise TacoNavigationError(
-                    f"Position {key} out of range [0, {len(self)-1}]"
-                )
+                raise TacoNavigationError(f"Position {key} out of range [0, {len(self) - 1}]")
             return key
 
         # Search by ID using PyArrow
@@ -287,11 +285,7 @@ class TacoDataFrame(ABC):
 
             children_table = pq.read_table(BytesIO(meta_bytes))
         else:
-            meta_path = (
-                vsi_path
-                if vsi_path.endswith("/__meta__")
-                else str(Path(vsi_path) / "__meta__")
-            )
+            meta_path = vsi_path if vsi_path.endswith("/__meta__") else str(Path(vsi_path) / "__meta__")
 
             children_table = pq.read_table(meta_path)
 

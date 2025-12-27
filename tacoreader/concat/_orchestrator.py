@@ -26,9 +26,7 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
-def concat(
-    datasets: list["TacoDataset"], column_mode: str = "intersection"
-) -> "TacoDataset":
+def concat(datasets: list["TacoDataset"], column_mode: str = "intersection") -> "TacoDataset":
     """
     Concatenate multiple datasets into single dataset with lazy SQL.
 
@@ -95,9 +93,7 @@ def concat(
     db.execute(f"CREATE VIEW {DEFAULT_VIEW_NAME} AS SELECT * FROM {LEVEL_VIEW_PREFIX}0")
 
     total_samples = consolidated_schema.root["n"]
-    logger.info(
-        f"Concatenated {len(datasets)} datasets ({total_samples:,} total samples)"
-    )
+    logger.info(f"Concatenated {len(datasets)} datasets ({total_samples:,} total samples)")
 
     # Build TacoDataset
     dataset = TacoDataset.model_construct(
@@ -159,9 +155,7 @@ def _merge_schemas(datasets: list["TacoDataset"]) -> PITSchema:
 
     for depth_str in merged_dict["hierarchy"]:
         for pattern_idx in range(len(merged_dict["hierarchy"][depth_str])):
-            total_n = sum(
-                ds.pit_schema.hierarchy[depth_str][pattern_idx]["n"] for ds in datasets
-            )
+            total_n = sum(ds.pit_schema.hierarchy[depth_str][pattern_idx]["n"] for ds in datasets)
             merged_dict["hierarchy"][depth_str][pattern_idx]["n"] = total_n
 
     return PITSchema(merged_dict)

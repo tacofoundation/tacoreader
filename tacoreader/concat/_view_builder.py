@@ -83,17 +83,13 @@ class ViewBuilder:
 
             for ds_idx, ds in enumerate(self.datasets):
                 max_depth = ds.pit_schema.max_depth()
-                available_levels = [
-                    f"{LEVEL_VIEW_PREFIX}{i}" for i in range(max_depth + 1)
-                ]
+                available_levels = [f"{LEVEL_VIEW_PREFIX}{i}" for i in range(max_depth + 1)]
 
                 if level_key not in available_levels:
                     continue
 
                 # Extract PyArrow table from original dataset
-                arrow_table = ds._duckdb.execute(
-                    f"SELECT * FROM {level_key}{LEVEL_TABLE_SUFFIX}"
-                ).fetch_arrow_table()
+                arrow_table = ds._duckdb.execute(f"SELECT * FROM {level_key}{LEVEL_TABLE_SUFFIX}").fetch_arrow_table()
 
                 # Register in new connection with unique name
                 table_name = f"ds{ds_idx}_{level_key}{LEVEL_TABLE_SUFFIX}"
@@ -106,27 +102,19 @@ class ViewBuilder:
                 select_parts = self._build_select_parts(target_cols, current_cols)
                 select_parts.append(f"'{source_file}' AS \"{METADATA_SOURCE_FILE}\"")
 
-                union_parts.append(
-                    f"SELECT {', '.join(select_parts)} FROM {table_name}"
-                )
+                union_parts.append(f"SELECT {', '.join(select_parts)} FROM {table_name}")
 
             if not union_parts:
                 continue
 
             # Create consolidated view with UNION ALL
             union_query = " UNION ALL ".join(union_parts)
-            self.db.execute(
-                f"CREATE VIEW {level_key}{UNION_VIEW_SUFFIX} AS {union_query}"
-            )
+            self.db.execute(f"CREATE VIEW {level_key}{UNION_VIEW_SUFFIX} AS {union_query}")
 
-            logger.debug(
-                f"    {level_key}: {len(union_parts)} dataset(s), {len(target_cols)} columns"
-            )
+            logger.debug(f"    {level_key}: {len(union_parts)} dataset(s), {len(target_cols)} columns")
 
     @staticmethod
-    def _build_select_parts(
-        target_cols: list[str], current_cols: set[str]
-    ) -> list[str]:
+    def _build_select_parts(target_cols: list[str], current_cols: set[str]) -> list[str]:
         """Build SELECT column list with NULL filling for missing columns."""
         select_parts = []
         for col in sorted(target_cols):
@@ -227,8 +215,7 @@ class ViewBuilder:
         """Check if union view exists for given level."""
         return bool(
             self.db.execute(
-                f"SELECT 1 FROM information_schema.tables "
-                f"WHERE table_name = '{level_key}{UNION_VIEW_SUFFIX}'"
+                f"SELECT 1 FROM information_schema.tables WHERE table_name = '{level_key}{UNION_VIEW_SUFFIX}'"
             ).fetchone()
         )
 

@@ -141,9 +141,7 @@ class TacoDataset(BaseModel):
         from tacoreader.dataframe import create_dataframe
 
         # DuckDB always returns PyArrow Table
-        arrow_table = self._duckdb.execute(
-            f"SELECT * FROM {self._view_name}"
-        ).fetch_arrow_table()
+        arrow_table = self._duckdb.execute(f"SELECT * FROM {self._view_name}").fetch_arrow_table()
 
         # Factory creates backend-specific TacoDataFrame
         return create_dataframe(
@@ -172,9 +170,7 @@ class TacoDataset(BaseModel):
         new_view_name = f"view_{uuid.uuid4().hex[:8]}"
 
         # Replace 'data' with current view for chaining
-        modified_query = query.replace(
-            f"FROM {DEFAULT_VIEW_NAME}", f"FROM {self._view_name}"
-        )
+        modified_query = query.replace(f"FROM {DEFAULT_VIEW_NAME}", f"FROM {self._view_name}")
 
         # Create temp view (lazy)
         self._duckdb.execute(
@@ -185,9 +181,7 @@ class TacoDataset(BaseModel):
         )
 
         # Count rows for schema update
-        new_n = self._duckdb.execute(
-            f"SELECT COUNT(*) FROM {new_view_name}"
-        ).fetchone()[0]
+        new_n = self._duckdb.execute(f"SELECT COUNT(*) FROM {new_view_name}").fetchone()[0]
 
         new_schema = self.pit_schema.with_n(new_n)
 
@@ -266,9 +260,7 @@ class TacoDataset(BaseModel):
             # Cascade route: hierarchical filtering with JOINs
             from tacoreader._stac_cascade import apply_cascade_bbox_filter
 
-            return apply_cascade_bbox_filter(
-                self, minx, miny, maxx, maxy, geometry_col, level
-            )
+            return apply_cascade_bbox_filter(self, minx, miny, maxx, maxy, geometry_col, level)
 
     def filter_datetime(
         self,
@@ -313,19 +305,14 @@ class TacoDataset(BaseModel):
         lines = [f"<TacoDataset '{self.id}'>"]
         lines.append(f"├── Version: {self.version}")
 
-        desc_short = (
-            self.description[:80] + "..."
-            if len(self.description) > 80
-            else self.description
-        )
+        desc_short = self.description[:80] + "..." if len(self.description) > 80 else self.description
         lines.append(f"├── Description: {desc_short}")
         lines.append(f"├── Tasks: {', '.join(self.tasks)}")
 
         # Spatial extent (always defined by auto_calculate_extent)
         spatial = self.extent["spatial"]
         lines.append(
-            f"├── Spatial Extent: [{spatial[0]:.2f}°, {spatial[1]:.2f}°, "
-            f"{spatial[2]:.2f}°, {spatial[3]:.2f}°]"
+            f"├── Spatial Extent: [{spatial[0]:.2f}°, {spatial[1]:.2f}°, {spatial[2]:.2f}°, {spatial[3]:.2f}°]"
         )
 
         # Temporal extent (can be None for atemporal datasets)

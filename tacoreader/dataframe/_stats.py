@@ -24,9 +24,7 @@ except ImportError:
 def _require_numpy(func_name: str) -> None:
     """Raise ImportError if NumPy is not available."""
     if not HAS_NUMPY:
-        raise ImportError(
-            f"{func_name}() requires NumPy. Install it with: pip install numpy"
-        )
+        raise ImportError(f"{func_name}() requires NumPy. Install it with: pip install numpy")
 
 
 def _extract_stats_and_weights(
@@ -120,9 +118,7 @@ def stats_categorical(table: pa.Table) -> np.ndarray:
             weights = weights_arr.to_numpy(zero_copy_only=False).astype(np.float32)
         except (pa.ArrowInvalid, pa.ArrowNotImplementedError):
             shapes = shapes_col.to_pylist()
-            weights = np.array(
-                [s[-2] * s[-1] if len(s) >= 2 else 1 for s in shapes], dtype=np.float32
-            )
+            weights = np.array([s[-2] * s[-1] if len(s) >= 2 else 1 for s in shapes], dtype=np.float32)
     else:
         weights = np.ones(len(stats_3d), dtype=np.float32)
 
@@ -140,9 +136,7 @@ def stats_mean(table: pa.Table) -> np.ndarray:
     stats_3d, weights = _extract_stats_and_weights(table)
 
     if _is_categorical(stats_3d.tolist()):
-        raise TacoQueryError(
-            "Stats appear to be categorical format. Use stats_categorical() instead."
-        )
+        raise TacoQueryError("Stats appear to be categorical format. Use stats_categorical() instead.")
 
     means = stats_3d[:, :, 2]
     result = np.average(means, axis=0, weights=weights)
@@ -157,9 +151,7 @@ def stats_std(table: pa.Table) -> np.ndarray:
     stats_3d, weights = _extract_stats_and_weights(table)
 
     if _is_categorical(stats_3d.tolist()):
-        raise TacoQueryError(
-            "Stats appear to be categorical format. Use stats_categorical() instead."
-        )
+        raise TacoQueryError("Stats appear to be categorical format. Use stats_categorical() instead.")
 
     means = stats_3d[:, :, 2]
     stds = stats_3d[:, :, 3]
@@ -183,9 +175,7 @@ def stats_min(table: pa.Table) -> np.ndarray:
     stats_3d, _ = _extract_stats_and_weights(table)
 
     if _is_categorical(stats_3d.tolist()):
-        raise TacoQueryError(
-            "Stats appear to be categorical format. Use stats_categorical() instead."
-        )
+        raise TacoQueryError("Stats appear to be categorical format. Use stats_categorical() instead.")
 
     mins = stats_3d[:, :, 0]
     result = mins.min(axis=0)
@@ -200,9 +190,7 @@ def stats_max(table: pa.Table) -> np.ndarray:
     stats_3d, _ = _extract_stats_and_weights(table)
 
     if _is_categorical(stats_3d.tolist()):
-        raise TacoQueryError(
-            "Stats appear to be categorical format. Use stats_categorical() instead."
-        )
+        raise TacoQueryError("Stats appear to be categorical format. Use stats_categorical() instead.")
 
     maxs = stats_3d[:, :, 1]
     result = maxs.max(axis=0)
@@ -210,9 +198,7 @@ def stats_max(table: pa.Table) -> np.ndarray:
     return result.astype(np.float32)
 
 
-def _stats_percentile(
-    table: pa.Table, percentile_idx: int, percentile_name: str
-) -> np.ndarray:
+def _stats_percentile(table: pa.Table, percentile_idx: int, percentile_name: str) -> np.ndarray:
     """
     Aggregate percentiles using simple average.
 
@@ -223,13 +209,10 @@ def _stats_percentile(
     stats_3d, _ = _extract_stats_and_weights(table)
 
     if _is_categorical(stats_3d.tolist()):
-        raise TacoQueryError(
-            "Stats appear to be categorical format. Use stats_categorical() instead."
-        )
+        raise TacoQueryError("Stats appear to be categorical format. Use stats_categorical() instead.")
 
     warnings.warn(
-        f"stats_{percentile_name}() uses simple averaging, NOT exact. "
-        "For critical analysis, recompute from raw data.",
+        f"stats_{percentile_name}() uses simple averaging, NOT exact. For critical analysis, recompute from raw data.",
         UserWarning,
         stacklevel=3,
     )

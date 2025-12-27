@@ -36,10 +36,7 @@ except ImportError:
 def _require_polars() -> None:
     """Raise ImportError if Polars is not available."""
     if not HAS_POLARS:
-        raise TacoBackendError(
-            "Polars backend requires polars package.\n"
-            "Install with: pip install polars"
-        )
+        raise TacoBackendError("Polars backend requires polars package.\nInstall with: pip install polars")
 
 
 class TacoDataFramePolars(TacoDataFrame):

@@ -186,7 +186,7 @@ def render_hierarchy_section(dataset: "TacoDataset") -> str:
         <details class="taco-sub-details">
             <summary>▶ Show IDs ({len(ids)})</summary>
             <ul class="taco-id-list">
-                {''.join(f'<li><span class="taco-id">{id_}</span> ({typ})</li>' for id_, typ in zip(ids, types, strict=False))}
+                {"".join(f'<li><span class="taco-id">{id_}</span> ({typ})</li>' for id_, typ in zip(ids, types, strict=False))}
             </ul>
         </details>
         """
@@ -225,11 +225,7 @@ def render_metadata_section(dataset: "TacoDataset") -> str:
         ("version", dataset.version),
         (
             "description",
-            (
-                dataset.description[:100] + "..."
-                if len(dataset.description) > 100
-                else dataset.description
-            ),
+            (dataset.description[:100] + "..." if len(dataset.description) > 100 else dataset.description),
         ),
         ("tasks", ", ".join(dataset.tasks)),
         ("licenses", ", ".join(dataset.licenses)),
@@ -284,9 +280,7 @@ def render_fields_section(dataset: "TacoDataset") -> str:
 
         field_list = ", ".join(field_names)
 
-        rows.append(
-            f"<li><strong>{level_key}:</strong> ({field_count}) {field_list}</li>"
-        )
+        rows.append(f"<li><strong>{level_key}:</strong> ({field_count}) {field_list}</li>")
 
     fields_html = "".join(rows)
 
@@ -359,12 +353,12 @@ def _create_sample_level(
 
     # Right sample
     sample_right: NodeDict = {
-        "id": f"sample_{n_samples-1}",
+        "id": f"sample_{n_samples - 1}",
         "type": root_type,
         "level": 0,
         "x": START_X + NODE_SPACING_H,
         "y": level0_y,
-        "label": f"Sample {n_samples-1}",
+        "label": f"Sample {n_samples - 1}",
         "color": get_node_color(root_type),
     }
     nodes.append(sample_right)
@@ -465,9 +459,7 @@ def _create_child_nodes(
     if expanded_child:
         for i in indices_to_show[1:]:
             if types[i] == "FOLDER":
-                sibling_node = next(
-                    n for n in nodes if n["id"] == f"child_d{current_depth}_i{i}"
-                )
+                sibling_node = next(n for n in nodes if n["id"] == f"child_d{current_depth}_i{i}")
                 texts.append(
                     {
                         "x": sibling_node["x"],
@@ -510,9 +502,7 @@ def _expand_hierarchy(
         current_y += NODE_SPACING_V
         num_children = len(types)
 
-        indices_to_show, show_ellipsis, hidden_count = _determine_children_to_show(
-            num_children
-        )
+        indices_to_show, show_ellipsis, hidden_count = _determine_children_to_show(num_children)
 
         expanded_child = _create_child_nodes(
             current_parent,
@@ -538,9 +528,7 @@ def _expand_hierarchy(
     return current_y
 
 
-def _adjust_node_positions(
-    nodes: list[NodeDict], edges: list[EdgeDict], texts: list[TextDict]
-) -> None:
+def _adjust_node_positions(nodes: list[NodeDict], edges: list[EdgeDict], texts: list[TextDict]) -> None:
     """Adjust node positions to prevent cutoff on left side."""
     if not nodes:
         return
@@ -561,9 +549,7 @@ def _adjust_node_positions(
             text["x"] += offset
 
 
-def _render_svg_elements(
-    nodes: list[NodeDict], edges: list[EdgeDict], texts: list[TextDict], final_y: float
-) -> str:
+def _render_svg_elements(nodes: list[NodeDict], edges: list[EdgeDict], texts: list[TextDict], final_y: float) -> str:
     """Render SVG elements (edges, nodes, texts)."""
     svg_edges = []
     for edge in edges:
@@ -578,7 +564,7 @@ def _render_svg_elements(
 
             svg_edges.append(
                 f"""
-            <line x1="{edge['from_x']}" y1="{edge['from_y']}"
+            <line x1="{edge["from_x"]}" y1="{edge["from_y"]}"
                   x2="{to_x}" y2="{to_y}"
                   stroke="#999" stroke-width="1.5"
                   marker-end="url(#arrowhead)"/>
@@ -589,9 +575,9 @@ def _render_svg_elements(
     for node in nodes:
         svg_nodes.append(
             f"""
-        <circle cx="{node['x']}" cy="{node['y']}" r="{NODE_RADIUS}"
-                fill="{node['color']}" stroke="#666" stroke-width="1.5">
-            <title>{node['label']} ({node['type']})</title>
+        <circle cx="{node["x"]}" cy="{node["y"]}" r="{NODE_RADIUS}"
+                fill="{node["color"]}" stroke="#666" stroke-width="1.5">
+            <title>{node["label"]} ({node["type"]})</title>
         </circle>
         """
         )
@@ -601,11 +587,11 @@ def _render_svg_elements(
         size = text.get("size", "12")
         svg_texts.append(
             f"""
-        <text x="{text['x']}" y="{text['y']}"
+        <text x="{text["x"]}" y="{text["y"]}"
               text-anchor="middle"
               font-size="{size}"
               font-weight="bold"
-              fill="#666">{text['text']}</text>
+              fill="#666">{text["text"]}</text>
         """
         )
 
@@ -626,9 +612,9 @@ def _render_svg_elements(
                 <polygon points="0 0, 10 3, 0 6" fill="#999"/>
             </marker>
         </defs>
-        {''.join(svg_edges)}
-        {''.join(svg_nodes)}
-        {''.join(svg_texts)}
+        {"".join(svg_edges)}
+        {"".join(svg_nodes)}
+        {"".join(svg_texts)}
     </svg>
     """
 
@@ -663,15 +649,11 @@ def render_graph(dataset: "TacoDataset") -> str:
     nodes.append(root_node)
 
     # Create sample level
-    sample_left = _create_sample_level(
-        root_node, root["type"], root["n"], nodes, edges, texts
-    )
+    sample_left = _create_sample_level(root_node, root["type"], root["n"], nodes, edges, texts)
 
     # Expand hierarchy from sample_left
     level0_y = START_Y + LEVEL_HEIGHT
-    final_y = _expand_hierarchy(
-        sample_left, hierarchy, 1, level0_y, nodes, edges, texts
-    )
+    final_y = _expand_hierarchy(sample_left, hierarchy, 1, level0_y, nodes, edges, texts)
 
     # Adjust positions to prevent cutoff
     _adjust_node_positions(nodes, edges, texts)
