@@ -11,11 +11,14 @@ import warnings
 from typing import TYPE_CHECKING
 
 from tacoreader._constants import (
+    COLUMN_ID,
+    COLUMN_TYPE,
     DEFAULT_VIEW_NAME,
     LEVEL_VIEW_PREFIX,
+    METADATA_OFFSET,
+    METADATA_PARENT_ID,
     METADATA_RELATIVE_PATH,
-    METADATA_SOURCE_FILE,
-    PROTECTED_COLUMNS,
+    METADATA_SIZE,
 )
 from tacoreader._exceptions import TacoQueryError, TacoSchemaError
 from tacoreader._logging import get_logger
@@ -24,6 +27,51 @@ if TYPE_CHECKING:
     from tacoreader.dataset import TacoDataset
 
 logger = get_logger(__name__)
+
+
+# Critical columns by format type
+# These are REQUIRED for navigation to work
+CRITICAL_COLUMNS_ZIP = frozenset(
+    {
+        COLUMN_ID,
+        COLUMN_TYPE,
+        METADATA_PARENT_ID,
+        METADATA_OFFSET,
+        METADATA_SIZE,
+    }
+)
+
+CRITICAL_COLUMNS_FOLDER = frozenset(
+    {
+        COLUMN_ID,
+        COLUMN_TYPE,
+        METADATA_PARENT_ID,
+    }
+)
+
+# Level 0 doesn't need parent_id (root level)
+CRITICAL_COLUMNS_ZIP_LEVEL0 = CRITICAL_COLUMNS_ZIP - {METADATA_PARENT_ID}
+CRITICAL_COLUMNS_FOLDER_LEVEL0 = CRITICAL_COLUMNS_FOLDER - {METADATA_PARENT_ID}
+
+
+def _get_critical_columns(format_type: str, level_key: str) -> frozenset[str]:
+    """
+    Get critical columns for format and level.
+
+    ZIP/TacoCat: need offset/size for /vsisubfile/ paths
+    FOLDER: need relative_path for direct filesystem paths (level1+)
+    """
+    is_level0 = level_key == f"{LEVEL_VIEW_PREFIX}0"
+
+    if format_type == "folder":
+        base = CRITICAL_COLUMNS_FOLDER_LEVEL0 if is_level0 else CRITICAL_COLUMNS_FOLDER
+        # Level 1+ needs relative_path for path construction
+        if not is_level0:
+            return base | {METADATA_RELATIVE_PATH}
+        return base
+    else:
+        # zip, tacocat
+        return CRITICAL_COLUMNS_ZIP_LEVEL0 if is_level0 else CRITICAL_COLUMNS_ZIP
 
 
 def validate_column_compatibility(datasets: list["TacoDataset"], mode: str = "intersection") -> dict[str, list[str]]:
@@ -49,6 +97,9 @@ def validate_column_compatibility(datasets: list["TacoDataset"], mode: str = "in
             f"Invalid column_mode: '{mode}'\nValid options: 'intersection' (default), 'fill_missing', 'strict'"
         )
 
+    # Get format type (already validated as uniform by _validation.py)
+    format_type = datasets[0]._format
+
     # Collect all available levels
     all_levels: set[str] = set()
     for ds in datasets:
@@ -64,8 +115,8 @@ def validate_column_compatibility(datasets: list["TacoDataset"], mode: str = "in
     for level_key, column_sets in level_columns.items():
         common_cols_list, all_cols_list = _compute_column_lists(column_sets)
 
-        # Validate critical columns
-        _validate_critical_columns(level_key, column_sets, common_cols_list)
+        # Validate critical columns (format-aware)
+        _validate_critical_columns(level_key, column_sets, common_cols_list, format_type)
 
         # Handle mode-specific logic
         if mode == "strict":
@@ -105,9 +156,6 @@ def _compute_column_lists(
     """Compute common and all column lists from column sets."""
     column_lists = [list(cs) for cs in column_sets]
 
-    if len(column_lists) == 1:
-        return column_lists[0][:], column_lists[0][:]
-
     # Compute intersection (common columns)
     common_cols_list = column_lists[0][:]
     for col_list in column_lists[1:]:
@@ -123,15 +171,14 @@ def _compute_column_lists(
     return common_cols_list, all_cols_list
 
 
-def _validate_critical_columns(level_key: str, column_sets: list[set[str]], common_cols: list[str]) -> None:
+def _validate_critical_columns(
+    level_key: str,
+    column_sets: list[set[str]],
+    common_cols: list[str],
+    format_type: str,
+) -> None:
     """Validate that critical columns are present in all datasets."""
-    if level_key == f"{LEVEL_VIEW_PREFIX}0":
-        critical_cols = PROTECTED_COLUMNS - {
-            METADATA_SOURCE_FILE,
-            METADATA_RELATIVE_PATH,
-        }
-    else:
-        critical_cols = PROTECTED_COLUMNS - {METADATA_SOURCE_FILE}
+    critical_cols = _get_critical_columns(format_type, level_key)
 
     missing_critical = critical_cols - set(common_cols)
     if missing_critical:
@@ -144,7 +191,7 @@ def _validate_critical_columns(level_key: str, column_sets: list[set[str]], comm
         raise TacoSchemaError(
             f"Cannot concat: Critical columns missing in {level_key}\n"
             f"\n"
-            f"Required columns for navigation:\n"
+            f"Required columns for {format_type} format navigation:\n"
             f"  {sorted(critical_cols)}\n"
             f"\n"
             f"Missing in some datasets:\n"

@@ -128,7 +128,7 @@ def _setup_duckdb_connection() -> duckdb.DuckDBPyConnection:
         db.execute("INSTALL spatial")
         db.execute("LOAD spatial")
         logger.debug("Loaded DuckDB spatial extension")
-    except Exception as e:
+    except Exception as e:  # pragma: no cover
         logger.debug(f"Spatial extension not available: {e}")
 
     return db
@@ -145,7 +145,7 @@ def _get_all_levels(datasets: list["TacoDataset"]) -> set[str]:
 
 def _merge_schemas(datasets: list["TacoDataset"]) -> PITSchema:
     """Merge compatible schemas by summing n values."""
-    if not datasets:
+    if not datasets:  # pragma: no cover
         raise TacoQueryError("Need at least one dataset to merge")
 
     reference = datasets[0].pit_schema

@@ -1,18 +1,8 @@
-# tests/conftest.py
-"""
-Pytest configuration and fixtures for tacoreader tests.
-
-Fixtures load pre-generated test datasets from tests/fixtures/.
-To regenerate fixtures, run: python tests/fixtures/regenerate.py
-"""
+"""Pytest fixtures for tacoreader tests."""
 
 from pathlib import Path
 
 import pytest
-
-# ---------------------------------------------------------------------------
-# Paths
-# ---------------------------------------------------------------------------
 
 TESTS_DIR = Path(__file__).parent
 FIXTURES_DIR = TESTS_DIR / "fixtures"
@@ -20,12 +10,7 @@ ZIP_FIXTURES = FIXTURES_DIR / "zip"
 FOLDER_FIXTURES = FIXTURES_DIR / "folder"
 
 
-# ---------------------------------------------------------------------------
-# Pytest Configuration
-# ---------------------------------------------------------------------------
-
 def pytest_configure(config):
-    """Register custom markers."""
     config.addinivalue_line("markers", "unit: unit tests (no I/O)")
     config.addinivalue_line("markers", "integration: integration tests with fixtures")
     config.addinivalue_line("markers", "slow: slow tests (network, large data)")
@@ -34,7 +19,6 @@ def pytest_configure(config):
 
 
 def pytest_collection_modifyitems(config, items):
-    """Auto-mark tests based on directory."""
     for item in items:
         if "/unit/" in str(item.fspath):
             item.add_marker(pytest.mark.unit)
@@ -42,13 +26,11 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(pytest.mark.integration)
 
 
-# ---------------------------------------------------------------------------
-# ZIP Fixtures (paths)
-# ---------------------------------------------------------------------------
+# ZIP fixtures
 
 @pytest.fixture(scope="session")
 def zip_flat() -> Path:
-    """ZIP flat: 5 FILE samples, 1 level."""
+    """5 FILE samples, 1 level."""
     path = ZIP_FIXTURES / "flat" / "flat.tacozip"
     if not path.exists():
         pytest.skip(f"Fixture not found: {path}")
@@ -57,7 +39,7 @@ def zip_flat() -> Path:
 
 @pytest.fixture(scope="session")
 def zip_nested() -> Path:
-    """ZIP nested: 3 FOLDER → 3 FILE each, 2 levels."""
+    """3 FOLDER -> 3 FILE each, 2 levels."""
     path = ZIP_FIXTURES / "nested" / "nested.tacozip"
     if not path.exists():
         pytest.skip(f"Fixture not found: {path}")
@@ -66,7 +48,7 @@ def zip_nested() -> Path:
 
 @pytest.fixture(scope="session")
 def zip_deep_part1() -> Path:
-    """ZIP deep part 1: for concat tests."""
+    """Part 1 of split dataset for concat tests."""
     path = ZIP_FIXTURES / "deep" / "deep_part0001.tacozip"
     if not path.exists():
         pytest.skip(f"Fixture not found: {path}")
@@ -74,21 +56,28 @@ def zip_deep_part1() -> Path:
 
 
 @pytest.fixture(scope="session")
+def zip_deep_part2() -> Path:
+    """Part 2 of split dataset for concat tests."""
+    path = ZIP_FIXTURES / "deep" / "deep_part0002.tacozip"
+    if not path.exists():
+        pytest.skip(f"Fixture not found: {path}")
+    return path
+
+
+@pytest.fixture(scope="session")
 def tacocat_deep() -> Path:
-    """TacoCat consolidated from deep parts."""
+    """TacoCat consolidating deep_part0001 + deep_part0002."""
     path = ZIP_FIXTURES / "deep" / ".tacocat"
     if not path.exists():
         pytest.skip(f"Fixture not found: {path}")
     return path
 
 
-# ---------------------------------------------------------------------------
-# FOLDER Fixtures (paths)
-# ---------------------------------------------------------------------------
+# FOLDER fixtures
 
 @pytest.fixture(scope="session")
 def folder_flat() -> Path:
-    """FOLDER flat: 5 FILE samples, 1 level."""
+    """5 FILE samples, 1 level."""
     path = FOLDER_FIXTURES / "flat"
     if not path.exists():
         pytest.skip(f"Fixture not found: {path}")
@@ -97,7 +86,7 @@ def folder_flat() -> Path:
 
 @pytest.fixture(scope="session")
 def folder_nested() -> Path:
-    """FOLDER nested: 3 FOLDER → 3 FILE each, 2 levels."""
+    """3 FOLDER -> 3 FILE each, 2 levels."""
     path = FOLDER_FIXTURES / "nested"
     if not path.exists():
         pytest.skip(f"Fixture not found: {path}")
@@ -106,59 +95,55 @@ def folder_nested() -> Path:
 
 @pytest.fixture(scope="session")
 def folder_deep() -> Path:
-    """FOLDER deep: 4 levels, mixed hierarchy."""
+    """4 levels, mixed hierarchy."""
     path = FOLDER_FIXTURES / "deep"
     if not path.exists():
         pytest.skip(f"Fixture not found: {path}")
     return path
 
 
-# ---------------------------------------------------------------------------
-# Loaded Dataset Fixtures
-# ---------------------------------------------------------------------------
+# Loaded datasets (function scope for isolation)
 
 @pytest.fixture
 def ds_zip_flat(zip_flat):
-    """Loaded TacoDataset from flat ZIP."""
     import tacoreader
     return tacoreader.load(str(zip_flat))
 
 
 @pytest.fixture
 def ds_zip_nested(zip_nested):
-    """Loaded TacoDataset from nested ZIP."""
     import tacoreader
     return tacoreader.load(str(zip_nested))
 
 
 @pytest.fixture
 def ds_folder_flat(folder_flat):
-    """Loaded TacoDataset from flat FOLDER."""
     import tacoreader
     return tacoreader.load(str(folder_flat))
 
 
 @pytest.fixture
 def ds_folder_nested(folder_nested):
-    """Loaded TacoDataset from nested FOLDER."""
     import tacoreader
     return tacoreader.load(str(folder_nested))
 
 
 @pytest.fixture
+def ds_folder_deep(folder_deep):
+    import tacoreader
+    return tacoreader.load(str(folder_deep))
+
+
+@pytest.fixture
 def ds_tacocat(tacocat_deep):
-    """Loaded TacoDataset from TacoCat."""
     import tacoreader
     return tacoreader.load(str(tacocat_deep))
 
 
-# ---------------------------------------------------------------------------
-# Backend Fixtures
-# ---------------------------------------------------------------------------
+# Backend parametrization
 
 @pytest.fixture(params=["pyarrow", "polars", "pandas"])
 def all_backends(request):
-    """Parametrized fixture for testing all backends."""
     backend = request.param
     if backend == "polars":
         pytest.importorskip("polars")
@@ -167,13 +152,9 @@ def all_backends(request):
     return backend
 
 
-# ---------------------------------------------------------------------------
-# Cleanup
-# ---------------------------------------------------------------------------
-
 @pytest.fixture(autouse=True)
 def reset_tacoreader():
-    """Reset global state after each test."""
+    """Reset tacoreader state after each test."""
     yield
     import tacoreader
     tacoreader.use("pyarrow")
