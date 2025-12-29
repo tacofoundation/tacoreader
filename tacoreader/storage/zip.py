@@ -55,8 +55,8 @@ def _read_taco_header_cached(path: str) -> list[tuple[int, int]]:
         return tacozip.read_header(path)
 
     # Remote: read first 256 bytes only
-    header_bytes = download_range(path, 0, 256)
-    return tacozip.read_header(header_bytes)
+    header_bytes = download_range(path, 0, 256)  # pragma: no cover - remote path
+    return tacozip.read_header(header_bytes)  # pragma: no cover
 
 
 class ZipBackend(TacoBackend):
@@ -86,7 +86,7 @@ class ZipBackend(TacoBackend):
 
         # Read TACO_HEADER to get offsets (uses cache)
         header = self._read_taco_header(path)
-        if not header:
+        if not header:  # pragma: no cover - tacozip raises first
             raise TacoFormatError(f"Empty TACO_HEADER in {path}")
         logger.debug(f"Read TACO_HEADER with {len(header)} entries")
 
@@ -102,7 +102,7 @@ class ZipBackend(TacoBackend):
         db = self._setup_duckdb_connection()
         level_ids = self._register_parquet_tables(db, all_files_data, header)
 
-        if not level_ids:
+        if not level_ids:  # pragma: no cover - defensive
             raise TacoFormatError(f"No metadata levels found in ZIP: {path}")
 
         # Finalize dataset
@@ -122,13 +122,13 @@ class ZipBackend(TacoBackend):
         """
         header = self._read_taco_header(path)
 
-        if not header:
+        if not header:  # pragma: no cover - tacozip raises first
             raise TacoFormatError(f"Empty TACO_HEADER in {path}")
 
         # COLLECTION.json is always last entry
         collection_offset, collection_size = header[-1]
 
-        if collection_size == 0:
+        if collection_size == 0:  # pragma: no cover - defensive
             raise TacoFormatError(f"Empty COLLECTION.json in {path}")
 
         is_local = Path(path).exists()
@@ -137,7 +137,7 @@ class ZipBackend(TacoBackend):
             with open(path, "rb") as f:
                 f.seek(collection_offset)
                 collection_bytes = f.read(collection_size)
-        else:
+        else:  # pragma: no cover - remote path
             collection_bytes = download_range(path, collection_offset, collection_size)
 
         return self._parse_collection_json(collection_bytes, path)
@@ -186,7 +186,7 @@ class ZipBackend(TacoBackend):
         # Group files by proximity for efficient batch downloading
         if is_local:
             file_groups = [[(i, offset, size)] for i, (offset, size) in enumerate(header)]
-        else:
+        else:  # pragma: no cover - remote path
             file_groups = self._group_files_by_proximity(header)
             logger.debug(f"Grouped {len(header)} files into {len(file_groups)} request(s)")
 
@@ -340,6 +340,6 @@ class ZipBackend(TacoBackend):
         ):
             return bytes(mm[offset : offset + size])
 
-    def _read_blob_remote(self, path: str, offset: int, size: int) -> bytes:
+    def _read_blob_remote(self, path: str, offset: int, size: int) -> bytes:  # pragma: no cover - remote path
         """Read blob from remote ZIP via HTTP range request."""
         return download_range(path, offset, size)

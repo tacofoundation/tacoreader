@@ -50,7 +50,7 @@ class TacoBackend(ABC):
         Format-specific: ZIP reads from offset, FOLDER from disk, TacoCat from memory.
         Must return dict with at least: id, taco:pit_schema, taco:field_schema
         """
-        pass
+        pass  # pragma: no cover
 
     @abstractmethod
     def setup_duckdb_views(
@@ -69,13 +69,13 @@ class TacoBackend(ABC):
 
         Views enable lazy SQL queries without loading rasters into memory.
         """
-        pass
+        pass  # pragma: no cover
 
     @property
     @abstractmethod
     def format_name(self) -> str:
         """Format identifier: 'zip', 'folder', or 'tacocat'."""
-        pass
+        pass  # pragma: no cover
 
     @abstractmethod
     def load(self, path: str) -> TacoDataset:
@@ -93,7 +93,7 @@ class TacoBackend(ABC):
         Returns:
             Fully loaded TacoDataset instance
         """
-        pass
+        pass  # pragma: no cover
 
     def _setup_duckdb_connection(self) -> duckdb.DuckDBPyConnection:
         """Create DuckDB connection with spatial extension if available."""
@@ -102,7 +102,7 @@ class TacoBackend(ABC):
             db.execute("INSTALL spatial")
             db.execute("LOAD spatial")
             logger.debug("DuckDB spatial extension loaded")
-        except Exception as e:
+        except Exception as e:  # pragma: no cover
             logger.debug(f"Spatial extension not available: {e}")
 
         return db

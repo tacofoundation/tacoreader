@@ -60,7 +60,7 @@ def _read_collection_folder_cached(path: str) -> dict[str, Any]:
 
         with open(collection_path) as f:
             collection_bytes = f.read().encode("utf-8")
-    else:
+    else:  # pragma: no cover
         # Remote storage - download_bytes is NOT cached (generic function)
         try:
             collection_bytes = download_bytes(path, "COLLECTION.json")
@@ -131,7 +131,7 @@ class FolderBackend(TacoBackend):
                 level_ids.append(i)
                 logger.debug(f"Loaded {table_name} from disk")
 
-        else:
+        else:  # pragma: no cover
             # REMOTE: download all metadata and load to memory
             for i in range(6):
                 try:

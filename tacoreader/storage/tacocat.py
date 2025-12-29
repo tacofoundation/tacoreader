@@ -67,12 +67,12 @@ def _read_tacocat_collection_cached(path: str) -> dict[str, Any]:
         if not collection_path.exists():
             raise TacoIOError(f"COLLECTION.json not found in {path}")
         return json.loads(collection_path.read_bytes())
-    else:
+    else:  # pragma: no cover
         collection_bytes = download_bytes(path, COLLECTION_JSON)
         return json.loads(collection_bytes)
 
 
-def _fetch_level_file(level_id: int, base_path: str) -> tuple[int, bytes | None]:
+def _fetch_level_file(level_id: int, base_path: str) -> tuple[int, bytes | None]:  # pragma: no cover - remote helper
     """
     Attempt to download single level*.parquet file.
 
@@ -183,7 +183,7 @@ class TacoCatBackend(TacoBackend):
 
             logger.debug(f"Registered {table_name}: {arrow_table.num_rows} rows x {arrow_table.num_columns} cols")
 
-        if not level_ids:
+        if not level_ids:  # pragma: no cover - defensive
             raise TacoFormatError(f"No level*.parquet files found in: {path}")
 
         # Load COLLECTION.json
@@ -225,8 +225,8 @@ class TacoCatBackend(TacoBackend):
             return levels
 
         # Remote: parallel downloads with ThreadPoolExecutor
-        levels = {}
-        with ThreadPoolExecutor(max_workers=TACOCAT_MAX_LEVELS) as executor:
+        levels = {}  # pragma: no cover
+        with ThreadPoolExecutor(max_workers=TACOCAT_MAX_LEVELS) as executor:  # pragma: no cover
             futures = {executor.submit(_fetch_level_file, i, base_path): i for i in range(TACOCAT_MAX_LEVELS)}
 
             for future in as_completed(futures):
@@ -234,7 +234,7 @@ class TacoCatBackend(TacoBackend):
                 if data is not None:
                     levels[level_id] = data
 
-        return levels
+        return levels  # pragma: no cover
 
     def read_collection(self, path: str) -> dict[str, Any]:
         """
@@ -313,20 +313,15 @@ class TacoCatBackend(TacoBackend):
         Returns:
             Base directory path with trailing slash
         """
-        # FIX: Normalize trailing slashes FIRST
-        # This prevents issues where remote paths have trailing slash
-        # but local paths don't (Path.resolve() removes them)
         clean_path = root_path.rstrip("/")
 
-        # Remove .tacocat suffix
         if clean_path.endswith(f"/{TACOCAT_FOLDER_NAME}"):
             base_path = clean_path[: -(len(TACOCAT_FOLDER_NAME) + 1)]
         elif clean_path.endswith(TACOCAT_FOLDER_NAME):
             base_path = clean_path[: -len(TACOCAT_FOLDER_NAME)]
-        else:
+        else:  # pragma: no cover - defensive
             base_path = clean_path
 
-        # Ensure trailing slash for path concatenation
         if not base_path.endswith("/"):
             base_path += "/"
 
