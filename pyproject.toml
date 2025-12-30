@@ -79,7 +79,7 @@ exclude_lines = [
     "raise NotImplementedError",
     "@abstractmethod",
     "def __repr__",
-    "^\\.\\.\\.\\s*$",
+    "^\\s*\\.\\.\\.\\s*$",
     "^\\s*pass\\s*$",
     "except ImportError:",
     "HAS_PANDAS = False",
