@@ -22,12 +22,15 @@
     "keywords": null,
     "extent": {
         "spatial": [
-            -180.0,
-            -90.0,
-            180.0,
-            90.0
+            -77.0,
+            -12.0,
+            139.7,
+            48.85
         ],
-        "temporal": null
+        "temporal": [
+            "2023-01-01T00:00:00Z",
+            "2023-05-01T00:00:00Z"
+        ]
     },
     "taco:pit_schema": {
         "root": {
@@ -49,8 +52,33 @@
                 "Sample type discriminator (FILE or FOLDER)."
             ],
             [
-                "properties",
-                "struct<cloud_cover: double, istac:centroid: binary, istac:geometry: binary, istac:time_start: string, location: string, stac:tensor_shape: list<item: int64>>",
+                "istac:geometry",
+                "binary",
+                ""
+            ],
+            [
+                "istac:centroid",
+                "binary",
+                ""
+            ],
+            [
+                "istac:time_start",
+                "timestamp[us]",
+                ""
+            ],
+            [
+                "cloud_cover",
+                "double",
+                ""
+            ],
+            [
+                "location",
+                "string",
+                ""
+            ],
+            [
+                "stac:tensor_shape",
+                "list<item: int64>",
                 ""
             ],
             [
@@ -62,6 +90,11 @@
                 "internal:parent_id",
                 "int64",
                 "Foreign key referencing parent sample position in previous level (ZIP, FOLDER, TACOCAT)."
+            ],
+            [
+                "internal:stats",
+                "list<item: list<item: float>>",
+                "Fake statistics for testing"
             ]
         ]
     }

@@ -22,12 +22,15 @@
     "keywords": null,
     "extent": {
         "spatial": [
-            -180.0,
-            -90.0,
-            180.0,
-            90.0
+            -77.0,
+            -33.85,
+            151.2,
+            52.5
         ],
-        "temporal": null
+        "temporal": [
+            "2023-01-01T00:00:00Z",
+            "2023-03-02T00:00:00Z"
+        ]
     },
     "taco:pit_schema": {
         "root": {
@@ -65,8 +68,18 @@
                 "Sample type discriminator (FILE or FOLDER)."
             ],
             [
-                "properties",
-                "struct<istac:geometry: binary, istac:time_start: string, region: string>",
+                "istac:geometry",
+                "binary",
+                ""
+            ],
+            [
+                "istac:time_start",
+                "timestamp[us]",
+                ""
+            ],
+            [
+                "region",
+                "string",
                 ""
             ],
             [
@@ -92,8 +105,33 @@
                 "Sample type discriminator (FILE or FOLDER)."
             ],
             [
-                "properties",
-                "struct<cloud_cover: double, istac:centroid: binary, istac:geometry: binary, istac:time_start: string, location: string, stac:tensor_shape: list<item: int64>>",
+                "cloud_cover",
+                "double",
+                ""
+            ],
+            [
+                "istac:centroid",
+                "binary",
+                ""
+            ],
+            [
+                "istac:geometry",
+                "binary",
+                ""
+            ],
+            [
+                "istac:time_start",
+                "timestamp[us]",
+                ""
+            ],
+            [
+                "location",
+                "string",
+                ""
+            ],
+            [
+                "stac:tensor_shape",
+                "list<item: int64>",
                 ""
             ],
             [
@@ -110,6 +148,11 @@
                 "internal:relative_path",
                 "string",
                 "Relative path from DATA/ directory. Format: {parent_path}/{id} or {id} for level0 (ZIP, FOLDER, TACOCAT)."
+            ],
+            [
+                "internal:stats",
+                "list<item: list<item: float>>",
+                "Fake statistics for testing"
             ]
         ]
     }

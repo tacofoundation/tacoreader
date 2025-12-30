@@ -1,26 +1,26 @@
 """
-Test fixtures for TACO datasets with STAC metadata.
+Test fixtures for TACO datasets with STAC metadata and internal:stats.
 
 Three complexity levels:
-- flat: Single level, all FILEs
-- nested: Two levels, simple hierarchy  
-- deep: Four levels, mixed FILE/FOLDER
+- flat: Single level, all FILEs + stats
+- nested: Two levels, simple hierarchy + stats on items
+- deep: Four levels, mixed FILE/FOLDER + stats on band FILEs
 
 Output structure:
 
     tests/fixtures/
     ├── zip/
-    │   ├── flat.tacozip           # 5 samples, 1 level
-    │   ├── nested.tacozip         # 9 samples, 2 levels (3 groups x 3 items)
-    │   └── deep/                  # 4 levels, split + consolidated
+    │   ├── flat.tacozip           # 5 samples, 1 level + stats
+    │   ├── nested.tacozip         # 9 samples, 2 levels + stats on items
+    │   └── deep/                  # 4 levels, split + consolidated + stats on bands
     │       ├── deep_part0001.tacozip
     │       ├── deep_part0002.tacozip
     │       └── deep.tacocat/
     │
     └── folder/
-        ├── flat/                  # 5 samples, 1 level
-        ├── nested/                # 9 samples, 2 levels
-        └── deep/                  # 4 levels
+        ├── flat/                  # 5 samples, 1 level + stats
+        ├── nested/                # 9 samples, 2 levels + stats on items
+        └── deep/                  # 4 levels + stats on bands
 
 STAC metadata fields:
     - istac:geometry     WKB polygon for filter_bbox()
@@ -28,6 +28,7 @@ STAC metadata fields:
     - istac:time_start   ISO date for filter_datetime()
     - cloud_cover        float 0-100 for SQL WHERE
     - stac:tensor_shape  list for stats aggregation
+    - internal:stats     list[list[float32]] - categorical or continuous stats
 
 Note: TacoCat consolidation only applies to ZIP format.
 """
@@ -36,8 +37,30 @@ import pathlib
 import struct
 from datetime import datetime, timedelta
 
+import pyarrow as pa
 import tacotoolbox
 from tacotoolbox.datamodel import Sample, Tortilla, Taco
+from tacotoolbox.sample.datamodel import SampleExtension
+
+
+class FakeGeotiffStats(SampleExtension):
+    """Fake stats extension for testing (no GDAL required)."""
+    
+    stats: list[list[float]]
+    
+    def get_schema(self) -> pa.Schema:
+        return pa.schema([
+            pa.field("internal:stats", pa.list_(pa.list_(pa.float32()))),
+        ])
+    
+    def get_field_descriptions(self) -> dict[str, str]:
+        return {
+            "internal:stats": "Fake statistics for testing"
+        }
+    
+    def _compute(self, sample) -> pa.Table:
+        data = {"internal:stats": [self.stats]}
+        return pa.Table.from_pydict(data, schema=self.get_schema())
 
 
 COLLECTION_DEFAULTS = {
@@ -79,9 +102,9 @@ def _polygon_wkb(minx: float, miny: float, maxx: float, maxy: float) -> bytes:
     return wkb
 
 
-def _date(days: int) -> str:
-    """ISO date offset from BASE_DATE."""
-    return (BASE_DATE + timedelta(days=days)).strftime("%Y-%m-%d")
+def _date(days: int) -> datetime:
+    """Datetime offset from BASE_DATE."""
+    return BASE_DATE + timedelta(days=days)
 
 
 def _centroid(bbox: tuple) -> tuple[float, float]:
@@ -91,31 +114,62 @@ def _centroid(bbox: tuple) -> tuple[float, float]:
 
 def create_flat_taco(output: pathlib.Path) -> pathlib.Path:
     """
-    5 FILEs with varied locations and times.
+    5 FILEs with varied locations and times + internal:stats.
     
     Locations: valencia, paris, nyc, tokyo, lima
     Times: monthly from 2023-01-01
     Cloud: 0, 15, 30, 45, 60
+    Stats: alternating categorical/continuous (3 bands each)
     """
     locs = ["valencia", "paris", "nyc", "tokyo", "lima"]
+    
+    # Categorical: 3 classes [0,1,2], probs sum to 1.0
+    categorical_stats = [
+        [[0.5, 0.3, 0.2], [0.2, 0.6, 0.2], [0.1, 0.3, 0.6]],  # R,G,B dominant
+        [[0.3, 0.4, 0.3], [0.4, 0.3, 0.3], [0.25, 0.5, 0.25]], # Mixed
+    ]
+    
+    # Continuous: [min, max, mean, std, valid%, p25, p50, p75, p95]
+    continuous_stats = [
+        [
+            [0.0, 255.0, 128.5, 45.2, 98.5, 85.0, 125.0, 170.0, 220.0],      # Band R
+            [0.0, 255.0, 115.3, 38.7, 99.1, 75.0, 110.0, 155.0, 205.0],      # Band G  
+            [0.0, 255.0, 95.8, 42.1, 97.8, 60.0, 92.0, 130.0, 185.0],        # Band B
+        ],
+        [
+            [-1.0, 1.0, 0.35, 0.42, 95.5, -0.15, 0.30, 0.65, 0.88],          # NDVI-like
+            [250.0, 320.0, 285.2, 15.8, 99.2, 275.0, 283.0, 295.0, 310.0],   # Temp-like
+            [0.0, 100.0, 45.6, 22.3, 96.7, 25.0, 42.0, 65.0, 85.0],          # Percent-like
+        ],
+    ]
     
     samples = []
     for i, name in enumerate(locs):
         bbox = LOCATIONS[name]
         cx, cy = _centroid(bbox)
         
-        samples.append(Sample(
+        # Alternate categorical/continuous
+        is_categorical = i % 2 == 0
+        stats = categorical_stats[i % 2] if is_categorical else continuous_stats[i % 2]
+        
+        sample = Sample(
             id=f"sample_{i}",
             path=f"content_{name}".encode(),
-            properties={
-                "istac:geometry": _polygon_wkb(*bbox),
-                "istac:centroid": _point_wkb(cx, cy),
-                "istac:time_start": _date(i * 30),
-                "cloud_cover": i * 15.0,
-                "location": name,
-                "stac:tensor_shape": [3, 256, 256],
-            },
-        ))
+        )
+        
+        # Add metadata as direct fields (not in properties struct)
+        sample.extend_with({
+            "istac:geometry": _polygon_wkb(*bbox),
+            "istac:centroid": _point_wkb(cx, cy),
+            "istac:time_start": _date(i * 30),
+            "cloud_cover": i * 15.0,
+            "location": name,
+            "stac:tensor_shape": [3, 256, 256],
+        })
+        
+        # Add fake stats extension
+        sample.extend_with(FakeGeotiffStats(stats=stats))
+        samples.append(sample)
     
     taco = Taco(tortilla=Tortilla(samples), **COLLECTION_DEFAULTS)
     return tacotoolbox.create(taco, output)[0]
@@ -123,16 +177,51 @@ def create_flat_taco(output: pathlib.Path) -> pathlib.Path:
 
 def create_nested_taco(output: pathlib.Path) -> pathlib.Path:
     """
-    3 regional groups x 3 items each.
+    3 regional groups x 3 items each + internal:stats on items.
     
-    europe/   -> valencia, paris, berlin
-    americas/ -> nyc, lima, (nyc again for simplicity)
-    asia/     -> tokyo, shanghai, sydney
+    europe/   -> valencia, paris, berlin (categorical, 3 bands each)
+    americas/ -> nyc, lima, nyc (continuous, 3 bands each)
+    asia/     -> tokyo, shanghai, sydney (mixed cat/cont/cat, 3 bands each)
     """
     regions = {
         "europe": ["valencia", "paris", "berlin"],
         "americas": ["nyc", "lima", "nyc"],
         "asia": ["tokyo", "shanghai", "sydney"],
+    }
+    
+    # Different stats patterns per region
+    stats_patterns = {
+        "europe": [  # Categorical for all 3
+            [[0.4, 0.4, 0.2], [0.3, 0.5, 0.2], [0.2, 0.3, 0.5]],
+            [[0.5, 0.3, 0.2], [0.2, 0.6, 0.2], [0.1, 0.4, 0.5]],
+            [[0.3, 0.3, 0.4], [0.4, 0.4, 0.2], [0.2, 0.5, 0.3]],
+        ],
+        "americas": [  # Continuous for all 3 (3 bands each)
+            [
+                [0.0, 200.0, 98.5, 35.2, 98.1, 65.0, 95.0, 130.0, 175.0],
+                [5.0, 180.0, 85.3, 28.5, 97.5, 55.0, 82.0, 115.0, 160.0],
+                [10.0, 220.0, 115.8, 42.1, 99.0, 75.0, 110.0, 150.0, 200.0],
+            ],
+            [
+                [-1.0, 1.0, 0.25, 0.38, 96.3, -0.20, 0.22, 0.55, 0.82],
+                [-0.8, 0.95, 0.18, 0.32, 95.8, -0.15, 0.16, 0.48, 0.75],
+                [-0.9, 0.98, 0.22, 0.35, 97.1, -0.18, 0.20, 0.52, 0.78],
+            ],
+            [
+                [10.0, 250.0, 145.8, 48.6, 97.5, 95.0, 140.0, 195.0, 230.0],
+                [15.0, 240.0, 138.2, 45.3, 98.2, 88.0, 135.0, 188.0, 220.0],
+                [12.0, 255.0, 150.5, 50.1, 96.8, 98.0, 145.0, 200.0, 235.0],
+            ],
+        ],
+        "asia": [  # Mixed: cat, cont, cat (3 bands each)
+            [[0.2, 0.5, 0.3], [0.4, 0.3, 0.3], [0.3, 0.4, 0.3]],
+            [
+                [0.0, 100.0, 52.3, 28.5, 99.0, 28.0, 50.0, 75.0, 92.0],
+                [5.0, 95.0, 48.7, 25.2, 98.5, 25.0, 47.0, 70.0, 88.0],
+                [2.0, 105.0, 55.8, 30.1, 99.5, 30.0, 53.0, 78.0, 95.0],
+            ],
+            [[0.6, 0.2, 0.2], [0.2, 0.7, 0.1], [0.1, 0.2, 0.7]],
+        ],
     }
     
     groups = []
@@ -142,20 +231,26 @@ def create_nested_taco(output: pathlib.Path) -> pathlib.Path:
             bbox = LOCATIONS[loc]
             cx, cy = _centroid(bbox)
             
-            items.append(Sample(
+            sample = Sample(
                 id=f"item_{j}",
                 path=f"data_{region}_{j}".encode(),
-                properties={
-                    "istac:geometry": _polygon_wkb(*bbox),
-                    "istac:centroid": _point_wkb(cx, cy),
-                    "istac:time_start": _date(j * 30),
-                    "cloud_cover": j * 20.0 + 5,
-                    "location": loc,
-                    "stac:tensor_shape": [4, 512, 512],
-                },
-            ))
+            )
+            
+            # Add metadata as direct fields
+            sample.extend_with({
+                "istac:geometry": _polygon_wkb(*bbox),
+                "istac:centroid": _point_wkb(cx, cy),
+                "istac:time_start": _date(j * 30),
+                "cloud_cover": j * 20.0 + 5,
+                "location": loc,
+                "stac:tensor_shape": [3, 512, 512],
+            })
+            
+            # Add stats from pattern
+            sample.extend_with(FakeGeotiffStats(stats=stats_patterns[region][j]))
+            items.append(sample)
         
-        # Group bbox = union of children
+        # Group bbox = union of children (NO stats at parent level)
         all_bboxes = [LOCATIONS[l] for l in locs]
         group_bbox = (
             min(b[0] for b in all_bboxes),
@@ -164,15 +259,18 @@ def create_nested_taco(output: pathlib.Path) -> pathlib.Path:
             max(b[3] for b in all_bboxes),
         )
         
-        groups.append(Sample(
+        group = Sample(
             id=region,
             path=Tortilla(items),
-            properties={
-                "istac:geometry": _polygon_wkb(*group_bbox),
-                "istac:time_start": _date(0),
-                "region": region,
-            },
-        ))
+        )
+        
+        group.extend_with({
+            "istac:geometry": _polygon_wkb(*group_bbox),
+            "istac:time_start": _date(0),
+            "region": region,
+        })
+        
+        groups.append(group)
     
     taco = Taco(tortilla=Tortilla(groups), **COLLECTION_DEFAULTS)
     return tacotoolbox.create(taco, output)[0]
@@ -180,59 +278,78 @@ def create_nested_taco(output: pathlib.Path) -> pathlib.Path:
 
 def create_deep_taco(output_dir: pathlib.Path) -> list[pathlib.Path]:
     """
-    4-level satellite-like structure, 20 tiles.
+    4-level satellite-like structure, 20 tiles + internal:stats on band FILEs.
     
     tile_N/
         sensor_A/
-            band_R (FILE)
-            band_G (FILE)
-            band_B (FILE)
+            band_R (FILE + stats)
+            band_G (FILE + stats)
+            band_B (FILE + stats)
         sensor_B/
-            band_R (FILE)
-            band_G (FILE)
-            band_B (FILE)
-    
-    Simplified structure - all FILEs at level 2 with consistent schema.
+            band_R (FILE + stats)
+            band_G (FILE + stats)
+            band_B (FILE + stats)
     """
     loc_names = list(LOCATIONS.keys())
+    
+    # Stats for RGB bands (continuous mode, single band each)
+    # [min, max, mean, std, valid%, p25, p50, p75, p95]
+    band_stats = {
+        "band_R": [[0.0, 255.0, 145.2, 48.3, 98.7, 95.0, 140.0, 185.0, 230.0]],
+        "band_G": [[0.0, 255.0, 128.5, 42.1, 99.2, 85.0, 125.0, 170.0, 215.0]],
+        "band_B": [[0.0, 255.0, 98.3, 38.6, 97.5, 60.0, 95.0, 135.0, 180.0]],
+    }
     
     def make_sensor(name: str, idx: int) -> Sample:
         bands = []
         for band in ["band_R", "band_G", "band_B"]:
-            bands.append(Sample(
+            sample = Sample(
                 id=band,
                 path=f"{band}_data".encode(),
-                properties={
-                    "wavelength_nm": {"band_R": 665, "band_G": 560, "band_B": 490}[band],
-                    "stac:tensor_shape": [1, 256, 256],
-                },
-            ))
+            )
+            
+            sample.extend_with({
+                "wavelength_nm": {"band_R": 665, "band_G": 560, "band_B": 490}[band],
+                "stac:tensor_shape": [1, 256, 256],
+            })
+            
+            # Add stats to band FILE
+            sample.extend_with(FakeGeotiffStats(stats=band_stats[band]))
+            bands.append(sample)
         
-        return Sample(
+        sensor = Sample(
             id=name,
             path=Tortilla(bands),
-            properties={"resolution_m": 10 if name == "sensor_A" else 20},
         )
+        
+        sensor.extend_with({
+            "resolution_m": 10 if name == "sensor_A" else 20,
+        })
+        
+        return sensor
     
     def make_tile(idx: int) -> Sample:
         loc = loc_names[idx % len(loc_names)]
         bbox = LOCATIONS[loc]
         cx, cy = _centroid(bbox)
         
-        return Sample(
+        tile = Sample(
             id=f"tile_{idx:02d}",
             path=Tortilla([
                 make_sensor("sensor_A", idx),
                 make_sensor("sensor_B", idx),
             ]),
-            properties={
-                "istac:geometry": _polygon_wkb(*bbox),
-                "istac:centroid": _point_wkb(cx, cy),
-                "istac:time_start": _date(idx),
-                "cloud_cover": (idx * 13) % 100,
-                "location": loc,
-            },
         )
+        
+        tile.extend_with({
+            "istac:geometry": _polygon_wkb(*bbox),
+            "istac:centroid": _point_wkb(cx, cy),
+            "istac:time_start": _date(idx),
+            "cloud_cover": (idx * 13) % 100,
+            "location": loc,
+        })
+        
+        return tile
     
     tiles = [make_tile(i) for i in range(20)]
     taco = Taco(tortilla=Tortilla(tiles), **COLLECTION_DEFAULTS)
@@ -262,4 +379,4 @@ if __name__ == "__main__":
     create_nested_taco(folder_dir / "nested")
     create_deep_taco(folder_dir / "deep")
     
-    print(f"Fixtures: {fixtures}")
+    print(f"Fixtures generated: {fixtures}")

@@ -78,17 +78,37 @@ def _extract_stats_and_weights(
     return stats_3d, weights
 
 
-def _is_categorical(stats: list[list[float]]) -> bool:
+def _is_categorical(stats: list) -> bool:
     """
     Detect categorical vs continuous stats.
 
     Continuous: 9 values [min, max, mean, std, valid%, p25, p50, p75, p95]
     Categorical: N values [prob_class_0, ..., prob_class_N]
+    
+    Handles two input formats:
+    - Single row: [[banda0], [banda1], ...] - list of bands
+    - Multiple rows: [[[banda0], [banda1]], [[banda0], [banda1]], ...] - list of rows
     """
-    if len(stats) == 0 or len(stats[0]) == 0:
+    if len(stats) == 0:
         raise TacoQueryError("Empty stats provided")
-
-    return len(stats[0]) != STATS_CONTINUOUS_LENGTH
+    
+    first_elem = stats[0]
+    
+    if not isinstance(first_elem, list) or len(first_elem) == 0:
+        raise TacoQueryError("Empty stats provided")
+    
+    # Detect format by checking type of first element's first element
+    if isinstance(first_elem[0], (int, float)):
+        # first_elem[0] is a number → first_elem is a band → stats is list of bands (single row)
+        return len(first_elem) != STATS_CONTINUOUS_LENGTH
+    elif isinstance(first_elem[0], list):
+        # first_elem[0] is a list → first_elem is a row → stats is list of rows
+        # Use first row's first band
+        if len(first_elem[0]) == 0:
+            raise TacoQueryError("Empty stats provided")
+        return len(first_elem[0]) != STATS_CONTINUOUS_LENGTH
+    else:
+        raise TacoQueryError("Invalid stats format")
 
 
 def stats_categorical(table: pa.Table) -> np.ndarray:
