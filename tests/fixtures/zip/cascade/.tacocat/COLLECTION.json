@@ -1,0 +1,291 @@
+{
+    "id": "test_dataset",
+    "dataset_version": "1.0.0",
+    "description": "Test fixture with STAC metadata",
+    "licenses": [
+        "CC-BY-4.0"
+    ],
+    "providers": [
+        {
+            "name": "Test",
+            "organization": null,
+            "email": null,
+            "role": null
+        }
+    ],
+    "tasks": [
+        "classification"
+    ],
+    "taco_version": "0.5.0",
+    "title": null,
+    "curators": null,
+    "keywords": null,
+    "extent": {
+        "spatial": [
+            -80.0,
+            1.5,
+            125.0,
+            47.5
+        ],
+        "temporal": [
+            "2023-01-01T00:00:00Z",
+            "2023-10-28T00:00:00Z"
+        ]
+    },
+    "taco:pit_schema": {
+        "root": {
+            "n": 4,
+            "type": "FOLDER"
+        },
+        "hierarchy": {
+            "1": [
+                {
+                    "n": 8,
+                    "type": [
+                        "FOLDER",
+                        "FOLDER"
+                    ],
+                    "id": [
+                        "country_0",
+                        "country_1"
+                    ]
+                }
+            ],
+            "2": [
+                {
+                    "n": 8,
+                    "type": [
+                        "FILE",
+                        "FILE"
+                    ],
+                    "id": [
+                        "city_0",
+                        "city_1"
+                    ]
+                },
+                {
+                    "n": 8,
+                    "type": [
+                        "FILE",
+                        "FILE"
+                    ],
+                    "id": [
+                        "city_0",
+                        "city_1"
+                    ]
+                }
+            ]
+        }
+    },
+    "taco:field_schema": {
+        "level0": [
+            [
+                "id",
+                "string",
+                "Unique sample identifier within parent scope. Must be unique among siblings."
+            ],
+            [
+                "type",
+                "string",
+                "Sample type discriminator (FILE or FOLDER)."
+            ],
+            [
+                "istac:geometry",
+                "binary",
+                ""
+            ],
+            [
+                "istac:centroid",
+                "binary",
+                ""
+            ],
+            [
+                "istac:time_start",
+                "timestamp[us]",
+                ""
+            ],
+            [
+                "name",
+                "string",
+                ""
+            ],
+            [
+                "internal:current_id",
+                "int64",
+                "Current sample position at this level (0-indexed). Enables O(1) random access and relational JOINs (ZIP, FOLDER, TACOCAT)."
+            ],
+            [
+                "internal:parent_id",
+                "int64",
+                "Foreign key referencing parent sample position in previous level (ZIP, FOLDER, TACOCAT)."
+            ]
+        ],
+        "level1": [
+            [
+                "id",
+                "string",
+                "Unique sample identifier within parent scope. Must be unique among siblings."
+            ],
+            [
+                "type",
+                "string",
+                "Sample type discriminator (FILE or FOLDER)."
+            ],
+            [
+                "istac:centroid",
+                "binary",
+                ""
+            ],
+            [
+                "istac:geometry",
+                "binary",
+                ""
+            ],
+            [
+                "istac:time_start",
+                "timestamp[us]",
+                ""
+            ],
+            [
+                "name",
+                "string",
+                ""
+            ],
+            [
+                "internal:current_id",
+                "int64",
+                "Current sample position at this level (0-indexed). Enables O(1) random access and relational JOINs (ZIP, FOLDER, TACOCAT)."
+            ],
+            [
+                "internal:parent_id",
+                "int64",
+                "Foreign key referencing parent sample position in previous level (ZIP, FOLDER, TACOCAT)."
+            ],
+            [
+                "internal:relative_path",
+                "string",
+                "Relative path from DATA/ directory. Format: {parent_path}/{id} or {id} for level0 (ZIP, FOLDER, TACOCAT)."
+            ]
+        ],
+        "level2": [
+            [
+                "id",
+                "string",
+                "Unique sample identifier within parent scope. Must be unique among siblings."
+            ],
+            [
+                "type",
+                "string",
+                "Sample type discriminator (FILE or FOLDER)."
+            ],
+            [
+                "istac:centroid",
+                "binary",
+                ""
+            ],
+            [
+                "istac:geometry",
+                "binary",
+                ""
+            ],
+            [
+                "istac:time_start",
+                "timestamp[us]",
+                ""
+            ],
+            [
+                "name",
+                "string",
+                ""
+            ],
+            [
+                "internal:current_id",
+                "int64",
+                "Current sample position at this level (0-indexed). Enables O(1) random access and relational JOINs (ZIP, FOLDER, TACOCAT)."
+            ],
+            [
+                "internal:parent_id",
+                "int64",
+                "Foreign key referencing parent sample position in previous level (ZIP, FOLDER, TACOCAT)."
+            ],
+            [
+                "internal:relative_path",
+                "string",
+                "Relative path from DATA/ directory. Format: {parent_path}/{id} or {id} for level0 (ZIP, FOLDER, TACOCAT)."
+            ]
+        ]
+    },
+    "taco:sources": {
+        "count": 4,
+        "ids": [
+            "test_dataset",
+            "test_dataset",
+            "test_dataset",
+            "test_dataset"
+        ],
+        "files": [
+            "cascade_part0001.tacozip",
+            "cascade_part0002.tacozip",
+            "cascade_part0003.tacozip",
+            "cascade_part0004.tacozip"
+        ],
+        "extents": [
+            {
+                "file": "cascade_part0001.tacozip",
+                "id": "test_dataset",
+                "spatial": [
+                    10.0,
+                    47.5,
+                    10.0,
+                    47.5
+                ],
+                "temporal": [
+                    "2023-01-01T00:00:00Z",
+                    "2023-01-01T00:00:00Z"
+                ]
+            },
+            {
+                "file": "cascade_part0002.tacozip",
+                "id": "test_dataset",
+                "spatial": [
+                    125.0,
+                    30.0,
+                    125.0,
+                    30.0
+                ],
+                "temporal": [
+                    "2023-04-11T00:00:00Z",
+                    "2023-04-11T00:00:00Z"
+                ]
+            },
+            {
+                "file": "cascade_part0003.tacozip",
+                "id": "test_dataset",
+                "spatial": [
+                    -80.0,
+                    7.5,
+                    -80.0,
+                    7.5
+                ],
+                "temporal": [
+                    "2023-07-20T00:00:00Z",
+                    "2023-07-20T00:00:00Z"
+                ]
+            },
+            {
+                "file": "cascade_part0004.tacozip",
+                "id": "test_dataset",
+                "spatial": [
+                    17.5,
+                    1.5,
+                    17.5,
+                    1.5
+                ],
+                "temporal": [
+                    "2023-10-28T00:00:00Z",
+                    "2023-10-28T00:00:00Z"
+                ]
+            }
+        ]
+    }
+}
