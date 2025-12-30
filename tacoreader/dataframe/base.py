@@ -221,7 +221,7 @@ class TacoDataFrame(ABC):
 
         # Read Parquet from offset
         if is_remote(original_path):
-            parquet_bytes = download_range(original_path, offset, size)
+            parquet_bytes = download_range(original_path, offset, size)  # pragma: no cover
         else:
             with open(original_path, "rb") as f:
                 f.seek(offset)
@@ -255,7 +255,7 @@ class TacoDataFrame(ABC):
         Read __meta__ from FOLDER format.
 
         Reads Parquet from filesystem or remote storage, and builds
-        direct paths to children.
+        direct paths to children using their id.
 
         Args:
             vsi_path: Direct path to folder (may end with /__meta__)
@@ -264,7 +264,7 @@ class TacoDataFrame(ABC):
             PyArrow Table with children + internal:gdal_vsi column
 
         Raises:
-            TacoNavigationError: If children missing both internal:relative_path and id
+            TacoNavigationError: If children missing id column
         """
         from io import BytesIO
         from pathlib import Path
@@ -276,7 +276,7 @@ class TacoDataFrame(ABC):
         from tacoreader._remote_io import download_bytes
 
         # Read Parquet from __meta__
-        if is_remote(vsi_path):
+        if is_remote(vsi_path):  # pragma: no cover
             if vsi_path.endswith("/__meta__"):
                 meta_bytes = download_bytes(vsi_path)
             else:
@@ -293,24 +293,19 @@ class TacoDataFrame(ABC):
         if parent_path.endswith("/__meta__"):
             parent_path = parent_path[:-9]
 
-        # Build paths with strict validation
+        # Build paths using id (in __meta__, children are always direct subdirs/files)
         vsi_paths = []
         for i in range(children_table.num_rows):
             child_row = children_table.to_pylist()[i]
 
-            if "internal:relative_path" in child_row:
-                relative = child_row["internal:relative_path"]
-                vsi_paths.append(f"{parent_path}/{relative}")
-            elif "id" in child_row:
-                vsi_paths.append(f"{parent_path}/{child_row['id']}")
-            else:
-                # Missing path information
+            if "id" not in child_row:
                 raise TacoNavigationError(
-                    f"Missing path information in FOLDER format.\n"
-                    f"Row {i} (type={child_row.get('type', 'unknown')}) has neither "
-                    f"'internal:relative_path' nor 'id'.\n"
+                    f"Missing 'id' in FOLDER format.\n"
+                    f"Row {i} (type={child_row.get('type', 'unknown')}) has no 'id'.\n"
                     f"Dataset may be corrupted or created with incompatible version."
                 )
+
+            vsi_paths.append(f"{parent_path}/{child_row['id']}")
 
         vsi_array = pa.array(vsi_paths, type=pa.string())
         return children_table.append_column("internal:gdal_vsi", vsi_array)

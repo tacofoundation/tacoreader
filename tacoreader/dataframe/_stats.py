@@ -13,7 +13,6 @@ Core functions for TacoDataset.stats_*() methods:
 import warnings
 
 import pyarrow as pa
-import pyarrow.compute as pc
 
 try:
     import numpy as np
@@ -60,23 +59,20 @@ def _extract_weights(table: pa.Table, valid_mask: "np.ndarray | None" = None) ->
 
     shapes_col = table.column(STATS_WEIGHT_COLUMN)
 
-    try:
-        heights = pc.list_element(shapes_col, -2)
-        widths = pc.list_element(shapes_col, -1)
-        weights_arr = pc.multiply(heights, widths)
-        weights = weights_arr.to_numpy(zero_copy_only=False).astype(np.float64)
-    except (pa.ArrowInvalid, pa.ArrowNotImplementedError):
-        shapes = shapes_col.to_pylist()
-        weights = np.array(
-            [float(s[-2] * s[-1]) if s and len(s) >= 2 else 1.0 for s in shapes],
-            dtype=np.float64,
+    # Convert to Python list and compute weights
+    shapes = shapes_col.to_pylist()
+    weights = np.array(
+        [float(s[-2] * s[-1]) if s and len(s) >= 2 else 1.0 for s in shapes],
+        dtype=np.float64,
+    )
+
+    # Warn if any shapes were invalid
+    if any(not s or len(s) < 2 for s in shapes):
+        warnings.warn(
+            f"Some rows have {STATS_WEIGHT_COLUMN} with <2 dimensions. Using weight=1.",
+            UserWarning,
+            stacklevel=4,
         )
-        if any(not s or len(s) < 2 for s in shapes):
-            warnings.warn(
-                f"Some rows have {STATS_WEIGHT_COLUMN} with <2 dimensions. Using weight=1.",
-                UserWarning,
-                stacklevel=4,
-            )
 
     # Apply mask if provided
     if valid_mask is not None:
@@ -181,7 +177,8 @@ def _aggregate_continuous(
         )
         return values.mean(axis=0).astype(np.float32)
 
-    raise TacoQueryError(f"Unhandled stat: '{stat_name}'")
+    # This line is unreachable due to the idx check above, but kept for safety
+    raise TacoQueryError(f"Unhandled stat: '{stat_name}'")  # pragma: no cover
 
 
 def _aggregate_std(table: pa.Table, stats_col: str) -> "np.ndarray":
