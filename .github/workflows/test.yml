@@ -78,10 +78,34 @@ jobs:
 
       - name: Install dependencies
         if: steps.cache.outputs.cache-hit != 'true'
-        run: poetry install --no-interaction --with dev
+        run: poetry install --no-interaction --with dev --no-root
+
+      - name: Install package
+        run: poetry install --no-interaction
+
+      - name: Install test extras
+        run: poetry run pip install pandas polars numpy
 
       - name: Run tests
         run: poetry run pytest --cov --cov-report=xml --cov-report=term
+
+      - name: Debug coverage
+        if: matrix.python-version == '3.12'
+        run: |
+          echo "=== Working directory ==="
+          pwd
+          echo "=== Coverage file exists? ==="
+          ls -la coverage.xml 2>/dev/null || echo "ERROR: coverage.xml not found in root"
+          ls -la ./coverage.xml 2>/dev/null || echo "ERROR: ./coverage.xml not found"
+          find . -name "coverage.xml" -type f 2>/dev/null || echo "ERROR: No coverage.xml anywhere"
+          find . -name "*.xml" -type f 2>/dev/null | head -20
+          echo "=== Coverage file content (first 50 lines) ==="
+          head -50 coverage.xml 2>/dev/null || echo "Cannot read coverage.xml"
+          echo "=== .coverage file ==="
+          ls -la .coverage 2>/dev/null || echo "No .coverage file"
+          echo "=== Python environment ==="
+          poetry run python -c "import tacoreader; print('tacoreader location:', tacoreader.__file__)"
+          poetry run python -c "from tacoreader.dataframe._stats import _aggregate_continuous; print('_stats imported OK')"
 
       - name: Upload coverage to Codecov
         if: matrix.python-version == '3.12'
@@ -89,3 +113,6 @@ jobs:
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           slug: tacofoundation/tacoreader
+          files: ./coverage.xml
+          fail_ci_if_error: true
+          verbose: true

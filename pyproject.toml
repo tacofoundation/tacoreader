@@ -81,4 +81,8 @@ exclude_lines = [
     "def __repr__",
     "^\\.\\.\\.\\s*$",
     "^\\s*pass\\s*$",
+    "except ImportError:",
+    "HAS_PANDAS = False",
+    "HAS_POLARS = False",
+    "HAS_NUMPY = False"
 ]
