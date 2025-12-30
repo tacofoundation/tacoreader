@@ -1,5 +1,5 @@
 """
-Test fixtures for TACO datasets with STAC metadata and internal:stats.
+Test fixtures for TACO datasets with STAC metadata and geotiff:stats.
 
 Three complexity levels:
 - flat: Single level, all FILEs + stats
@@ -28,7 +28,7 @@ STAC metadata fields:
     - istac:time_start   ISO date for filter_datetime()
     - cloud_cover        float 0-100 for SQL WHERE
     - stac:tensor_shape  list for stats aggregation
-    - internal:stats     list[list[float32]] - categorical or continuous stats
+    - geotiff:stats      list[list[float32]] - categorical or continuous stats
 
 Note: TacoCat consolidation only applies to ZIP format.
 """
@@ -50,16 +50,16 @@ class FakeGeotiffStats(SampleExtension):
     
     def get_schema(self) -> pa.Schema:
         return pa.schema([
-            pa.field("internal:stats", pa.list_(pa.list_(pa.float32()))),
+            pa.field("geotiff:stats", pa.list_(pa.list_(pa.float32()))),
         ])
     
     def get_field_descriptions(self) -> dict[str, str]:
         return {
-            "internal:stats": "Fake statistics for testing"
+            "geotiff:stats": "Fake statistics for testing"
         }
     
     def _compute(self, sample) -> pa.Table:
-        data = {"internal:stats": [self.stats]}
+        data = {"geotiff:stats": [self.stats]}
         return pa.Table.from_pydict(data, schema=self.get_schema())
 
 
@@ -114,32 +114,42 @@ def _centroid(bbox: tuple) -> tuple[float, float]:
 
 def create_flat_taco(output: pathlib.Path) -> pathlib.Path:
     """
-    5 FILEs with varied locations and times + internal:stats.
+    5 FILEs with varied locations and times + geotiff:stats.
     
     Locations: valencia, paris, nyc, tokyo, lima
     Times: monthly from 2023-01-01
     Cloud: 0, 15, 30, 45, 60
-    Stats: alternating categorical/continuous (3 bands each)
+    Stats: ALL continuous (3 bands x 9 values each)
     """
     locs = ["valencia", "paris", "nyc", "tokyo", "lima"]
     
-    # Categorical: 3 classes [0,1,2], probs sum to 1.0
-    categorical_stats = [
-        [[0.5, 0.3, 0.2], [0.2, 0.6, 0.2], [0.1, 0.3, 0.6]],  # R,G,B dominant
-        [[0.3, 0.4, 0.3], [0.4, 0.3, 0.3], [0.25, 0.5, 0.25]], # Mixed
-    ]
-    
     # Continuous: [min, max, mean, std, valid%, p25, p50, p75, p95]
+    # All samples must have same shape for numpy aggregation
     continuous_stats = [
         [
-            [0.0, 255.0, 128.5, 45.2, 98.5, 85.0, 125.0, 170.0, 220.0],      # Band R
-            [0.0, 255.0, 115.3, 38.7, 99.1, 75.0, 110.0, 155.0, 205.0],      # Band G  
-            [0.0, 255.0, 95.8, 42.1, 97.8, 60.0, 92.0, 130.0, 185.0],        # Band B
+            [0.0, 255.0, 128.5, 45.2, 98.5, 85.0, 125.0, 170.0, 220.0],
+            [0.0, 255.0, 115.3, 38.7, 99.1, 75.0, 110.0, 155.0, 205.0],
+            [0.0, 255.0, 95.8, 42.1, 97.8, 60.0, 92.0, 130.0, 185.0],
         ],
         [
-            [-1.0, 1.0, 0.35, 0.42, 95.5, -0.15, 0.30, 0.65, 0.88],          # NDVI-like
-            [250.0, 320.0, 285.2, 15.8, 99.2, 275.0, 283.0, 295.0, 310.0],   # Temp-like
-            [0.0, 100.0, 45.6, 22.3, 96.7, 25.0, 42.0, 65.0, 85.0],          # Percent-like
+            [5.0, 250.0, 135.2, 48.1, 97.2, 90.0, 132.0, 178.0, 225.0],
+            [3.0, 248.0, 120.8, 41.5, 98.5, 80.0, 118.0, 162.0, 210.0],
+            [2.0, 252.0, 102.3, 44.8, 96.9, 65.0, 100.0, 140.0, 192.0],
+        ],
+        [
+            [10.0, 245.0, 142.0, 42.8, 99.0, 95.0, 138.0, 182.0, 218.0],
+            [8.0, 240.0, 125.5, 39.2, 98.8, 82.0, 122.0, 165.0, 208.0],
+            [5.0, 248.0, 108.7, 46.3, 97.5, 70.0, 105.0, 145.0, 195.0],
+        ],
+        [
+            [0.0, 255.0, 150.8, 50.5, 96.8, 100.0, 148.0, 195.0, 235.0],
+            [2.0, 252.0, 132.1, 43.8, 97.9, 88.0, 130.0, 175.0, 220.0],
+            [1.0, 250.0, 112.5, 48.2, 95.5, 72.0, 110.0, 152.0, 200.0],
+        ],
+        [
+            [3.0, 248.0, 138.3, 46.7, 98.2, 92.0, 135.0, 180.0, 222.0],
+            [5.0, 245.0, 118.9, 40.1, 99.3, 78.0, 115.0, 158.0, 212.0],
+            [0.0, 255.0, 99.2, 43.5, 97.1, 62.0, 96.0, 138.0, 188.0],
         ],
     ]
     
@@ -148,9 +158,7 @@ def create_flat_taco(output: pathlib.Path) -> pathlib.Path:
         bbox = LOCATIONS[name]
         cx, cy = _centroid(bbox)
         
-        # Alternate categorical/continuous
-        is_categorical = i % 2 == 0
-        stats = categorical_stats[i % 2] if is_categorical else continuous_stats[i % 2]
+        stats = continuous_stats[i]
         
         sample = Sample(
             id=f"sample_{i}",
@@ -177,7 +185,7 @@ def create_flat_taco(output: pathlib.Path) -> pathlib.Path:
 
 def create_nested_taco(output: pathlib.Path) -> pathlib.Path:
     """
-    3 regional groups x 3 items each + internal:stats on items.
+    3 regional groups x 3 items each + geotiff:stats on items.
     
     europe/   -> valencia, paris, berlin (categorical, 3 bands each)
     americas/ -> nyc, lima, nyc (continuous, 3 bands each)
@@ -278,7 +286,7 @@ def create_nested_taco(output: pathlib.Path) -> pathlib.Path:
 
 def create_deep_taco(output_dir: pathlib.Path) -> list[pathlib.Path]:
     """
-    4-level satellite-like structure, 20 tiles + internal:stats on band FILEs.
+    4-level satellite-like structure, 20 tiles + geotiff:stats on band FILEs.
     
     tile_N/
         sensor_A/

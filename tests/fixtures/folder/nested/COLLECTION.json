@@ -110,6 +110,11 @@
                 ""
             ],
             [
+                "geotiff:stats",
+                "list<item: list<item: float>>",
+                "Fake statistics for testing"
+            ],
+            [
                 "istac:centroid",
                 "binary",
                 ""
@@ -148,11 +153,6 @@
                 "internal:relative_path",
                 "string",
                 "Relative path from DATA/ directory. Format: {parent_path}/{id} or {id} for level0 (ZIP, FOLDER, TACOCAT)."
-            ],
-            [
-                "internal:stats",
-                "list<item: list<item: float>>",
-                "Fake statistics for testing"
             ]
         ]
     }

@@ -10,15 +10,25 @@ without importing specific backend implementations.
 
 import re
 import uuid
+import warnings
 from contextlib import suppress
 from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, PrivateAttr
 
-from tacoreader._constants import DEFAULT_VIEW_NAME, SQL_JOIN_PATTERN
+from tacoreader._constants import (
+    DEFAULT_VIEW_NAME,
+    LEVEL_VIEW_PREFIX,
+    SQL_JOIN_PATTERN,
+    STATS_SUPPORTED_COLUMNS,
+    STATS_WEIGHT_COLUMN,
+)
+from tacoreader._exceptions import TacoQueryError
 from tacoreader.schema import PITSchema
 
 if TYPE_CHECKING:
+    import numpy as np
+
     from tacoreader.dataframe.base import TacoDataFrame
 
 
@@ -65,6 +75,10 @@ class TacoDataset(BaseModel):
         # Materialization
         tdf = low_cloud.data
         child = tdf.read(0)
+
+        # Statistics
+        mean_band2 = ds.stats_mean(band=2)
+        std_bands = ds.stats_std(band=[0, 1, 2])
     """
 
     # Public metadata (STAC-like)
@@ -299,6 +313,349 @@ class TacoDataset(BaseModel):
             from tacoreader._stac_cascade import apply_cascade_datetime_filter
 
             return apply_cascade_datetime_filter(self, datetime_range, time_col, level)
+
+    # -------------------------------------------------------------------------
+    # Statistics API
+    # -------------------------------------------------------------------------
+
+    def _get_stats_column(self, level: int) -> str:
+        """
+        Find which stats column exists in the given level.
+
+        Returns the column name if found, raises TacoQueryError if not.
+        """
+        level_view = f"{LEVEL_VIEW_PREFIX}{level}"
+
+        # Get columns for this level
+        result = self._duckdb.execute(f"DESCRIBE {level_view}").fetchall()
+        columns = {row[0] for row in result}
+
+        # Check for any supported stats column
+        for stats_col in STATS_SUPPORTED_COLUMNS:
+            if stats_col in columns:
+                return stats_col
+
+        raise TacoQueryError(
+            f"Level {level} does not contain statistics.\n"
+            f"Expected one of: {', '.join(STATS_SUPPORTED_COLUMNS)}\n"
+            f"Available columns: {sorted(columns)}"
+        )
+
+    def _validate_stats_params(
+        self,
+        band: int | list[int],
+        level: int,
+        id: str | None,
+    ) -> None:
+        """Validate stats parameters according to RSUT rules."""
+        # Validate level exists
+        max_depth = self.pit_schema.max_depth()
+        if level < 0 or level > max_depth:
+            raise TacoQueryError(f"Level {level} does not exist.\nAvailable levels: 0 to {max_depth}")
+
+        # Level > 0 requires id (RSUT: heterogeneous below level 1)
+        if level > 0 and id is None:
+            raise TacoQueryError(
+                f"id is required for level > 0.\n"
+                f"Level {level} may have heterogeneous structure across branches.\n"
+                f"Specify which sample to aggregate: stats_*(band=..., level={level}, id='...')"
+            )
+
+        # Level 0: id is ignored (warn user)
+        if level == 0 and id is not None:
+            warnings.warn(
+                f"id='{id}' ignored for level=0. Level 0 aggregates all samples.",
+                UserWarning,
+                stacklevel=3,
+            )
+
+    def _fetch_stats_table(self, level: int, id: str | None, stats_col: str):
+        """Fetch PyArrow table with stats data for aggregation."""
+        level_view = f"{LEVEL_VIEW_PREFIX}{level}"
+
+        if level == 0:
+            query = f'SELECT "{stats_col}", "{STATS_WEIGHT_COLUMN}" FROM {level_view}'
+        else:
+            # Navigate to children of specified id
+            parent_level = level - 1
+            parent_view = f"{LEVEL_VIEW_PREFIX}{parent_level}"
+
+            query = f"""
+                SELECT l."{stats_col}", l."{STATS_WEIGHT_COLUMN}"
+                FROM {level_view} l
+                INNER JOIN {parent_view} p ON l."internal:parent_id" = p."internal:current_id"
+                WHERE p.id = '{id}'
+            """
+
+        return self._duckdb.execute(query).fetch_arrow_table()
+
+    def _extract_band(
+        self,
+        result: "np.ndarray",
+        band: int | list[int],
+    ) -> "np.ndarray":
+        """Extract specific band(s) from aggregated result."""
+        if isinstance(band, int):
+            if band < 0 or band >= result.shape[0]:
+                raise TacoQueryError(f"Band {band} out of range.\nAvailable bands: 0 to {result.shape[0] - 1}")
+            return result[band]
+        else:
+            for b in band:
+                if b < 0 or b >= result.shape[0]:
+                    raise TacoQueryError(f"Band {b} out of range.\nAvailable bands: 0 to {result.shape[0] - 1}")
+            return result[list(band)]
+
+    def stats_mean(
+        self,
+        band: int | list[int],
+        level: int = 0,
+        id: str | None = None,
+    ) -> "np.ndarray":
+        """
+        Aggregate mean values across samples.
+
+        Args:
+            band: Band index or list of band indices (required)
+            level: Hierarchy level (default 0)
+            id: Sample ID (required if level > 0, ignored if level == 0)
+
+        Returns:
+            np.ndarray: Aggregated mean(s) for specified band(s)
+
+        Examples:
+            ds.stats_mean(band=2)                    # Mean of band 2, all level 0
+            ds.stats_mean(band=[0, 1, 2], level=0)  # Bands 0-2, all level 0
+            ds.stats_mean(band=0, level=1, id="tile_1")  # Band 0, children of tile_1
+        """
+        self._validate_stats_params(band, level, id)
+        stats_col = self._get_stats_column(level)
+        table = self._fetch_stats_table(level, id, stats_col)
+
+        from tacoreader.dataframe._stats import _aggregate_continuous
+
+        result = _aggregate_continuous(table, stats_col, "mean")
+        return self._extract_band(result, band)
+
+    def stats_std(
+        self,
+        band: int | list[int],
+        level: int = 0,
+        id: str | None = None,
+    ) -> "np.ndarray":
+        """
+        Aggregate standard deviation using pooled variance formula.
+
+        Args:
+            band: Band index or list of band indices (required)
+            level: Hierarchy level (default 0)
+            id: Sample ID (required if level > 0, ignored if level == 0)
+
+        Returns:
+            np.ndarray: Aggregated std(s) for specified band(s)
+        """
+        self._validate_stats_params(band, level, id)
+        stats_col = self._get_stats_column(level)
+        table = self._fetch_stats_table(level, id, stats_col)
+
+        from tacoreader.dataframe._stats import _aggregate_std
+
+        result = _aggregate_std(table, stats_col)
+        return self._extract_band(result, band)
+
+    def stats_min(
+        self,
+        band: int | list[int],
+        level: int = 0,
+        id: str | None = None,
+    ) -> "np.ndarray":
+        """
+        Get global minimum across samples.
+
+        Args:
+            band: Band index or list of band indices (required)
+            level: Hierarchy level (default 0)
+            id: Sample ID (required if level > 0, ignored if level == 0)
+
+        Returns:
+            np.ndarray: Global min(s) for specified band(s)
+        """
+        self._validate_stats_params(band, level, id)
+        stats_col = self._get_stats_column(level)
+        table = self._fetch_stats_table(level, id, stats_col)
+
+        from tacoreader.dataframe._stats import _aggregate_continuous
+
+        result = _aggregate_continuous(table, stats_col, "min")
+        return self._extract_band(result, band)
+
+    def stats_max(
+        self,
+        band: int | list[int],
+        level: int = 0,
+        id: str | None = None,
+    ) -> "np.ndarray":
+        """
+        Get global maximum across samples.
+
+        Args:
+            band: Band index or list of band indices (required)
+            level: Hierarchy level (default 0)
+            id: Sample ID (required if level > 0, ignored if level == 0)
+
+        Returns:
+            np.ndarray: Global max(s) for specified band(s)
+        """
+        self._validate_stats_params(band, level, id)
+        stats_col = self._get_stats_column(level)
+        table = self._fetch_stats_table(level, id, stats_col)
+
+        from tacoreader.dataframe._stats import _aggregate_continuous
+
+        result = _aggregate_continuous(table, stats_col, "max")
+        return self._extract_band(result, band)
+
+    def stats_p25(
+        self,
+        band: int | list[int],
+        level: int = 0,
+        id: str | None = None,
+    ) -> "np.ndarray":
+        """
+        Aggregate 25th percentile (approximation via averaging).
+
+        Args:
+            band: Band index or list of band indices (required)
+            level: Hierarchy level (default 0)
+            id: Sample ID (required if level > 0, ignored if level == 0)
+
+        Returns:
+            np.ndarray: Approximated p25 for specified band(s)
+        """
+        self._validate_stats_params(band, level, id)
+        stats_col = self._get_stats_column(level)
+        table = self._fetch_stats_table(level, id, stats_col)
+
+        from tacoreader.dataframe._stats import _aggregate_continuous
+
+        result = _aggregate_continuous(table, stats_col, "p25")
+        return self._extract_band(result, band)
+
+    def stats_p50(
+        self,
+        band: int | list[int],
+        level: int = 0,
+        id: str | None = None,
+    ) -> "np.ndarray":
+        """
+        Aggregate 50th percentile / median (approximation via averaging).
+
+        Args:
+            band: Band index or list of band indices (required)
+            level: Hierarchy level (default 0)
+            id: Sample ID (required if level > 0, ignored if level == 0)
+
+        Returns:
+            np.ndarray: Approximated median for specified band(s)
+        """
+        self._validate_stats_params(band, level, id)
+        stats_col = self._get_stats_column(level)
+        table = self._fetch_stats_table(level, id, stats_col)
+
+        from tacoreader.dataframe._stats import _aggregate_continuous
+
+        result = _aggregate_continuous(table, stats_col, "p50")
+        return self._extract_band(result, band)
+
+    def stats_median(
+        self,
+        band: int | list[int],
+        level: int = 0,
+        id: str | None = None,
+    ) -> "np.ndarray":
+        """Alias for stats_p50()."""
+        return self.stats_p50(band, level, id)
+
+    def stats_p75(
+        self,
+        band: int | list[int],
+        level: int = 0,
+        id: str | None = None,
+    ) -> "np.ndarray":
+        """
+        Aggregate 75th percentile (approximation via averaging).
+
+        Args:
+            band: Band index or list of band indices (required)
+            level: Hierarchy level (default 0)
+            id: Sample ID (required if level > 0, ignored if level == 0)
+
+        Returns:
+            np.ndarray: Approximated p75 for specified band(s)
+        """
+        self._validate_stats_params(band, level, id)
+        stats_col = self._get_stats_column(level)
+        table = self._fetch_stats_table(level, id, stats_col)
+
+        from tacoreader.dataframe._stats import _aggregate_continuous
+
+        result = _aggregate_continuous(table, stats_col, "p75")
+        return self._extract_band(result, band)
+
+    def stats_p95(
+        self,
+        band: int | list[int],
+        level: int = 0,
+        id: str | None = None,
+    ) -> "np.ndarray":
+        """
+        Aggregate 95th percentile (approximation via averaging).
+
+        Args:
+            band: Band index or list of band indices (required)
+            level: Hierarchy level (default 0)
+            id: Sample ID (required if level > 0, ignored if level == 0)
+
+        Returns:
+            np.ndarray: Approximated p95 for specified band(s)
+        """
+        self._validate_stats_params(band, level, id)
+        stats_col = self._get_stats_column(level)
+        table = self._fetch_stats_table(level, id, stats_col)
+
+        from tacoreader.dataframe._stats import _aggregate_continuous
+
+        result = _aggregate_continuous(table, stats_col, "p95")
+        return self._extract_band(result, band)
+
+    def stats_categorical(
+        self,
+        band: int | list[int],
+        level: int = 0,
+        id: str | None = None,
+    ) -> "np.ndarray":
+        """
+        Aggregate categorical probabilities using weighted average.
+
+        Args:
+            band: Band index or list of band indices (required)
+            level: Hierarchy level (default 0)
+            id: Sample ID (required if level > 0, ignored if level == 0)
+
+        Returns:
+            np.ndarray: Aggregated class probabilities for specified band(s)
+        """
+        self._validate_stats_params(band, level, id)
+        stats_col = self._get_stats_column(level)
+        table = self._fetch_stats_table(level, id, stats_col)
+
+        from tacoreader.dataframe._stats import _aggregate_categorical
+
+        result = _aggregate_categorical(table, stats_col)
+        return self._extract_band(result, band)
+
+    # -------------------------------------------------------------------------
+    # Repr
+    # -------------------------------------------------------------------------
 
     def __repr__(self) -> str:
         """Rich text representation of dataset metadata."""

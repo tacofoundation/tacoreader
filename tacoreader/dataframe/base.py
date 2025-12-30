@@ -20,7 +20,6 @@ class TacoDataFrame(ABC):
     Each backend implements:
     - DataFrame operations (filter, select, head, tail, etc.)
     - Hierarchical navigation (read())
-    - Statistics aggregation (stats_*)
     - Properties (columns, shape)
     - Factory method (from_arrow classmethod)
 
@@ -28,6 +27,9 @@ class TacoDataFrame(ABC):
     - read() navigation logic
     - _read_meta() parquet reading
     - _get_position() key resolution
+
+    Statistics:
+        Use TacoDataset.stats_*(band=...) for statistics aggregation.
     """
 
     def __init__(self, data: Any, format_type: str):
@@ -111,9 +113,6 @@ class TacoDataFrame(ABC):
     def _to_arrow_for_stats(self):
         """
         Convert current data to PyArrow for stats functions.
-
-        Used when calling stats_*() methods - all stats functions
-        expect PyArrow Tables internally.
 
         Returns:
             PyArrow Table representation of current data
@@ -315,73 +314,3 @@ class TacoDataFrame(ABC):
 
         vsi_array = pa.array(vsi_paths, type=pa.string())
         return children_table.append_column("internal:gdal_vsi", vsi_array)
-
-    def stats_categorical(self):
-        """Aggregate categorical probabilities using weighted average."""
-        from tacoreader.dataframe._stats import stats_categorical
-
-        arrow_table = self._to_arrow_for_stats()
-        return stats_categorical(arrow_table)
-
-    def stats_mean(self):
-        """Aggregate means using weighted average."""
-        from tacoreader.dataframe._stats import stats_mean
-
-        arrow_table = self._to_arrow_for_stats()
-        return stats_mean(arrow_table)
-
-    def stats_std(self):
-        """Aggregate standard deviations using pooled std formula."""
-        from tacoreader.dataframe._stats import stats_std
-
-        arrow_table = self._to_arrow_for_stats()
-        return stats_std(arrow_table)
-
-    def stats_min(self):
-        """Aggregate minimums (global min across all rows)."""
-        from tacoreader.dataframe._stats import stats_min
-
-        arrow_table = self._to_arrow_for_stats()
-        return stats_min(arrow_table)
-
-    def stats_max(self):
-        """Aggregate maximums (global max across all rows)."""
-        from tacoreader.dataframe._stats import stats_max
-
-        arrow_table = self._to_arrow_for_stats()
-        return stats_max(arrow_table)
-
-    def stats_p25(self):
-        """Aggregate 25th percentiles using simple average."""
-        from tacoreader.dataframe._stats import stats_p25
-
-        arrow_table = self._to_arrow_for_stats()
-        return stats_p25(arrow_table)
-
-    def stats_p50(self):
-        """Aggregate 50th percentiles (median) using simple average."""
-        from tacoreader.dataframe._stats import stats_p50
-
-        arrow_table = self._to_arrow_for_stats()
-        return stats_p50(arrow_table)
-
-    def stats_median(self):
-        """Aggregate medians using simple average (alias for stats_p50)."""
-        from tacoreader.dataframe._stats import stats_p50
-
-        arrow_table = self._to_arrow_for_stats()
-        return stats_p50(arrow_table)
-
-    def stats_p75(self):
-        """Aggregate 75th percentiles using simple average."""
-        from tacoreader.dataframe._stats import stats_p75
-
-        arrow_table = self._to_arrow_for_stats()
-        return stats_p75(arrow_table)
-
-    def stats_p95(self):
-        """Aggregate 95th percentiles using simple average."""
-        from tacoreader.dataframe._stats import stats_p95
-
-        arrow_table = self._to_arrow_for_stats()
-        return stats_p95(arrow_table)

@@ -228,15 +228,42 @@ DATAFRAME_MAX_REPR_ROWS = 100
 """Maximum rows to display in TacoDataFrame.__repr__()"""
 
 
-# Statistics Aggregation
+# Statistics Extensions
+# Format-specific stats columns. Currently GeoTIFF, NetCDF/Zarr planned.
+STATS_GEOTIFF_COLUMN = "geotiff:stats"
+"""GeoTIFF statistics column name."""
+
+STATS_NETCDF_COLUMN = "netcdf:stats"
+"""NetCDF statistics column name (future)."""
+
+STATS_ZARR_COLUMN = "zarr:stats"
+"""Zarr statistics column name (future)."""
+
+STATS_SUPPORTED_COLUMNS = (
+    STATS_GEOTIFF_COLUMN,
+    # STATS_NETCDF_COLUMN,
+    # STATS_ZARR_COLUMN,
+)
+"""Currently supported statistics columns."""
+
+STATS_WEIGHT_COLUMN = "stac:tensor_shape"
+"""Column used for weighted aggregation (pixel counts from shape)."""
+
 STATS_CONTINUOUS_LENGTH = 9
-"""
-Expected length for continuous stats arrays.
+"""Expected length for continuous stats: [min, max, mean, std, valid%, p25, p50, p75, p95]."""
 
-Format: [min, max, mean, std, valid%, p25, p50, p75, p95]
-
-Stats with different lengths are interpreted as categorical (class probabilities).
-"""
+STATS_CONTINUOUS_INDICES = {
+    "min": 0,
+    "max": 1,
+    "mean": 2,
+    "std": 3,
+    "valid_pct": 4,
+    "p25": 5,
+    "p50": 6,
+    "p75": 7,
+    "p95": 8,
+}
+"""Index mapping for continuous stats array fields."""
 
 
 # STAC Geometry & Time Columns

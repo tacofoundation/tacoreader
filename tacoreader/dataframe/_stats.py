@@ -1,17 +1,19 @@
 """
 Statistics aggregation for TACO datasets.
 
-Weighted aggregation of pre-computed stats from internal:stats column.
-Operates on PyArrow Tables.
+Weighted aggregation of pre-computed stats from format-specific columns
+(geotiff:stats, netcdf:stats, zarr:stats).
+
+Core functions for TacoDataset.stats_*() methods:
+- _aggregate_continuous: mean, min, max, percentiles
+- _aggregate_std: pooled standard deviation
+- _aggregate_categorical: weighted class probabilities
 """
 
 import warnings
 
 import pyarrow as pa
 import pyarrow.compute as pc
-
-from tacoreader._constants import STATS_CONTINUOUS_LENGTH
-from tacoreader._exceptions import TacoQueryError
 
 try:
     import numpy as np
@@ -20,244 +22,228 @@ try:
 except ImportError:
     HAS_NUMPY = False
 
+from tacoreader._constants import (
+    STATS_CONTINUOUS_INDICES,
+    STATS_CONTINUOUS_LENGTH,
+    STATS_WEIGHT_COLUMN,
+)
+from tacoreader._exceptions import TacoQueryError
+
 
 def _require_numpy(func_name: str) -> None:
     """Raise ImportError if NumPy is not available."""
     if not HAS_NUMPY:
-        raise ImportError(f"{func_name}() requires NumPy. Install it with: pip install numpy")
+        raise ImportError(f"{func_name}() requires NumPy. Install with: pip install numpy")
 
 
-def _extract_stats_and_weights(
-    table: pa.Table,
-) -> tuple[np.ndarray, np.ndarray]:
+def _extract_weights(table: pa.Table, valid_mask: "np.ndarray | None" = None) -> "np.ndarray":
     """
-    Extract internal:stats and calculate pixel counts as weights.
+    Extract pixel counts as weights from stac:tensor_shape column.
 
-    Returns:
-        stats_3d: Shape (n_rows, n_bands, 9)
-        weights: Shape (n_rows,)
+    Returns array of weights (one per row). If column missing, returns ones.
+
+    Args:
+        table: PyArrow table
+        valid_mask: Optional boolean mask to filter weights (from _extract_stats_array)
     """
-    _require_numpy("_extract_stats_and_weights")
+    _require_numpy("_extract_weights")
 
-    if "internal:stats" not in table.schema.names:
-        raise TacoQueryError("Table must contain 'internal:stats' column")
-
-    stats_list = table.column("internal:stats").to_pylist()
-    stats_3d = np.array(stats_list, dtype=np.float32)
-
-    if "stac:tensor_shape" in table.schema.names:
-        shapes_col = table.column("stac:tensor_shape")
-
-        try:
-            heights = pc.list_element(shapes_col, -2)
-            widths = pc.list_element(shapes_col, -1)
-            weights_arr = pc.multiply(heights, widths)
-            weights = weights_arr.to_numpy(zero_copy_only=False).astype(np.int64)
-        except (pa.ArrowInvalid, pa.ArrowNotImplementedError):
-            shapes = shapes_col.to_pylist()
-            weights = np.array(
-                [int(s[-2] * s[-1]) if len(s) >= 2 else 1 for s in shapes],
-                dtype=np.int64,
-            )
-
-            if any(len(s) < 2 for s in shapes):
-                warnings.warn(
-                    "Some rows have stac:tensor_shape with <2 dimensions. Using weight=1.",
-                    UserWarning,
-                    stacklevel=4,
-                )
-    else:
+    if STATS_WEIGHT_COLUMN not in table.schema.names:
         warnings.warn(
-            "Column 'stac:tensor_shape' not found. Using equal weights. "
-            "Results may be inaccurate if files have different sizes.",
+            f"Column '{STATS_WEIGHT_COLUMN}' not found. Using equal weights. "
+            f"Results may be inaccurate if files have different sizes.",
             UserWarning,
             stacklevel=4,
         )
-        weights = np.ones(len(stats_3d), dtype=np.int64)
+        n_rows = valid_mask.sum() if valid_mask is not None else table.num_rows
+        return np.ones(n_rows, dtype=np.float64)
 
-    return stats_3d, weights
+    shapes_col = table.column(STATS_WEIGHT_COLUMN)
+
+    try:
+        heights = pc.list_element(shapes_col, -2)
+        widths = pc.list_element(shapes_col, -1)
+        weights_arr = pc.multiply(heights, widths)
+        weights = weights_arr.to_numpy(zero_copy_only=False).astype(np.float64)
+    except (pa.ArrowInvalid, pa.ArrowNotImplementedError):
+        shapes = shapes_col.to_pylist()
+        weights = np.array(
+            [float(s[-2] * s[-1]) if s and len(s) >= 2 else 1.0 for s in shapes],
+            dtype=np.float64,
+        )
+        if any(not s or len(s) < 2 for s in shapes):
+            warnings.warn(
+                f"Some rows have {STATS_WEIGHT_COLUMN} with <2 dimensions. Using weight=1.",
+                UserWarning,
+                stacklevel=4,
+            )
+
+    # Apply mask if provided
+    if valid_mask is not None:
+        weights = weights[valid_mask]
+
+    return weights
 
 
-def _is_categorical(stats: list) -> bool:
+def _extract_stats_array(table: pa.Table, stats_col: str) -> tuple["np.ndarray", "np.ndarray"]:
     """
-    Detect categorical vs continuous stats.
+    Extract stats as 3D numpy array: (n_rows, n_bands, n_values).
+
+    Filters out None values and returns valid indices for weight alignment.
+
+    Args:
+        table: PyArrow table with stats column
+        stats_col: Name of stats column (e.g., "geotiff:stats")
+
+    Returns:
+        Tuple of (stats_3d, valid_mask) where:
+        - stats_3d: np.ndarray with shape (n_valid_rows, n_bands, n_values)
+        - valid_mask: boolean np.ndarray with shape (n_rows,) indicating valid rows
+    """
+    _require_numpy("_extract_stats_array")
+
+    if stats_col not in table.schema.names:
+        raise TacoQueryError(f"Stats column '{stats_col}' not found in table")
+
+    stats_list = table.column(stats_col).to_pylist()
+
+    if not stats_list:
+        raise TacoQueryError("No stats data found (empty table)")
+
+    # Filter out Nones
+    valid_mask = np.array([s is not None and len(s) > 0 for s in stats_list], dtype=bool)
+    valid_stats = [s for s in stats_list if s is not None and len(s) > 0]
+
+    if not valid_stats:
+        raise TacoQueryError("No valid stats found (all samples have None)")
+
+    return np.array(valid_stats, dtype=np.float32), valid_mask
+
+
+def _is_categorical(stats_3d: "np.ndarray") -> bool:
+    """
+    Detect categorical vs continuous stats based on array shape.
 
     Continuous: 9 values [min, max, mean, std, valid%, p25, p50, p75, p95]
     Categorical: N values [prob_class_0, ..., prob_class_N]
-    
-    Handles two input formats:
-    - Single row: [[banda0], [banda1], ...] - list of bands
-    - Multiple rows: [[[banda0], [banda1]], [[banda0], [banda1]], ...] - list of rows
     """
-    if len(stats) == 0:
-        raise TacoQueryError("Empty stats provided")
-    
-    first_elem = stats[0]
-    
-    if not isinstance(first_elem, list) or len(first_elem) == 0:
-        raise TacoQueryError("Empty stats provided")
-    
-    # Detect format by checking type of first element's first element
-    if isinstance(first_elem[0], (int, float)):
-        # first_elem[0] is a number → first_elem is a band → stats is list of bands (single row)
-        return len(first_elem) != STATS_CONTINUOUS_LENGTH
-    elif isinstance(first_elem[0], list):
-        # first_elem[0] is a list → first_elem is a row → stats is list of rows
-        # Use first row's first band
-        if len(first_elem[0]) == 0:
-            raise TacoQueryError("Empty stats provided")
-        return len(first_elem[0]) != STATS_CONTINUOUS_LENGTH
-    else:
-        raise TacoQueryError("Invalid stats format")
+    if stats_3d.size == 0:
+        raise TacoQueryError("Empty stats array")
+
+    n_values = stats_3d.shape[-1]
+    return n_values != STATS_CONTINUOUS_LENGTH
 
 
-def stats_categorical(table: pa.Table) -> np.ndarray:
+def _aggregate_continuous(
+    table: pa.Table,
+    stats_col: str,
+    stat_name: str,
+) -> "np.ndarray":
     """
-    Aggregate categorical probabilities using weighted average.
+    Aggregate continuous statistics across samples.
 
-    Returns: Array [n_bands, n_classes]
+    Args:
+        table: PyArrow table with stats and weight columns
+        stats_col: Name of stats column
+        stat_name: One of "min", "max", "mean", "p25", "p50", "p75", "p95"
+
+    Returns:
+        np.ndarray with shape (n_bands,)
     """
-    _require_numpy("stats_categorical")
+    stats_3d, valid_mask = _extract_stats_array(table, stats_col)
 
-    all_stats = table.column("internal:stats").to_pylist()
+    if _is_categorical(stats_3d):
+        raise TacoQueryError("Stats appear to be categorical format. Use stats_categorical() instead.")
 
-    if not _is_categorical(all_stats[0]):
-        raise TacoQueryError(
-            f"Stats appear to be continuous format ({STATS_CONTINUOUS_LENGTH} values per band). "
-            "Use stats_mean(), stats_std(), etc. for continuous data."
+    idx = STATS_CONTINUOUS_INDICES.get(stat_name)
+    if idx is None:
+        raise TacoQueryError(f"Unknown stat: '{stat_name}'. Available: {list(STATS_CONTINUOUS_INDICES.keys())}")
+
+    values = stats_3d[:, :, idx]  # shape: (n_valid_rows, n_bands)
+
+    # min/max: global across all rows
+    if stat_name == "min":
+        return values.min(axis=0).astype(np.float32)
+    elif stat_name == "max":
+        return values.max(axis=0).astype(np.float32)
+
+    # mean: weighted average
+    if stat_name == "mean":
+        weights = _extract_weights(table, valid_mask)
+        return np.average(values, axis=0, weights=weights).astype(np.float32)
+
+    # percentiles: simple average (approximation)
+    if stat_name in ("p25", "p50", "p75", "p95"):
+        warnings.warn(
+            f"stats_{stat_name}() uses simple averaging, NOT exact. For critical analysis, recompute from raw data.",
+            UserWarning,
+            stacklevel=4,
         )
+        return values.mean(axis=0).astype(np.float32)
 
-    stats_3d = np.array(all_stats, dtype=np.float32)
-
-    if "stac:tensor_shape" in table.schema.names:
-        shapes_col = table.column("stac:tensor_shape")
-        try:
-            heights = pc.list_element(shapes_col, -2)
-            widths = pc.list_element(shapes_col, -1)
-            weights_arr = pc.multiply(heights, widths)
-            weights = weights_arr.to_numpy(zero_copy_only=False).astype(np.float32)
-        except (pa.ArrowInvalid, pa.ArrowNotImplementedError):
-            shapes = shapes_col.to_pylist()
-            weights = np.array([s[-2] * s[-1] if len(s) >= 2 else 1 for s in shapes], dtype=np.float32)
-    else:
-        weights = np.ones(len(stats_3d), dtype=np.float32)
-
-    weights_expanded = weights[:, np.newaxis, np.newaxis]
-    weighted_stats = stats_3d * weights_expanded
-    result = weighted_stats.sum(axis=0) / weights.sum()
-
-    return result
+    raise TacoQueryError(f"Unhandled stat: '{stat_name}'")
 
 
-def stats_mean(table: pa.Table) -> np.ndarray:
-    """Aggregate means using weighted average."""
-    _require_numpy("stats_mean")
+def _aggregate_std(table: pa.Table, stats_col: str) -> "np.ndarray":
+    """
+    Aggregate standard deviations using pooled variance formula.
 
-    stats_3d, weights = _extract_stats_and_weights(table)
+    Pooled variance accounts for both within-sample variance and
+    between-sample mean differences.
 
-    if _is_categorical(stats_3d.tolist()):
+    Args:
+        table: PyArrow table with stats and weight columns
+        stats_col: Name of stats column
+
+    Returns:
+        np.ndarray with shape (n_bands,)
+    """
+    stats_3d, valid_mask = _extract_stats_array(table, stats_col)
+
+    if _is_categorical(stats_3d):
         raise TacoQueryError("Stats appear to be categorical format. Use stats_categorical() instead.")
 
-    means = stats_3d[:, :, 2]
-    result = np.average(means, axis=0, weights=weights)
+    weights = _extract_weights(table, valid_mask)
 
-    return result.astype(np.float32)
+    means = stats_3d[:, :, STATS_CONTINUOUS_INDICES["mean"]]
+    stds = stats_3d[:, :, STATS_CONTINUOUS_INDICES["std"]]
 
-
-def stats_std(table: pa.Table) -> np.ndarray:
-    """Aggregate standard deviations using pooled variance formula."""
-    _require_numpy("stats_std")
-
-    stats_3d, weights = _extract_stats_and_weights(table)
-
-    if _is_categorical(stats_3d.tolist()):
-        raise TacoQueryError("Stats appear to be categorical format. Use stats_categorical() instead.")
-
-    means = stats_3d[:, :, 2]
-    stds = stats_3d[:, :, 3]
-
+    # Global mean (weighted)
     global_mean = np.average(means, axis=0, weights=weights)
 
+    # Pooled variance formula
     weights_expanded = weights[:, np.newaxis]
     variance_terms = (weights_expanded - 1) * (stds**2)
     variance_terms += weights_expanded * ((means - global_mean) ** 2)
 
     pooled_variance = variance_terms.sum(axis=0) / (weights.sum() - 1)
-    result = np.sqrt(pooled_variance)
-
-    return result.astype(np.float32)
+    return np.sqrt(pooled_variance).astype(np.float32)
 
 
-def stats_min(table: pa.Table) -> np.ndarray:
-    """Aggregate minimums (global min across all rows)."""
-    _require_numpy("stats_min")
-
-    stats_3d, _ = _extract_stats_and_weights(table)
-
-    if _is_categorical(stats_3d.tolist()):
-        raise TacoQueryError("Stats appear to be categorical format. Use stats_categorical() instead.")
-
-    mins = stats_3d[:, :, 0]
-    result = mins.min(axis=0)
-
-    return result.astype(np.float32)
-
-
-def stats_max(table: pa.Table) -> np.ndarray:
-    """Aggregate maximums (global max across all rows)."""
-    _require_numpy("stats_max")
-
-    stats_3d, _ = _extract_stats_and_weights(table)
-
-    if _is_categorical(stats_3d.tolist()):
-        raise TacoQueryError("Stats appear to be categorical format. Use stats_categorical() instead.")
-
-    maxs = stats_3d[:, :, 1]
-    result = maxs.max(axis=0)
-
-    return result.astype(np.float32)
-
-
-def _stats_percentile(table: pa.Table, percentile_idx: int, percentile_name: str) -> np.ndarray:
+def _aggregate_categorical(table: pa.Table, stats_col: str) -> "np.ndarray":
     """
-    Aggregate percentiles using simple average.
+    Aggregate categorical probabilities using weighted average.
 
-    WARNING: Not statistically exact. For critical analysis, recompute from raw data.
+    Args:
+        table: PyArrow table with stats and weight columns
+        stats_col: Name of stats column
+
+    Returns:
+        np.ndarray with shape (n_bands, n_classes)
     """
-    _require_numpy("_stats_percentile")
+    stats_3d, valid_mask = _extract_stats_array(table, stats_col)
 
-    stats_3d, _ = _extract_stats_and_weights(table)
+    if not _is_categorical(stats_3d):
+        raise TacoQueryError(
+            f"Stats appear to be continuous format ({STATS_CONTINUOUS_LENGTH} values per band). "
+            f"Use stats_mean(), stats_std(), etc. for continuous data."
+        )
 
-    if _is_categorical(stats_3d.tolist()):
-        raise TacoQueryError("Stats appear to be categorical format. Use stats_categorical() instead.")
+    weights = _extract_weights(table, valid_mask)
 
-    warnings.warn(
-        f"stats_{percentile_name}() uses simple averaging, NOT exact. For critical analysis, recompute from raw data.",
-        UserWarning,
-        stacklevel=3,
-    )
-
-    percentiles = stats_3d[:, :, percentile_idx]
-    result = percentiles.mean(axis=0)
+    # Weighted average: (n_valid_rows, n_bands, n_classes) -> (n_bands, n_classes)
+    weights_expanded = weights[:, np.newaxis, np.newaxis]
+    weighted_stats = stats_3d * weights_expanded
+    result = weighted_stats.sum(axis=0) / weights.sum()
 
     return result.astype(np.float32)
-
-
-def stats_p25(table: pa.Table) -> np.ndarray:
-    """Aggregate 25th percentiles (approximation)."""
-    return _stats_percentile(table, 5, "p25")
-
-
-def stats_p50(table: pa.Table) -> np.ndarray:
-    """Aggregate 50th percentiles / median (approximation)."""
-    return _stats_percentile(table, 6, "p50")
-
-
-def stats_p75(table: pa.Table) -> np.ndarray:
-    """Aggregate 75th percentiles (approximation)."""
-    return _stats_percentile(table, 7, "p75")
-
-
-def stats_p95(table: pa.Table) -> np.ndarray:
-    """Aggregate 95th percentiles (approximation)."""
-    return _stats_percentile(table, 8, "p95")

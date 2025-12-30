@@ -82,6 +82,11 @@
                 ""
             ],
             [
+                "geotiff:stats",
+                "list<item: list<item: float>>",
+                "Fake statistics for testing"
+            ],
+            [
                 "internal:current_id",
                 "int64",
                 "Current sample position at this level (0-indexed). Enables O(1) random access and relational JOINs (ZIP, FOLDER, TACOCAT)."
@@ -90,11 +95,6 @@
                 "internal:parent_id",
                 "int64",
                 "Foreign key referencing parent sample position in previous level (ZIP, FOLDER, TACOCAT)."
-            ],
-            [
-                "internal:stats",
-                "list<item: list<item: float>>",
-                "Fake statistics for testing"
             ]
         ]
     }
