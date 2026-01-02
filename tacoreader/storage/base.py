@@ -1,5 +1,4 @@
-"""
-Abstract base class for TACO format backends.
+"""Abstract base class for TACO format backends.
 
 Defines common interface for all backends (ZIP, FOLDER, TacoCat).
 All backends must implement load() with their specific loading strategy.
@@ -27,8 +26,7 @@ logger = get_logger(__name__)
 
 
 class TacoBackend(ABC):
-    """
-    Base class for TACO backends.
+    """Base class for TACO backends.
 
     All backends implement format-specific loading strategies:
     - FOLDER: lazy disk access (local) or memory loading (remote)
@@ -44,8 +42,7 @@ class TacoBackend(ABC):
 
     @abstractmethod
     def read_collection(self, path: str) -> dict[str, Any]:
-        """
-        Read COLLECTION.json from dataset.
+        """Read COLLECTION.json from dataset.
 
         Format-specific: ZIP reads from offset, FOLDER from disk, TacoCat from memory.
         Must return dict with at least: id, taco:pit_schema, taco:field_schema
@@ -59,8 +56,7 @@ class TacoBackend(ABC):
         level_ids: list[int],
         root_path: str,
     ) -> None:
-        """
-        Create DuckDB views with internal:gdal_vsi column for GDAL access.
+        """Create DuckDB views with internal:gdal_vsi column for GDAL access.
 
         VSI path format varies by backend:
         - ZIP: /vsisubfile/{offset}_{size},{zip_path}
@@ -79,8 +75,7 @@ class TacoBackend(ABC):
 
     @abstractmethod
     def load(self, path: str) -> TacoDataset:
-        """
-        Load dataset from path.
+        """Load dataset from path.
 
         Each backend implements format-specific loading:
         - FOLDER: lazy disk access (local) or memory loading (remote)
@@ -131,8 +126,7 @@ class TacoBackend(ABC):
         collection: dict[str, Any],
         level_ids: list[int],
     ) -> TacoDataset:
-        """
-        Common dataset finalization after metadata loading.
+        """Common dataset finalization after metadata loading.
 
         Creates views, data alias, schema, and constructs TacoDataset.
         """

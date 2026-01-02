@@ -1,5 +1,4 @@
-"""
-Remote I/O operations for TACO datasets.
+"""Remote I/O operations for TACO datasets.
 
 Centralized remote file ops (HTTP, S3, GCS, Azure).
 Uses obstore backend but designed for easy replacement.
@@ -13,8 +12,7 @@ from tacoreader._exceptions import TacoIOError
 
 
 def _create_store(url: str):
-    """
-    Create obstore ObjectStore from URL.
+    """Create obstore ObjectStore from URL.
 
     Supports all protocols defined in PROTOCOL_MAPPINGS:
     - s3:// → S3Store
@@ -43,8 +41,7 @@ def _create_store(url: str):
 
 
 def download_bytes(url: str, subpath: str = "") -> bytes:
-    """
-    Download complete file from remote URL.
+    """Download complete file from remote URL.
 
     Args:
         url: Base URL (e.g., "s3://bucket/", "https://example.com/")
@@ -62,8 +59,7 @@ def download_bytes(url: str, subpath: str = "") -> bytes:
 
 
 def download_range(url: str, offset: int, size: int, subpath: str = "") -> bytes:
-    """
-    Download byte range from remote file.
+    """Download byte range from remote file.
 
     Efficient for reading portions of large files without full download.
     Uses HTTP Range requests or cloud storage equivalent.
@@ -86,8 +82,7 @@ def download_range(url: str, offset: int, size: int, subpath: str = "") -> bytes
 
 
 def get_file_size(url: str, subpath: str = "") -> int | None:
-    """
-    Get remote file size in bytes.
+    """Get remote file size in bytes.
 
     Returns None if size unavailable (e.g., streamed HTTP responses).
 

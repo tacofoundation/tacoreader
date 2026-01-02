@@ -1,5 +1,4 @@
-"""
-Load TACO datasets from any format.
+"""Load TACO datasets from any format.
 
 Main entry point. Auto-detects format and dispatches to backend.
 Supports single files or lists (automatically concatenated).
@@ -19,8 +18,7 @@ def load(
     base_path: str | None = None,
     backend: str | None = None,
 ) -> TacoDataset:
-    """
-    Load TACO dataset(s) with auto format detection.
+    """Load TACO dataset(s) with auto format detection.
 
     Returns TacoDataset with lazy SQL interface. Multiple files are
     automatically concatenated if schemas are compatible.

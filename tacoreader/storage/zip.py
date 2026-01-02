@@ -1,5 +1,4 @@
-"""
-ZIP backend for TACO datasets.
+"""ZIP backend for TACO datasets.
 
 Reads .tacozip format files with offset-based access via TACO_HEADER.
 Optimized for single-file distribution and cloud storage with range reads.
@@ -39,8 +38,7 @@ logger = get_logger(__name__)
 
 @lru_cache(maxsize=64)
 def _read_taco_header_cached(path: str) -> list[tuple[int, int]]:
-    """
-    Read and cache TACO_HEADER (256 bytes).
+    """Read and cache TACO_HEADER (256 bytes).
 
     Cached because headers are tiny and frequently accessed
     when exploring remote datasets.
@@ -60,8 +58,7 @@ def _read_taco_header_cached(path: str) -> list[tuple[int, int]]:
 
 
 class ZipBackend(TacoBackend):
-    """
-    Backend for .tacozip format.
+    """Backend for .tacozip format.
 
     Uses TACO_HEADER (256-byte structure at start) for direct offset-based
     access to embedded files without full ZIP extraction.
@@ -75,8 +72,7 @@ class ZipBackend(TacoBackend):
         return "zip"
 
     def load(self, path: str) -> TacoDataset:
-        """
-        Load ZIP dataset with grouped requests.
+        """Load ZIP dataset with grouped requests.
 
         Remote optimization: groups files with gaps <4MB to minimize HTTP requests.
         Local: reads individually with mmap.
@@ -114,8 +110,7 @@ class ZipBackend(TacoBackend):
         return dataset
 
     def read_collection(self, path: str) -> dict[str, Any]:
-        """
-        Read COLLECTION.json from ZIP file.
+        """Read COLLECTION.json from ZIP file.
 
         COLLECTION.json is always the last entry in TACO_HEADER.
         Uses offset-based reading to avoid extracting entire ZIP.
@@ -148,8 +143,7 @@ class ZipBackend(TacoBackend):
         level_ids: list[int],
         root_path: str,
     ) -> None:
-        """
-        Create DuckDB views with GDAL VSI paths.
+        """Create DuckDB views with GDAL VSI paths.
 
         Views simply expose parquet data with GDAL VSI paths for raster access.
         Path format: /vsisubfile/{offset}_{size},{zip_path}
@@ -172,8 +166,7 @@ class ZipBackend(TacoBackend):
             )
 
     def _read_taco_header(self, path: str) -> list[tuple[int, int]]:
-        """
-        Read TACO_HEADER with caching.
+        """Read TACO_HEADER with caching.
 
         Delegates to cached function for efficiency.
         """
@@ -255,8 +248,7 @@ class ZipBackend(TacoBackend):
         next_file: tuple[int, int, int],
         max_gap: int = ZIP_MAX_GAP_SIZE,
     ) -> bool:
-        """
-        Determine if two files should be grouped in same request.
+        """Determine if two files should be grouped in same request.
 
         Strategy:
         1. Gap must be < max_gap (4MB default)
@@ -294,8 +286,7 @@ class ZipBackend(TacoBackend):
         return gap < max_gap and gap <= total_useful_size * 0.5
 
     def _group_files_by_proximity(self, header: list[tuple[int, int]]) -> list[list[tuple[int, int, int]]]:
-        """
-        Group files to minimize HTTP requests while avoiding excessive waste.
+        """Group files to minimize HTTP requests while avoiding excessive waste.
 
         Files grouped if:
         - Gap < ZIP_MAX_GAP_SIZE (4MB)

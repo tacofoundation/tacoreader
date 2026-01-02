@@ -1,5 +1,4 @@
-"""
-Hierarchical STAC filtering with multi-level JOINs (level>0).
+"""Hierarchical STAC filtering with multi-level JOINs (level>0).
 
 Enables filtering level0 samples based on children's metadata at deeper levels.
 Example: Find all dates (level0) with files (level2) in a specific region.
@@ -36,8 +35,7 @@ if TYPE_CHECKING:
 
 
 def validate_level_exists(dataset: "TacoDataset", level: int) -> None:
-    """
-    Validate that requested level exists in dataset.
+    """Validate that requested level exists in dataset.
 
     Args:
         dataset: TacoDataset to validate
@@ -53,8 +51,7 @@ def validate_level_exists(dataset: "TacoDataset", level: int) -> None:
 
 
 def get_columns_for_level(dataset: "TacoDataset", level: int) -> list[str]:
-    """
-    Get available columns for a specific level.
+    """Get available columns for a specific level.
 
     Queries DuckDB DESCRIBE to get column names from level view.
 
@@ -86,8 +83,7 @@ def apply_cascade_bbox_filter(
     geometry_col: str,
     level: int,
 ) -> "TacoDataset":
-    """
-    Filter level0 based on children's geometry at target level.
+    """Filter level0 based on children's geometry at target level.
 
     Uses hierarchical JOINs to find level0 samples whose descendants
     at the target level intersect with the bounding box.
@@ -153,8 +149,7 @@ def apply_cascade_datetime_filter(
     time_col: str,
     level: int,
 ) -> "TacoDataset":
-    """
-    Filter level0 based on children's timestamps at target level.
+    """Filter level0 based on children's timestamps at target level.
 
     Uses hierarchical JOINs to find level0 samples whose descendants
     at the target level fall within the datetime range.
@@ -225,8 +220,7 @@ def build_cascade_join_sql(
     where_clause: str,
     format_type: str,
 ) -> str:
-    """
-    Build SQL with cascading JOINs from level0 to target level.
+    """Build SQL with cascading JOINs from level0 to target level.
 
     Creates INNER JOINs: level0 → level1 → level2 → ... → target_level
     Returns DISTINCT level0 samples that match the WHERE clause at target level.

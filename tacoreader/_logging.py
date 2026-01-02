@@ -1,5 +1,4 @@
-"""
-Logging configuration for tacoreader.
+"""Logging configuration for tacoreader.
 
 Centralized logging setup. Users configure externally via standard logging config.
 
@@ -12,7 +11,6 @@ Usage:
 """
 
 import logging
-from typing import Optional
 
 DEFAULT_FORMAT = "%(levelname)s [%(name)s] %(message)s"
 
@@ -27,8 +25,7 @@ def get_logger(name: str) -> logging.Logger:
 
 
 def setup_basic_logging(level: int = logging.INFO, fmt: str | None = None) -> None:
-    """
-    Setup basic logging for tacoreader.
+    """Setup basic logging for tacoreader.
 
     Convenience function - advanced users should configure via logging.basicConfig().
     """

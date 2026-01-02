@@ -1,5 +1,4 @@
-"""
-Format detection and path type utilities.
+"""Format detection and path type utilities.
 
 Main functions:
     detect_format: Basic format detection from path extension/structure
@@ -23,8 +22,7 @@ logger = get_logger(__name__)
 
 
 def detect_format(path: str) -> Literal["zip", "folder", "tacocat"]:
-    """
-    Detect TACO format from path.
+    """Detect TACO format from path.
 
     Rules:
     - .tacocat folder → TacoCat consolidated format
@@ -60,8 +58,7 @@ def detect_format(path: str) -> Literal["zip", "folder", "tacocat"]:
 def detect_and_resolve_format(
     path: str,
 ) -> tuple[Literal["zip", "folder", "tacocat"], str]:
-    """
-    Detect format and resolve final path with automatic fallbacks.
+    """Detect format and resolve final path with automatic fallbacks.
 
     Resolution logic:
     1. Explicit formats are used as-is:
@@ -107,8 +104,7 @@ def detect_and_resolve_format(
 
 
 def _resolve_folder_format(path: str) -> tuple[Literal["folder", "tacocat"], str]:
-    """
-    Resolve FOLDER format with TacoCat fallback.
+    """Resolve FOLDER format with TacoCat fallback.
 
     Strategy:
     1. Check if COLLECTION.json exists in root
@@ -140,8 +136,7 @@ def _resolve_folder_format(path: str) -> tuple[Literal["folder", "tacocat"], str
 
 
 def _file_exists(base_path: str, filename: str) -> bool:
-    """
-    Check if file exists (local or remote).
+    """Check if file exists (local or remote).
 
     Returns True if accessible, False otherwise.
     Does NOT raise exceptions.
@@ -168,8 +163,7 @@ def _file_exists(base_path: str, filename: str) -> bool:
 
 
 def is_remote(path: str) -> bool:
-    """
-    Check if path requires network access.
+    """Check if path requires network access.
 
     Returns True for cloud storage (s3://, gs://, etc.) and VSI paths.
     Returns False for local filesystem paths.

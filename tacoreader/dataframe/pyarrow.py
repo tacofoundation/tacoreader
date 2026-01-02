@@ -1,5 +1,4 @@
-"""
-PyArrow backend for TacoDataFrame.
+"""PyArrow backend for TacoDataFrame.
 
 Default backend, no extra dependencies. Wraps PyArrow Table with TACO navigation.
 """
@@ -19,8 +18,7 @@ from tacoreader.dataframe.base import TacoDataFrame
 
 
 class TacoDataFrameArrow(TacoDataFrame):
-    """
-    PyArrow Table wrapper with hierarchical navigation.
+    """PyArrow Table wrapper with hierarchical navigation.
 
     Default backend - no external dependencies required.
     Provides minimal DataFrame API + TACO navigation via .read()
@@ -78,12 +76,11 @@ class TacoDataFrameArrow(TacoDataFrame):
         return self._data.slice(start)
 
     def _get_row(self, position: int) -> dict:
-        """Row as dict for navigation. Used by base class .read()"""
+        """Row as dict for navigation. Used by base class .read()."""
         return self._data.to_pylist()[position]
 
     def _to_arrow_for_stats(self) -> pa.Table:
-        """
-        Convert to PyArrow for stats aggregation.
+        """Convert to PyArrow for stats aggregation.
 
         No-op for PyArrow backend since we're already PyArrow.
         Required by base class for stats_mean(), stats_std(), etc.
@@ -91,8 +88,7 @@ class TacoDataFrameArrow(TacoDataFrame):
         return self._data
 
     def to_arrow(self) -> pa.Table:
-        """
-        Export as native PyArrow Table.
+        """Export as native PyArrow Table.
 
         Returns copy to prevent mutation of internal state.
         """

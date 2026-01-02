@@ -1,5 +1,4 @@
-"""
-Main concatenation orchestrator.
+"""Main concatenation orchestrator.
 
 Coordinates the 4-phase concat process:
 1. Validation: Check dataset compatibility
@@ -27,8 +26,7 @@ logger = get_logger(__name__)
 
 
 def concat(datasets: list["TacoDataset"], column_mode: str = "intersection") -> "TacoDataset":
-    """
-    Concatenate multiple datasets into single dataset with lazy SQL.
+    """Concatenate multiple datasets into single dataset with lazy SQL.
 
     Creates in-memory DuckDB with consolidated metadata using UNION ALL views.
     By default, only keeps columns present in ALL datasets (intersection mode).

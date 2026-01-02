@@ -1,5 +1,4 @@
-"""
-Polars backend for TacoDataFrame.
+"""Polars backend for TacoDataFrame.
 
 Wraps Polars DataFrame with TACO-specific hierarchical navigation.
 Requires polars package: pip install polars
@@ -40,8 +39,7 @@ def _require_polars() -> None:
 
 
 class TacoDataFramePolars(TacoDataFrame):
-    """
-    Polars DataFrame wrapper with hierarchical navigation.
+    """Polars DataFrame wrapper with hierarchical navigation.
 
     Provides full Polars expression API + TACO navigation via .read()
     Requires: pip install polars
@@ -92,8 +90,7 @@ class TacoDataFramePolars(TacoDataFrame):
         return self._data[key]
 
     def __setitem__(self, key: str, value):
-        """
-        Modify column in-place. Protected columns (id, type, internal:*) cannot be modified.
+        """Modify column in-place. Protected columns (id, type, internal:*) cannot be modified.
 
         Raises ValueError if attempting to modify protected columns required for navigation.
         """
@@ -124,12 +121,11 @@ class TacoDataFramePolars(TacoDataFrame):
         return self._data.tail(n)
 
     def _get_row(self, position: int) -> dict:
-        """Row as dict for navigation. Used by base class .read()"""
+        """Row as dict for navigation. Used by base class .read()."""
         return self._data.row(position, named=True)
 
     def _to_arrow_for_stats(self) -> pa.Table:
-        """
-        Convert to PyArrow for stats aggregation.
+        """Convert to PyArrow for stats aggregation.
 
         Stats functions internally use PyArrow, so we convert:
         Polars → PyArrow → stats computation
@@ -139,8 +135,7 @@ class TacoDataFramePolars(TacoDataFrame):
         return self._data.to_arrow()
 
     def to_polars(self) -> pl.DataFrame:
-        """
-        Export as native Polars DataFrame.
+        """Export as native Polars DataFrame.
 
         Returns clone to prevent mutation of internal state.
         Loses TACO navigation (.read() won't work on result).
@@ -155,8 +150,7 @@ class TacoDataFramePolars(TacoDataFrame):
         return TacoDataFramePolars(filtered_df, self._format_type)
 
     def select(self, *args, **kwargs) -> TacoDataFramePolars:
-        """
-        Select columns with Polars expressions. Returns new TacoDataFramePolars.
+        """Select columns with Polars expressions. Returns new TacoDataFramePolars.
 
         Note: Navigation requires id, type, internal:gdal_vsi columns.
         """
@@ -179,8 +173,7 @@ class TacoDataFramePolars(TacoDataFrame):
         return TacoDataFramePolars(limited_df, self._format_type)
 
     def group_by(self, *args, **kwargs):
-        """
-        Group by column(s). Returns Polars GroupBy (NOT TacoDataFrame).
+        """Group by column(s). Returns Polars GroupBy (NOT TacoDataFrame).
 
         Use for aggregations where navigation isn't needed.
         """

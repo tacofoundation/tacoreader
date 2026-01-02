@@ -1,5 +1,4 @@
-"""
-TacoDataset - metadata container with lazy SQL interface.
+"""TacoDataset - metadata container with lazy SQL interface.
 
 Provides STAC-like metadata with DuckDB connection for lazy SQL queries.
 Queries not executed until .data is called.
@@ -33,8 +32,7 @@ if TYPE_CHECKING:
 
 
 class TacoDataset(BaseModel):
-    """
-    TACO dataset with lazy SQL interface.
+    """TACO dataset with lazy SQL interface.
 
     Metadata container with lazy query via DuckDB. Queries create views
     without materializing data until .data is accessed.
@@ -111,8 +109,7 @@ class TacoDataset(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     def close(self):
-        """
-        Close DuckDB connection and cleanup views.
+        """Close DuckDB connection and cleanup views.
 
         Only closes the connection if this dataset owns it.
         Datasets created with .sql() share the parent's connection.
@@ -144,8 +141,7 @@ class TacoDataset(BaseModel):
 
     @property
     def data(self) -> "TacoDataFrame":
-        """
-        Materialize current view to TacoDataFrame.
+        """Materialize current view to TacoDataFrame.
 
         Executes DuckDB query, loads data into memory.
         This is where lazy evaluation ends.
@@ -175,8 +171,7 @@ class TacoDataset(BaseModel):
         return self._collection.copy()
 
     def sql(self, query: str) -> "TacoDataset":
-        """
-        Execute SQL query and return new TacoDataset with lazy view.
+        """Execute SQL query and return new TacoDataset with lazy view.
 
         Query NOT executed immediately - creates temp view.
         Always use 'data' as table name, auto-replaced with current view.
@@ -247,8 +242,7 @@ class TacoDataset(BaseModel):
         geometry_col: str = "auto",
         level: int = 0,
     ) -> "TacoDataset":
-        """
-        Filter by bounding box (PySTAC-style).
+        """Filter by bounding box (PySTAC-style).
 
         Args:
             minx: Minimum X coordinate (longitude)
@@ -282,8 +276,7 @@ class TacoDataset(BaseModel):
         time_col: str = "auto",
         level: int = 0,
     ) -> "TacoDataset":
-        """
-        Filter by temporal range (PySTAC-style).
+        """Filter by temporal range (PySTAC-style).
 
         Args:
             datetime_range: Temporal range as:
@@ -319,8 +312,7 @@ class TacoDataset(BaseModel):
     # -------------------------------------------------------------------------
 
     def _get_stats_column(self, level: int) -> str:
-        """
-        Find which stats column exists in the given level.
+        """Find which stats column exists in the given level.
 
         Returns the column name if found, raises TacoQueryError if not.
         """
@@ -411,8 +403,7 @@ class TacoDataset(BaseModel):
         level: int = 0,
         id: str | None = None,
     ) -> "np.ndarray":
-        """
-        Aggregate mean values across samples.
+        """Aggregate mean values across samples.
 
         Args:
             band: Band index or list of band indices (required)
@@ -442,8 +433,7 @@ class TacoDataset(BaseModel):
         level: int = 0,
         id: str | None = None,
     ) -> "np.ndarray":
-        """
-        Aggregate standard deviation using pooled variance formula.
+        """Aggregate standard deviation using pooled variance formula.
 
         Args:
             band: Band index or list of band indices (required)
@@ -468,8 +458,7 @@ class TacoDataset(BaseModel):
         level: int = 0,
         id: str | None = None,
     ) -> "np.ndarray":
-        """
-        Get global minimum across samples.
+        """Get global minimum across samples.
 
         Args:
             band: Band index or list of band indices (required)
@@ -494,8 +483,7 @@ class TacoDataset(BaseModel):
         level: int = 0,
         id: str | None = None,
     ) -> "np.ndarray":
-        """
-        Get global maximum across samples.
+        """Get global maximum across samples.
 
         Args:
             band: Band index or list of band indices (required)
@@ -520,8 +508,7 @@ class TacoDataset(BaseModel):
         level: int = 0,
         id: str | None = None,
     ) -> "np.ndarray":
-        """
-        Aggregate 25th percentile (approximation via averaging).
+        """Aggregate 25th percentile (approximation via averaging).
 
         Args:
             band: Band index or list of band indices (required)
@@ -546,8 +533,7 @@ class TacoDataset(BaseModel):
         level: int = 0,
         id: str | None = None,
     ) -> "np.ndarray":
-        """
-        Aggregate 50th percentile / median (approximation via averaging).
+        """Aggregate 50th percentile / median (approximation via averaging).
 
         Args:
             band: Band index or list of band indices (required)
@@ -581,8 +567,7 @@ class TacoDataset(BaseModel):
         level: int = 0,
         id: str | None = None,
     ) -> "np.ndarray":
-        """
-        Aggregate 75th percentile (approximation via averaging).
+        """Aggregate 75th percentile (approximation via averaging).
 
         Args:
             band: Band index or list of band indices (required)
@@ -607,8 +592,7 @@ class TacoDataset(BaseModel):
         level: int = 0,
         id: str | None = None,
     ) -> "np.ndarray":
-        """
-        Aggregate 95th percentile (approximation via averaging).
+        """Aggregate 95th percentile (approximation via averaging).
 
         Args:
             band: Band index or list of band indices (required)
@@ -633,8 +617,7 @@ class TacoDataset(BaseModel):
         level: int = 0,
         id: str | None = None,
     ) -> "np.ndarray":
-        """
-        Aggregate categorical probabilities using weighted average.
+        """Aggregate categorical probabilities using weighted average.
 
         Args:
             band: Band index or list of band indices (required)
@@ -688,8 +671,7 @@ class TacoDataset(BaseModel):
         return "\n".join(lines)
 
     def _format_temporal_string(self, iso_string: str) -> str:
-        """
-        Format ISO 8601 datetime string for display.
+        """Format ISO 8601 datetime string for display.
 
         If time is midnight (00:00:00), show only date.
         Otherwise show full datetime.

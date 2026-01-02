@@ -1,5 +1,4 @@
-"""
-DuckDB view construction for concatenated datasets.
+"""DuckDB view construction for concatenated datasets.
 
 Uses strategy pattern to handle format-specific view creation (ZIP/FOLDER/TacoCat).
 """
@@ -44,8 +43,7 @@ class ViewBuilder:
         all_levels: set[str],
         target_columns_by_level: dict[str, list[str]],
     ):
-        """
-        Initialize view builder.
+        """Initialize view builder.
 
         Args:
             db: DuckDB connection for creating views
@@ -215,8 +213,7 @@ class ViewBuilder:
         )
 
     def _extract_base_path(self) -> str:
-        """
-        Extract base directory for TacoCat format.
+        """Extract base directory for TacoCat format.
 
         Removes .tacocat folder suffix to get parent directory containing
         both .tacocat/ and source .tacozip files.

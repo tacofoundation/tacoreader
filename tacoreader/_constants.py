@@ -1,5 +1,4 @@
-"""
-Global constants for tacoreader.
+"""Global constants for tacoreader.
 
 Organized by: DataFrame Backend, Cloud Storage, File Extensions,
 Sample Types, Metadata, Hierarchy, TacoCat, DuckDB, Statistics, STAC.

@@ -1,5 +1,4 @@
-"""
-TACO format backends.
+"""TACO format backends.
 
 Factory functions for creating backend instances.
 """

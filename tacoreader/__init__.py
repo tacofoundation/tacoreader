@@ -16,8 +16,7 @@ _DATAFRAME_BACKEND: DataFrameBackend = DEFAULT_DATAFRAME_BACKEND
 
 
 def use(backend: str):
-    """
-    Set the global DataFrame backend for all future load() operations.
+    """Set the global DataFrame backend for all future load() operations.
 
     Available backends:
         - 'pyarrow': Default, no extra dependencies
@@ -91,8 +90,7 @@ def use(backend: str):
 
 
 def get_backend() -> DataFrameBackend:
-    """
-    Get the current global DataFrame backend.
+    """Get the current global DataFrame backend.
 
     Returns:
         Current backend name
@@ -106,8 +104,7 @@ def get_backend() -> DataFrameBackend:
 
 
 def verbose(level=True):
-    """
-    Enable/disable verbose logging for tacoreader operations.
+    """Enable/disable verbose logging for tacoreader operations.
 
     Args:
         level: Logging level to enable:
@@ -138,8 +135,7 @@ def verbose(level=True):
 
 
 def clear_cache():
-    """
-    Clear all metadata caches (headers, COLLECTION.json).
+    """Clear all metadata caches (headers, COLLECTION.json).
 
     Cached metadata includes:
     - ZIP headers (256 bytes)

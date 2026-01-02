@@ -1,5 +1,4 @@
-"""
-Position-Invariant Tree (PIT) schema for TACO datasets.
+"""Position-Invariant Tree (PIT) schema for TACO datasets.
 
 Enforces structural homogeneity: all samples at same level have identical structure
 (same types, same child counts, same child IDs). Enables predictable navigation
@@ -47,8 +46,7 @@ class PITRootLevel(TypedDict):
 
 
 class PITPattern(TypedDict):
-    """
-    Pattern descriptor for hierarchy level.
+    """Pattern descriptor for hierarchy level.
 
     Position-Invariant: if folder A has children [X, Y, Z],
     ALL folders at that level have children [X, Y, Z].
@@ -67,8 +65,7 @@ class PITSchemaDict(TypedDict):
 
 
 class PITSchema:
-    """
-    PIT schema validator and compatibility checker.
+    """PIT schema validator and compatibility checker.
 
     Validates structure and checks compatibility between datasets.
     Two datasets can be concatenated only if schemas are structurally
@@ -113,8 +110,7 @@ class PITSchema:
                 raise TacoSchemaError(f"Depth {depth_str}, pattern {pattern_idx}: invalid type '{child_type}'")
 
     def _validate(self) -> None:
-        """
-        Validate schema structure.
+        """Validate schema structure.
 
         Checks:
         - Root type is FILE or FOLDER
@@ -138,8 +134,7 @@ class PITSchema:
                 self._validate_pattern(depth_str, i, pattern)
 
     def is_compatible(self, other: "PITSchema") -> bool:
-        """
-        Check if another schema is structurally identical.
+        """Check if another schema is structurally identical.
 
         Ignores 'n' values - only checks structure (root type, hierarchy
         depths, type/id patterns). Compatible schemas can be concatenated.
@@ -174,8 +169,7 @@ class PITSchema:
         return {"root": self.root, "hierarchy": self.hierarchy}
 
     def with_n(self, new_n: int) -> "PITSchema":
-        """
-        Create new schema with updated root count.
+        """Create new schema with updated root count.
 
         Useful after filtering - creates new instance with same structure,
         different count. Original unchanged.
@@ -187,8 +181,7 @@ class PITSchema:
         return PITSchema(schema_dict)
 
     def max_depth(self) -> int:
-        """
-        Max hierarchy depth.
+        """Max hierarchy depth.
 
         Root level (0) not counted, so max_depth=2 means 3 total levels (0, 1, 2).
         """

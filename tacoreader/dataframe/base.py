@@ -1,5 +1,4 @@
-"""
-Abstract base class for TacoDataFrame backends.
+"""Abstract base class for TacoDataFrame backends.
 
 Each backend (PyArrow, Polars, Pandas) implements this interface
 with their native DataFrame APIs.
@@ -14,8 +13,7 @@ from tacoreader._exceptions import TacoNavigationError
 
 
 class TacoDataFrame(ABC):
-    """
-    Abstract base for hierarchical DataFrame navigation.
+    """Abstract base for hierarchical DataFrame navigation.
 
     Each backend implements:
     - DataFrame operations (filter, select, head, tail, etc.)
@@ -33,8 +31,7 @@ class TacoDataFrame(ABC):
     """
 
     def __init__(self, data: Any, format_type: str):
-        """
-        Initialize with backend-specific data structure.
+        """Initialize with backend-specific data structure.
 
         Args:
             data: PyArrow Table, Polars DataFrame, or Pandas DataFrame
@@ -46,8 +43,7 @@ class TacoDataFrame(ABC):
     @classmethod
     @abstractmethod
     def from_arrow(cls, arrow_table, format_type: str) -> TacoDataFrame:
-        """
-        Convert PyArrow Table to backend-specific TacoDataFrame.
+        """Convert PyArrow Table to backend-specific TacoDataFrame.
 
         This is the main entry point for creating TacoDataFrame instances
         from DuckDB query results (which are always PyArrow Tables).
@@ -100,8 +96,7 @@ class TacoDataFrame(ABC):
 
     @abstractmethod
     def _get_row(self, position: int) -> dict:
-        """
-        Get row as dictionary (backend-specific).
+        """Get row as dictionary (backend-specific).
 
         PyArrow: table.to_pylist()[position]
         Polars: df.row(position, named=True)
@@ -111,8 +106,7 @@ class TacoDataFrame(ABC):
 
     @abstractmethod
     def _to_arrow_for_stats(self):
-        """
-        Convert current data to PyArrow for stats functions.
+        """Convert current data to PyArrow for stats functions.
 
         Returns:
             PyArrow Table representation of current data
@@ -120,8 +114,7 @@ class TacoDataFrame(ABC):
         pass
 
     def _get_position(self, key: int | str) -> int:
-        """
-        Convert key to integer position.
+        """Convert key to integer position.
 
         This method is SHARED - works with any backend via _to_arrow_for_stats().
         Uses PyArrow for efficient ID search.
@@ -150,8 +143,7 @@ class TacoDataFrame(ABC):
         raise TacoNavigationError(f"ID '{key}' not found")
 
     def read(self, key: int | str) -> TacoDataFrame | str:
-        """
-        Navigate to child level by position or ID.
+        """Navigate to child level by position or ID.
 
         FILE samples: returns GDAL VSI path as string
         FOLDER samples: reads __meta__ and returns TacoDataFrame with children
@@ -167,8 +159,7 @@ class TacoDataFrame(ABC):
         return self._read_meta(row)
 
     def _read_meta(self, row: dict) -> TacoDataFrame:
-        """
-        Read __meta__ file for FOLDER sample.
+        """Read __meta__ file for FOLDER sample.
 
         This method is SHARED but uses backend-specific from_arrow()
         to create the resulting TacoDataFrame.
@@ -191,8 +182,7 @@ class TacoDataFrame(ABC):
         return self.__class__.from_arrow(children_table, self._format_type)
 
     def _read_meta_from_archive(self, vsi_path: str):
-        """
-        Read __meta__ from ZIP or TacoCat archive.
+        """Read __meta__ from ZIP or TacoCat archive.
 
         Parses /vsisubfile/ path, reads Parquet from offset, and builds
         VSI paths for children pointing back to archive.
@@ -251,8 +241,7 @@ class TacoDataFrame(ABC):
         return children_table.append_column("internal:gdal_vsi", vsi_array)
 
     def _read_meta_from_folder(self, vsi_path: str):
-        """
-        Read __meta__ from FOLDER format.
+        """Read __meta__ from FOLDER format.
 
         Reads Parquet from filesystem or remote storage, and builds
         direct paths to children using their id.

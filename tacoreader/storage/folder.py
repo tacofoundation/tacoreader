@@ -1,5 +1,4 @@
-"""
-FOLDER backend for TACO datasets.
+"""FOLDER backend for TACO datasets.
 
 Reads datasets stored as directory structures with loose files.
 Optimized for development workflows and frequent updates.
@@ -40,8 +39,7 @@ logger = get_logger(__name__)
 
 @lru_cache(maxsize=32)
 def _read_collection_folder_cached(path: str) -> dict[str, Any]:
-    """
-    Read and cache COLLECTION.json for FOLDER format.
+    """Read and cache COLLECTION.json for FOLDER format.
 
     Cached because COLLECTION.json is small (~10-50KB typically)
     and accessed frequently during dataset exploration.
@@ -75,8 +73,7 @@ def _read_collection_folder_cached(path: str) -> dict[str, Any]:
 
 
 class FolderBackend(TacoBackend):
-    """
-    Backend for FOLDER format.
+    """Backend for FOLDER format.
 
     Handles datasets stored as directory structures with loose files.
     Metadata is Parquet, data files accessed via filesystem paths.
@@ -91,8 +88,7 @@ class FolderBackend(TacoBackend):
         return "folder"
 
     def load(self, path: str) -> TacoDataset:
-        """
-        Load FOLDER dataset.
+        """Load FOLDER dataset.
 
         Local: lazy access from disk
         Remote: downloads all metadata to memory
@@ -167,8 +163,7 @@ class FolderBackend(TacoBackend):
         return dataset
 
     def read_collection(self, path: str) -> dict[str, Any]:
-        """
-        Read COLLECTION.json from FOLDER root with caching.
+        """Read COLLECTION.json from FOLDER root with caching.
 
         Supports local filesystem and remote storage (S3/GCS/Azure).
         """
@@ -180,8 +175,7 @@ class FolderBackend(TacoBackend):
         level_ids: list[int],
         root_path: str,
     ) -> None:
-        """
-        Create DuckDB views with direct filesystem paths.
+        """Create DuckDB views with direct filesystem paths.
 
         Path construction:
         - Level 0 FILE: {root}DATA/{id}

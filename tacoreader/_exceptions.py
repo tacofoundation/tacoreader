@@ -1,5 +1,4 @@
-"""
-Exception hierarchy for tacoreader.
+"""Exception hierarchy for tacoreader.
 
 All TACO-specific exceptions inherit from TacoError.
 Enables granular exception handling for different failure modes.
@@ -28,8 +27,7 @@ class TacoError(Exception):
 
 
 class TacoFormatError(TacoError):
-    """
-    Invalid format or corrupted file.
+    r"""Invalid format or corrupted file.
 
     Raised when:
     - Magic number doesn't match expected format
@@ -48,8 +46,7 @@ class TacoFormatError(TacoError):
 
 
 class TacoSchemaError(TacoError):
-    """
-    Schema incompatibility or validation error.
+    """Schema incompatibility or validation error.
 
     Raised when:
     - PIT schemas are incompatible during concat
@@ -68,8 +65,7 @@ class TacoSchemaError(TacoError):
 
 
 class TacoIOError(TacoError):
-    """
-    I/O operation failed.
+    """I/O operation failed.
 
     Raised when:
     - File or directory not found
@@ -88,8 +84,7 @@ class TacoIOError(TacoError):
 
 
 class TacoQueryError(TacoError):
-    """
-    Invalid query or operation.
+    """Invalid query or operation.
 
     Raised when:
     - Level doesn't exist in dataset
@@ -108,8 +103,7 @@ class TacoQueryError(TacoError):
 
 
 class TacoNavigationError(TacoError):
-    """
-    Navigation error during hierarchical traversal.
+    """Navigation error during hierarchical traversal.
 
     Raised when:
     - Sample ID not found during .read()
@@ -127,8 +121,7 @@ class TacoNavigationError(TacoError):
 
 
 class TacoBackendError(TacoError):
-    """
-    DataFrame backend error.
+    """DataFrame backend error.
 
     Raised when:
     - Backend not registered or unavailable

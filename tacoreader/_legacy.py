@@ -1,5 +1,4 @@
-"""
-Legacy format detection and migration instructions.
+"""Legacy format detection and migration instructions.
 
 Detects TACO v1 formats (.taco, .tortilla, tacofoundation:) and provides
 clear migration path to v2 (.tacozip).
@@ -14,8 +13,7 @@ def is_legacy_format(path: str) -> bool:
 
 
 def raise_legacy_error(path: str) -> None:
-    """
-    Raise error with migration instructions for legacy format.
+    """Raise error with migration instructions for legacy format.
 
     Always raises TacoFormatError with colored terminal output showing:
     - Why it failed (v1 not supported in v2+)

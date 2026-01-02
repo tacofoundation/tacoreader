@@ -1,6 +1,6 @@
 """HTML representation for TacoDataset (Jupyter notebook display)."""
 
-from typing import TYPE_CHECKING, Any, TypedDict
+from typing import TYPE_CHECKING, TypedDict
 
 if TYPE_CHECKING:
     from tacoreader.loader import TacoDataset

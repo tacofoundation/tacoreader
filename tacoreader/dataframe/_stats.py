@@ -1,5 +1,4 @@
-"""
-Statistics aggregation for TACO datasets.
+"""Statistics aggregation for TACO datasets.
 
 Weighted aggregation of pre-computed stats from format-specific columns
 (geotiff:stats, netcdf:stats, zarr:stats).
@@ -36,8 +35,7 @@ def _require_numpy(func_name: str) -> None:
 
 
 def _extract_weights(table: pa.Table, valid_mask: "np.ndarray | None" = None) -> "np.ndarray":
-    """
-    Extract pixel counts as weights from stac:tensor_shape column.
+    """Extract pixel counts as weights from stac:tensor_shape column.
 
     Returns array of weights (one per row). If column missing, returns ones.
 
@@ -82,8 +80,7 @@ def _extract_weights(table: pa.Table, valid_mask: "np.ndarray | None" = None) ->
 
 
 def _extract_stats_array(table: pa.Table, stats_col: str) -> tuple["np.ndarray", "np.ndarray"]:
-    """
-    Extract stats as 3D numpy array: (n_rows, n_bands, n_values).
+    """Extract stats as 3D numpy array: (n_rows, n_bands, n_values).
 
     Filters out None values and returns valid indices for weight alignment.
 
@@ -117,8 +114,7 @@ def _extract_stats_array(table: pa.Table, stats_col: str) -> tuple["np.ndarray",
 
 
 def _is_categorical(stats_3d: "np.ndarray") -> bool:
-    """
-    Detect categorical vs continuous stats based on array shape.
+    """Detect categorical vs continuous stats based on array shape.
 
     Continuous: 9 values [min, max, mean, std, valid%, p25, p50, p75, p95]
     Categorical: N values [prob_class_0, ..., prob_class_N]
@@ -135,8 +131,7 @@ def _aggregate_continuous(
     stats_col: str,
     stat_name: str,
 ) -> "np.ndarray":
-    """
-    Aggregate continuous statistics across samples.
+    """Aggregate continuous statistics across samples.
 
     Args:
         table: PyArrow table with stats and weight columns
@@ -182,8 +177,7 @@ def _aggregate_continuous(
 
 
 def _aggregate_std(table: pa.Table, stats_col: str) -> "np.ndarray":
-    """
-    Aggregate standard deviations using pooled variance formula.
+    """Aggregate standard deviations using pooled variance formula.
 
     Pooled variance accounts for both within-sample variance and
     between-sample mean differences.
@@ -218,8 +212,7 @@ def _aggregate_std(table: pa.Table, stats_col: str) -> "np.ndarray":
 
 
 def _aggregate_categorical(table: pa.Table, stats_col: str) -> "np.ndarray":
-    """
-    Aggregate categorical probabilities using weighted average.
+    """Aggregate categorical probabilities using weighted average.
 
     Args:
         table: PyArrow table with stats and weight columns

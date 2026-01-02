@@ -1,5 +1,4 @@
-"""
-Dataset validation for concatenation.
+"""Dataset validation for concatenation.
 
 Validates:
 - Backend compatibility (all must use same DataFrame backend)
@@ -19,8 +18,7 @@ logger = get_logger(__name__)
 
 
 def validate_datasets(datasets: list["TacoDataset"]) -> None:
-    """
-    Run all validations on datasets before concatenation.
+    """Run all validations on datasets before concatenation.
 
     Raises:
         TacoBackendError: If backends are incompatible

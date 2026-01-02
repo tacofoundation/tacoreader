@@ -1,5 +1,4 @@
-"""
-GDAL VSI path utilities.
+"""GDAL VSI path utilities.
 
 Pure functions for converting between standard paths and GDAL Virtual File System paths.
 No I/O operations - only string transformations.
@@ -13,8 +12,7 @@ from tacoreader._format import is_local
 
 
 def to_vsi_root(path: str) -> str:
-    """
-    Convert storage path to GDAL VSI format.
+    """Convert storage path to GDAL VSI format.
 
     Local paths resolved to absolute, cloud/HTTP transformed to VSI.
     Ensures paths work regardless of working directory.
@@ -50,8 +48,7 @@ def is_vsi_path(path: str) -> bool:
 
 
 def strip_vsi_prefix(path: str) -> str:
-    """
-    Remove VSI prefix, restore original protocol.
+    """Remove VSI prefix, restore original protocol.
 
     Converts GDAL VSI paths back to standard protocol URLs.
     """
@@ -76,8 +73,7 @@ def strip_vsi_prefix(path: str) -> str:
 
 
 def parse_vsi_subfile(vsi_path: str) -> tuple[str, int, int]:
-    """
-    Parse /vsisubfile/ path to extract root, offset, size.
+    """Parse /vsisubfile/ path to extract root, offset, size.
 
     Format: /vsisubfile/{offset}_{size},{root_path}
     """

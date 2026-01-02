@@ -1,5 +1,4 @@
-"""
-Column compatibility validation and resolution.
+"""Column compatibility validation and resolution.
 
 Handles three column modes:
 - intersection: Keep only common columns (DEFAULT, safest)
@@ -55,8 +54,7 @@ CRITICAL_COLUMNS_FOLDER_LEVEL0 = CRITICAL_COLUMNS_FOLDER - {METADATA_PARENT_ID}
 
 
 def _get_critical_columns(format_type: str, level_key: str) -> frozenset[str]:
-    """
-    Get critical columns for format and level.
+    """Get critical columns for format and level.
 
     ZIP/TacoCat: need offset/size for /vsisubfile/ paths
     FOLDER: need relative_path for direct filesystem paths (level1+)
@@ -75,8 +73,7 @@ def _get_critical_columns(format_type: str, level_key: str) -> frozenset[str]:
 
 
 def validate_column_compatibility(datasets: list["TacoDataset"], mode: str = "intersection") -> dict[str, list[str]]:
-    """
-    Validate column compatibility between datasets.
+    """Validate column compatibility between datasets.
 
     Args:
         datasets: List of datasets to validate

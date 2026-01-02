@@ -1,5 +1,4 @@
-"""
-Pandas backend for TacoDataFrame.
+"""Pandas backend for TacoDataFrame.
 
 Wraps Pandas DataFrame with TACO-specific hierarchical navigation.
 Requires pandas package: pip install pandas
@@ -40,8 +39,7 @@ def _require_pandas() -> None:
 
 
 class TacoDataFramePandas(TacoDataFrame):
-    """
-    Pandas DataFrame wrapper with hierarchical navigation.
+    """Pandas DataFrame wrapper with hierarchical navigation.
 
     Provides full Pandas API + TACO navigation via .read()
     Requires: pip install pandas
@@ -94,8 +92,7 @@ class TacoDataFramePandas(TacoDataFrame):
         return base_repr + info
 
     def __getitem__(self, key):
-        """
-        Pandas-style subscripting.
+        """Pandas-style subscripting.
 
         Supports: column selection, boolean indexing, slicing.
         Returns TacoDataFramePandas if result is DataFrame, otherwise returns Series/scalar.
@@ -109,8 +106,7 @@ class TacoDataFramePandas(TacoDataFrame):
         return result
 
     def __setitem__(self, key: str, value):
-        """
-        Modify column in-place. Protected columns (id, type, internal:*) cannot be modified.
+        """Modify column in-place. Protected columns (id, type, internal:*) cannot be modified.
 
         Raises ValueError if attempting to modify protected columns required for navigation.
         """
@@ -143,12 +139,11 @@ class TacoDataFramePandas(TacoDataFrame):
         return self._data.tail(n)
 
     def _get_row(self, position: int) -> dict:
-        """Row as dict for navigation. Used by base class .read()"""
+        """Row as dict for navigation. Used by base class .read()."""
         return self._data.iloc[position].to_dict()
 
     def _to_arrow_for_stats(self) -> pa.Table:
-        """
-        Convert to PyArrow for stats aggregation.
+        """Convert to PyArrow for stats aggregation.
 
         Stats functions internally use PyArrow, so we convert:
         Pandas → PyArrow → stats computation
@@ -158,8 +153,7 @@ class TacoDataFramePandas(TacoDataFrame):
         return pa.Table.from_pandas(self._data)
 
     def to_pandas(self) -> pd.DataFrame:
-        """
-        Export as native Pandas DataFrame.
+        """Export as native Pandas DataFrame.
 
         Returns copy to prevent mutation of internal state.
         Loses TACO navigation (.read() won't work on result).
@@ -179,8 +173,7 @@ class TacoDataFramePandas(TacoDataFrame):
         return TacoDataFramePandas(sorted_df, self._format_type)
 
     def assign(self, **kwargs) -> TacoDataFramePandas:
-        """
-        Add/replace columns immutably. Returns new TacoDataFramePandas.
+        """Add/replace columns immutably. Returns new TacoDataFramePandas.
 
         Validates protected columns (id, type, internal:*) cannot be modified.
         """
@@ -195,8 +188,7 @@ class TacoDataFramePandas(TacoDataFrame):
         return TacoDataFramePandas(new_data, self._format_type)
 
     def groupby(self, by, **kwargs):
-        """
-        Group by column(s). Returns Pandas GroupBy (NOT TacoDataFrame).
+        """Group by column(s). Returns Pandas GroupBy (NOT TacoDataFrame).
 
         Use for aggregations where navigation isn't needed.
         """

@@ -1,5 +1,4 @@
-"""
-DataFrame backend registry and factory.
+"""DataFrame backend registry and factory.
 
 Provides centralized backend registration and creation of TacoDataFrame
 instances. Dataset.py uses create_dataframe() to remain backend-agnostic.
@@ -27,8 +26,7 @@ _BACKENDS: dict[DataFrameBackend, BackendFactory] = {}
 
 
 def register_backend(name: DataFrameBackend, factory_fn: BackendFactory) -> None:
-    """
-    Register a DataFrame backend.
+    """Register a DataFrame backend.
 
     Args:
         name: Backend name from DataFrameBackend literal
@@ -42,8 +40,7 @@ def register_backend(name: DataFrameBackend, factory_fn: BackendFactory) -> None
 
 
 def create_dataframe(backend: str, arrow_table: Any, format_type: str):
-    """
-    Factory function to create TacoDataFrame from PyArrow Table.
+    """Factory function to create TacoDataFrame from PyArrow Table.
 
     This is the main entry point used by TacoDataset.data property
     to convert DuckDB results (PyArrow Tables) into backend-specific
@@ -93,8 +90,7 @@ def create_dataframe(backend: str, arrow_table: Any, format_type: str):
 
 
 def get_available_backends() -> list[DataFrameBackend]:
-    """
-    Get list of currently registered backends.
+    """Get list of currently registered backends.
 
     Returns:
         List of registered backend names

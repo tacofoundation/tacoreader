@@ -1,5 +1,4 @@
-"""
-Concatenate multiple TACO datasets into single dataset.
+"""Concatenate multiple TACO datasets into single dataset.
 
 Public API:
     concat(datasets, column_mode) -> TacoDataset

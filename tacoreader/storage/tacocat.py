@@ -1,5 +1,4 @@
-"""
-TacoCat backend for consolidated TACO datasets.
+"""TacoCat backend for consolidated TACO datasets.
 
 Consolidates metadata from multiple .tacozip files into .tacocat/ folder
 with unified Parquet files optimized for DuckDB queries.
@@ -46,8 +45,7 @@ logger = get_logger(__name__)
 
 @lru_cache(maxsize=32)
 def _read_tacocat_collection_cached(path: str) -> dict[str, Any]:
-    """
-    Read and cache COLLECTION.json from .tacocat folder.
+    """Read and cache COLLECTION.json from .tacocat folder.
 
     Cached because COLLECTION.json is small (~10-50KB) and frequently accessed
     during dataset exploration and metadata queries.
@@ -73,8 +71,7 @@ def _read_tacocat_collection_cached(path: str) -> dict[str, Any]:
 
 
 def _fetch_level_file(level_id: int, base_path: str) -> tuple[int, bytes | None]:  # pragma: no cover - remote helper
-    """
-    Attempt to download single level*.parquet file.
+    """Attempt to download single level*.parquet file.
 
     Used by ThreadPoolExecutor to fetch files in parallel.
     Returns None if file doesn't exist (expected for max_depth < 5).
@@ -106,8 +103,7 @@ def _fetch_level_file(level_id: int, base_path: str) -> tuple[int, bytes | None]
 
 
 class TacoCatBackend(TacoBackend):
-    """
-    Backend for TacoCat consolidated format (.tacocat folder).
+    """Backend for TacoCat consolidated format (.tacocat folder).
 
     Consolidates metadata from multiple .tacozip files into unified folder.
     Queries across hundreds of ZIPs without opening each individually.
@@ -131,8 +127,7 @@ class TacoCatBackend(TacoBackend):
         return "tacocat"
 
     def load(self, path: str) -> TacoDataset:
-        """
-        Load TacoCat dataset (.tacocat folder).
+        """Load TacoCat dataset (.tacocat folder).
 
         Strategy:
         1. Parallel fetch all level*.parquet (ThreadPoolExecutor)
@@ -199,8 +194,7 @@ class TacoCatBackend(TacoBackend):
         return dataset
 
     def _fetch_all_levels(self, base_path: str) -> dict[int, bytes]:
-        """
-        Fetch all level*.parquet files in parallel using ThreadPoolExecutor.
+        """Fetch all level*.parquet files in parallel using ThreadPoolExecutor.
 
         Attempts to download level0-5.parquet concurrently.
         Missing files are ignored (expected if max_depth < 5).
@@ -237,8 +231,7 @@ class TacoCatBackend(TacoBackend):
         return levels  # pragma: no cover
 
     def read_collection(self, path: str) -> dict[str, Any]:
-        """
-        Read COLLECTION.json from .tacocat folder with caching.
+        """Read COLLECTION.json from .tacocat folder with caching.
 
         Contains consolidated metadata from all source ZIPs including:
         - Dataset ID, version, description
@@ -260,8 +253,7 @@ class TacoCatBackend(TacoBackend):
         level_ids: list[int],
         root_path: str,
     ) -> None:
-        """
-        Create DuckDB views with GDAL VSI paths for TacoCat format.
+        """Create DuckDB views with GDAL VSI paths for TacoCat format.
 
         Path format: /vsisubfile/{offset}_{size},{base_path}{source_file}
 
@@ -295,8 +287,7 @@ class TacoCatBackend(TacoBackend):
             )
 
     def _extract_base_path(self, root_path: str) -> str:
-        """
-        Extract base directory from .tacocat/ path.
+        """Extract base directory from .tacocat/ path.
 
         The base path is the directory containing both .tacocat/ folder
         and source .tacozip files. Used to construct VSI paths to individual ZIPs.

@@ -1,5 +1,4 @@
-"""
-Simple STAC filtering for level0 (no JOINs).
+"""Simple STAC filtering for level0 (no JOINs).
 
 Provides spatial and temporal filtering on level0 without hierarchical JOINs.
 Works for all formats: ZIP, FOLDER, TacoCat.
@@ -34,8 +33,7 @@ def apply_simple_bbox_filter(
     maxy: float,
     geometry_col: str = "auto",
 ) -> "TacoDataset":
-    """
-    Filter level0 by bounding box.
+    """Filter level0 by bounding box.
 
     Uses DuckDB Spatial extension with ST_Intersects for bbox intersection.
     Works with WKB-encoded geometry columns.
@@ -84,8 +82,7 @@ def apply_simple_datetime_filter(
     datetime_range: str | datetime | tuple[datetime, datetime],
     time_col: str = "auto",
 ) -> "TacoDataset":
-    """
-    Filter level0 by datetime.
+    """Filter level0 by datetime.
 
     Automatically handles both TIMESTAMP and STRING date columns via TRY_CAST.
     Supports various datetime input formats.
@@ -145,8 +142,7 @@ def apply_simple_datetime_filter(
 
 
 def detect_geometry_column(columns: list[str]) -> str:
-    """
-    Auto-detect geometry column from available columns.
+    """Auto-detect geometry column from available columns.
 
     Priority order:
         1. istac:geometry (full geometry, most precise)
@@ -174,8 +170,7 @@ def detect_geometry_column(columns: list[str]) -> str:
 
 
 def detect_time_column(columns: list[str]) -> str:
-    """
-    Auto-detect time column from available columns.
+    """Auto-detect time column from available columns.
 
     Always uses time_start (not middle/end) for temporal filtering.
 
@@ -204,8 +199,7 @@ def detect_time_column(columns: list[str]) -> str:
 
 
 def parse_datetime(dt_input: str | datetime | tuple[datetime, datetime]) -> tuple[int, int | None]:
-    """
-    Parse datetime input to (start_epoch, end_epoch) tuple.
+    """Parse datetime input to (start_epoch, end_epoch) tuple.
 
     Supports multiple input formats:
         - String range: "2023-01-01/2023-12-31"
@@ -280,8 +274,7 @@ def parse_datetime(dt_input: str | datetime | tuple[datetime, datetime]) -> tupl
 
 
 def _parse_iso_string(dt_str: str) -> datetime:
-    """
-    Parse ISO 8601 string to UTC datetime.
+    """Parse ISO 8601 string to UTC datetime.
 
     Handles various ISO formats including 'Z' suffix.
     Assumes UTC if no timezone specified.
@@ -308,8 +301,7 @@ def _parse_iso_string(dt_str: str) -> datetime:
 
 
 def _ensure_utc(dt: datetime) -> datetime:
-    """
-    Ensure datetime is UTC-aware.
+    """Ensure datetime is UTC-aware.
 
     Args:
         dt: Datetime object (naive or aware)
