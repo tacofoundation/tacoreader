@@ -135,6 +135,86 @@ class TestConcatColumnModes:
         assert len(result.data) > 0
 
 
+class TestConcatSourcePath:
+    """Verify internal:source_path enables concat across different locations."""
+
+    def test_concat_preserves_source_paths(self, zip_deep_part1, zip_deep_part2):
+        """Each row retains its original source path after concat."""
+        ds1 = tacoreader.load(str(zip_deep_part1))
+        ds2 = tacoreader.load(str(zip_deep_part2))
+
+        n1 = len(ds1.data)
+        n2 = len(ds2.data)
+
+        result = concat([ds1, ds2])
+
+        table = result._duckdb.execute("SELECT * FROM level0").fetch_arrow_table()
+        assert "internal:source_path" in table.column_names
+
+        source_paths = table.column("internal:source_path").to_pylist()
+        
+        paths_ds1 = [p for p in source_paths if str(zip_deep_part1) in p]
+        paths_ds2 = [p for p in source_paths if str(zip_deep_part2) in p]
+
+        assert len(paths_ds1) == n1
+        assert len(paths_ds2) == n2
+
+    def test_concat_vsi_paths_use_correct_source(self, zip_deep_part1, zip_deep_part2):
+        """VSI paths reference the correct source file per row."""
+        ds1 = tacoreader.load(str(zip_deep_part1))
+        ds2 = tacoreader.load(str(zip_deep_part2))
+
+        result = concat([ds1, ds2])
+
+        table = result._duckdb.execute("SELECT * FROM level0").fetch_arrow_table()
+        
+        for row in table.to_pylist():
+            vsi_path = row["internal:gdal_vsi"]
+            source_path = row["internal:source_path"]
+            
+            assert source_path in vsi_path, (
+                f"VSI path '{vsi_path}' does not reference source '{source_path}'"
+            )
+
+    def test_concat_navigation_works_across_sources(self, zip_deep_part1, zip_deep_part2):
+        """read() works correctly for samples from different sources."""
+        ds1 = tacoreader.load(str(zip_deep_part1))
+        ds2 = tacoreader.load(str(zip_deep_part2))
+
+        result = concat([ds1, ds2])
+        tdf = result.data
+
+        first_sample = tdf.read(0)
+        assert first_sample is not None
+
+        last_sample = tdf.read(len(tdf) - 1)
+        assert last_sample is not None
+
+    def test_concat_folder_preserves_source_paths(self, folder_nested):
+        """FOLDER format also preserves source paths per row."""
+        ds1 = tacoreader.load(str(folder_nested))
+        ds2 = tacoreader.load(str(folder_nested))
+
+        result = concat([ds1, ds2])
+
+        table = result._duckdb.execute("SELECT * FROM level0").fetch_arrow_table()
+        assert "internal:source_path" in table.column_names
+
+        source_paths = set(table.column("internal:source_path").to_pylist())
+        assert len(source_paths) == 1
+        assert str(folder_nested).rstrip("/") in list(source_paths)[0]
+
+    def test_concat_tacocat_preserves_source_paths(self, tacocat_deep):
+        """TacoCat format preserves source paths per row."""
+        ds1 = tacoreader.load(str(tacocat_deep))
+        ds2 = tacoreader.load(str(tacocat_deep))
+
+        result = concat([ds1, ds2])
+
+        table = result._duckdb.execute("SELECT * FROM level0").fetch_arrow_table()
+        assert "internal:source_path" in table.column_names
+
+
 class TestValidateDatasets:
     """Unit tests for _validation module."""
 
@@ -171,20 +251,23 @@ class TestValidateColumnCompatibility:
 
     @staticmethod
     def _make_mock_dataset(columns: list[str], format_type: str = "zip"):
-        """Create minimal mock dataset for column validation."""
+        """Create minimal mock dataset for column validation.
+        
+        Registers table as 'level0_table' to match real dataset structure.
+        Real datasets have:
+          - level0_table: raw parquet data (offset, size, id, type, ...)
+          - level0: view with computed columns (gdal_vsi)
+        """
         import duckdb
         import pyarrow as pa
         from unittest.mock import Mock
         
-        # Create arrow table with specified columns
         data = {col: ["val"] for col in columns}
         arrow_table = pa.table(data)
         
-        # Mock DuckDB connection
         db = duckdb.connect(":memory:")
-        db.register("level0", arrow_table)
+        db.register("level0_table", arrow_table)
         
-        # Mock dataset
         mock_ds = Mock()
         mock_ds._format = format_type
         mock_ds._duckdb = db
@@ -231,7 +314,7 @@ class TestValidateColumnCompatibility:
         from tacoreader.concat._columns import validate_column_compatibility
         
         ds1 = self._make_mock_dataset(["id", "type", "internal:offset", "internal:size"])
-        ds2 = self._make_mock_dataset(["id", "type"])  # Missing offset/size
+        ds2 = self._make_mock_dataset(["id", "type"])
 
         with pytest.raises(TacoSchemaError, match="Critical columns missing"):
             validate_column_compatibility([ds1, ds2])
@@ -244,14 +327,12 @@ class TestValidateColumnCompatibility:
         ds1 = self._make_mock_dataset(folder_cols, format_type="folder")
         ds2 = self._make_mock_dataset(folder_cols, format_type="folder")
 
-        # Should NOT raise - folder doesn't need offset/size
         result = validate_column_compatibility([ds1, ds2])
         
         assert "level0" in result
 
     def test_identical_columns_no_warning(self):
         from tacoreader.concat._columns import validate_column_compatibility
-        import warnings
         
         cols = ["id", "type", "internal:parent_id", "internal:offset", "internal:size"]
         ds1 = self._make_mock_dataset(cols)
@@ -259,7 +340,6 @@ class TestValidateColumnCompatibility:
 
         with warnings.catch_warnings():
             warnings.simplefilter("error")
-            # Should NOT raise any warnings
             result = validate_column_compatibility([ds1, ds2])
         
         assert set(result["level0"]) == set(cols)

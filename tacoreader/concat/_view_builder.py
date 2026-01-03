@@ -3,7 +3,6 @@
 Uses strategy pattern to handle format-specific view creation (ZIP/FOLDER/TacoCat).
 """
 
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 import duckdb
@@ -18,10 +17,10 @@ from tacoreader._constants import (
     METADATA_RELATIVE_PATH,
     METADATA_SIZE,
     METADATA_SOURCE_FILE,
+    METADATA_SOURCE_PATH,
     PADDING_PREFIX,
     SAMPLE_TYPE_FILE,
     SAMPLE_TYPE_FOLDER,
-    TACOCAT_FOLDER_NAME,
     UNION_VIEW_SUFFIX,
 )
 from tacoreader._exceptions import TacoFormatError
@@ -56,7 +55,6 @@ class ViewBuilder:
         self.all_levels = all_levels
         self.target_columns_by_level = target_columns_by_level
         self.format_type = datasets[0]._format
-        self.root_path = datasets[0]._root_path
 
     def build_all_views(self) -> None:
         """Build all views: UNION ALL + format-specific final views."""
@@ -89,12 +87,12 @@ class ViewBuilder:
                 table_name = f"ds{ds_idx}_{level_key}{LEVEL_TABLE_SUFFIX}"
                 self.db.register(table_name, arrow_table)
 
-                # Build SELECT with aligned columns + internal:source_file
-                source_file = Path(ds._path).name
+                # Build SELECT with aligned columns + internal:source_path
+                source_path = ds._path.rstrip("/")
                 current_cols = set(arrow_table.column_names)
 
                 select_parts = self._build_select_parts(target_cols, current_cols)
-                select_parts.append(f"'{source_file}' AS \"{METADATA_SOURCE_FILE}\"")
+                select_parts.append(f"'{source_path}' AS \"{METADATA_SOURCE_PATH}\"")
 
                 union_parts.append(f"SELECT {', '.join(select_parts)} FROM {table_name}")
 
@@ -131,7 +129,10 @@ class ViewBuilder:
             raise TacoFormatError(f"Unknown format: {self.format_type}")
 
     def _create_zip_views(self) -> None:
-        """Create final views for ZIP format."""
+        """Create final views for ZIP format.
+
+        VSI: /vsisubfile/offset_size,source_path
+        """
         for level_key in sorted(self.all_levels):
             if not self._view_exists(level_key):  # pragma: no cover
                 continue
@@ -141,16 +142,17 @@ class ViewBuilder:
                 CREATE VIEW {level_key} AS
                 SELECT *,
                   '/vsisubfile/' || "{METADATA_OFFSET}" || '_' ||
-                  "{METADATA_SIZE}" || ',{self.root_path}' as "{METADATA_GDAL_VSI}"
+                  "{METADATA_SIZE}" || ',' || "{METADATA_SOURCE_PATH}" as "{METADATA_GDAL_VSI}"
                 FROM {level_key}{UNION_VIEW_SUFFIX}
                 WHERE {COLUMN_ID} NOT LIKE '{PADDING_PREFIX}%'
             """
             )
 
     def _create_folder_views(self) -> None:
-        """Create final views for FOLDER format."""
-        root = self.root_path if self.root_path.endswith("/") else self.root_path + "/"
+        """Create final views for FOLDER format.
 
+        VSI: source_path/DATA/id (level0) or source_path/DATA/relative_path (level1+)
+        """
         for level_key in sorted(self.all_levels):
             if not self._view_exists(level_key):  # pragma: no cover
                 continue
@@ -161,8 +163,8 @@ class ViewBuilder:
                     CREATE VIEW {level_key} AS
                     SELECT *,
                       CASE
-                        WHEN {COLUMN_TYPE} = '{SAMPLE_TYPE_FOLDER}' THEN '{root}DATA/' || {COLUMN_ID} || '/__meta__'
-                        WHEN {COLUMN_TYPE} = '{SAMPLE_TYPE_FILE}' THEN '{root}DATA/' || {COLUMN_ID}
+                        WHEN {COLUMN_TYPE} = '{SAMPLE_TYPE_FOLDER}' THEN "{METADATA_SOURCE_PATH}" || '/DATA/' || {COLUMN_ID} || '/__meta__'
+                        WHEN {COLUMN_TYPE} = '{SAMPLE_TYPE_FILE}' THEN "{METADATA_SOURCE_PATH}" || '/DATA/' || {COLUMN_ID}
                         ELSE NULL
                       END as "{METADATA_GDAL_VSI}"
                     FROM {level_key}{UNION_VIEW_SUFFIX}
@@ -175,8 +177,8 @@ class ViewBuilder:
                     CREATE VIEW {level_key} AS
                     SELECT *,
                       CASE
-                        WHEN {COLUMN_TYPE} = '{SAMPLE_TYPE_FOLDER}' THEN '{root}DATA/' || "{METADATA_RELATIVE_PATH}" || '__meta__'
-                        WHEN {COLUMN_TYPE} = '{SAMPLE_TYPE_FILE}' THEN '{root}DATA/' || "{METADATA_RELATIVE_PATH}"
+                        WHEN {COLUMN_TYPE} = '{SAMPLE_TYPE_FOLDER}' THEN "{METADATA_SOURCE_PATH}" || '/DATA/' || "{METADATA_RELATIVE_PATH}" || '__meta__'
+                        WHEN {COLUMN_TYPE} = '{SAMPLE_TYPE_FILE}' THEN "{METADATA_SOURCE_PATH}" || '/DATA/' || "{METADATA_RELATIVE_PATH}"
                         ELSE NULL
                       END as "{METADATA_GDAL_VSI}"
                     FROM {level_key}{UNION_VIEW_SUFFIX}
@@ -185,9 +187,14 @@ class ViewBuilder:
                 )
 
     def _create_tacocat_views(self) -> None:
-        """Create final views for TacoCat format."""
-        base_path = self._extract_base_path()
+        """Create final views for TacoCat format.
 
+        VSI: /vsisubfile/offset_size,source_path/source_file
+
+        TacoCat stores multiple .tacozip files in one directory.
+        source_path = path to .tacocat directory
+        source_file = individual .tacozip filename (from parquet)
+        """
         for level_key in sorted(self.all_levels):
             if not self._view_exists(level_key):  # pragma: no cover
                 continue
@@ -197,8 +204,7 @@ class ViewBuilder:
                 CREATE VIEW {level_key} AS
                 SELECT *,
                   '/vsisubfile/' || "{METADATA_OFFSET}" || '_' ||
-                  "{METADATA_SIZE}" || ',{base_path}' || "{METADATA_SOURCE_FILE}"
-                  as "{METADATA_GDAL_VSI}"
+                  "{METADATA_SIZE}" || ',' || "{METADATA_SOURCE_PATH}" || '/' || "{METADATA_SOURCE_FILE}" as "{METADATA_GDAL_VSI}"
                 FROM {level_key}{UNION_VIEW_SUFFIX}
                 WHERE {COLUMN_ID} NOT LIKE '{PADDING_PREFIX}%'
             """
@@ -211,23 +217,3 @@ class ViewBuilder:
                 f"SELECT 1 FROM information_schema.tables WHERE table_name = '{level_key}{UNION_VIEW_SUFFIX}'"
             ).fetchone()
         )
-
-    def _extract_base_path(self) -> str:
-        """Extract base directory for TacoCat format.
-
-        Removes .tacocat folder suffix to get parent directory containing
-        both .tacocat/ and source .tacozip files.
-        """
-        clean_path = self.root_path.rstrip("/")
-
-        if clean_path.endswith(f"/{TACOCAT_FOLDER_NAME}"):
-            base_path = clean_path[: -(len(TACOCAT_FOLDER_NAME) + 1)]
-        elif clean_path.endswith(TACOCAT_FOLDER_NAME):  # pragma: no cover
-            base_path = clean_path[: -len(TACOCAT_FOLDER_NAME)]
-        else:  # pragma: no cover
-            base_path = clean_path
-
-        if not base_path.endswith("/"):
-            base_path += "/"
-
-        return base_path
