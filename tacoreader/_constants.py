@@ -76,6 +76,9 @@ VALID_SAMPLE_TYPES = frozenset({SAMPLE_TYPE_FILE, SAMPLE_TYPE_FOLDER})
 METADATA_PARENT_ID = "internal:parent_id"
 """Parent sample ID in previous level (enables relational queries)."""
 
+METADATA_CURRENT_ID = "internal:current_id"
+"""Current sample ID (int64) for parent-child relationships. Links to internal:parent_id in next level."""
+
 METADATA_OFFSET = "internal:offset"
 """Byte offset in container file where data starts. Only relevant for ZIP/TacoCat."""
 

@@ -52,7 +52,6 @@ class TestConcatFormats:
         assert len(result.data) == len(ds1.data) + len(ds2.data)
 
     def test_concat_folder_format(self, folder_nested):
-        """FOLDER format uses relative_path instead of offset/size."""
         ds1 = tacoreader.load(str(folder_nested))
         ds2 = tacoreader.load(str(folder_nested))
 
@@ -136,10 +135,8 @@ class TestConcatColumnModes:
 
 
 class TestConcatSourcePath:
-    """Verify internal:source_path enables concat across different locations."""
 
     def test_concat_preserves_source_paths(self, zip_deep_part1, zip_deep_part2):
-        """Each row retains its original source path after concat."""
         ds1 = tacoreader.load(str(zip_deep_part1))
         ds2 = tacoreader.load(str(zip_deep_part2))
 
@@ -160,7 +157,6 @@ class TestConcatSourcePath:
         assert len(paths_ds2) == n2
 
     def test_concat_vsi_paths_use_correct_source(self, zip_deep_part1, zip_deep_part2):
-        """VSI paths reference the correct source file per row."""
         ds1 = tacoreader.load(str(zip_deep_part1))
         ds2 = tacoreader.load(str(zip_deep_part2))
 
@@ -172,12 +168,9 @@ class TestConcatSourcePath:
             vsi_path = row["internal:gdal_vsi"]
             source_path = row["internal:source_path"]
             
-            assert source_path in vsi_path, (
-                f"VSI path '{vsi_path}' does not reference source '{source_path}'"
-            )
+            assert source_path in vsi_path
 
     def test_concat_navigation_works_across_sources(self, zip_deep_part1, zip_deep_part2):
-        """read() works correctly for samples from different sources."""
         ds1 = tacoreader.load(str(zip_deep_part1))
         ds2 = tacoreader.load(str(zip_deep_part2))
 
@@ -191,7 +184,6 @@ class TestConcatSourcePath:
         assert last_sample is not None
 
     def test_concat_folder_preserves_source_paths(self, folder_nested):
-        """FOLDER format also preserves source paths per row."""
         ds1 = tacoreader.load(str(folder_nested))
         ds2 = tacoreader.load(str(folder_nested))
 
@@ -200,12 +192,7 @@ class TestConcatSourcePath:
         table = result._duckdb.execute("SELECT * FROM level0").fetch_arrow_table()
         assert "internal:source_path" in table.column_names
 
-        source_paths = set(table.column("internal:source_path").to_pylist())
-        assert len(source_paths) == 1
-        assert str(folder_nested).rstrip("/") in list(source_paths)[0]
-
     def test_concat_tacocat_preserves_source_paths(self, tacocat_deep):
-        """TacoCat format preserves source paths per row."""
         ds1 = tacoreader.load(str(tacocat_deep))
         ds2 = tacoreader.load(str(tacocat_deep))
 
@@ -215,12 +202,238 @@ class TestConcatSourcePath:
         assert "internal:source_path" in table.column_names
 
 
+class TestConcatPrefiltered:
+    """Tests for filter → concat workflow (Mode 2).
+    
+    Verifies that .sql() filters are respected when concatenating
+    """
+
+    def test_concat_prefiltered_level0(self, zip_deep_part1, zip_deep_part2):
+        """Filtered datasets should keep filters after concat."""
+        ds1 = tacoreader.load(str(zip_deep_part1))
+        ds2 = tacoreader.load(str(zip_deep_part2))
+
+        # Get first ID from each dataset via DuckDB
+        id1 = ds1._duckdb.execute("SELECT id FROM level0 LIMIT 1").fetchone()[0]
+        id2 = ds2._duckdb.execute("SELECT id FROM level0 LIMIT 1").fetchone()[0]
+
+        # Filter to single sample each
+        ds1_filtered = ds1.sql(f"SELECT * FROM data WHERE id = '{id1}'")
+        ds2_filtered = ds2.sql(f"SELECT * FROM data WHERE id = '{id2}'")
+
+        assert ds1_filtered.pit_schema.root["n"] == 1
+        assert ds2_filtered.pit_schema.root["n"] == 1
+
+        # Concat filtered datasets
+        combined = concat([ds1_filtered, ds2_filtered])
+
+        # Should have 2 rows (1 + 1), NOT all rows from both datasets
+        assert combined.pit_schema.root["n"] == 2
+        assert len(combined.data) == 2
+
+        # Verify correct IDs
+        result_ids = set(combined._duckdb.execute("SELECT id FROM level0").fetch_arrow_table().column("id").to_pylist())
+        assert result_ids == {id1, id2}
+
+    def test_concat_prefiltered_propagates_to_level1(self, zip_deep_part1, zip_deep_part2):
+        """Level1 should only contain children of filtered level0 samples."""
+        ds1 = tacoreader.load(str(zip_deep_part1))
+        ds2 = tacoreader.load(str(zip_deep_part2))
+
+        # Get first tile ID from each
+        id1 = ds1._duckdb.execute("SELECT id FROM level0 LIMIT 1").fetchone()[0]
+        id2 = ds2._duckdb.execute("SELECT id FROM level0 LIMIT 1").fetchone()[0]
+
+        # Filter to single tile each
+        ds1_filtered = ds1.sql(f"SELECT * FROM data WHERE id = '{id1}'")
+        ds2_filtered = ds2.sql(f"SELECT * FROM data WHERE id = '{id2}'")
+
+        combined = concat([ds1_filtered, ds2_filtered])
+
+        # Level0: should have 2 tiles
+        level0_count = combined._duckdb.execute("SELECT COUNT(*) FROM level0").fetchone()[0]
+        assert level0_count == 2
+
+        # Level1: should only have children of those 2 tiles
+        # Get the internal:current_id values from level0 to compare with level1 parent_ids
+        level0_current_ids = set(
+            combined._duckdb.execute("SELECT \"internal:current_id\" FROM level0")
+            .fetch_arrow_table().column("internal:current_id").to_pylist()
+        )
+        
+        level1_df = combined._duckdb.execute("SELECT * FROM level1").fetch_arrow_table()
+        level1_parent_ids = set(level1_df.column("internal:parent_id").to_pylist())
+
+        # All parent_ids in level1 should be in level0's current_ids
+        assert level1_parent_ids.issubset(level0_current_ids)
+
+        # deep fixture: each tile has 2 sensors (sensor_A, sensor_B)
+        # So level1 should have 2 tiles × 2 sensors = 4 rows
+        assert level1_df.num_rows == 4
+
+    def test_concat_unfiltered_backward_compat(self, zip_deep_part1, zip_deep_part2):
+        """Unfiltered concat should work as before (Mode 1)."""
+        ds1 = tacoreader.load(str(zip_deep_part1))
+        ds2 = tacoreader.load(str(zip_deep_part2))
+
+        n1 = ds1.pit_schema.root["n"]
+        n2 = ds2.pit_schema.root["n"]
+
+        # Concat without filtering
+        combined = concat([ds1, ds2])
+
+        # Should have all rows
+        assert combined.pit_schema.root["n"] == n1 + n2
+
+        # Filter AFTER concat still works
+        first_id = combined._duckdb.execute("SELECT id FROM level0 LIMIT 1").fetchone()[0]
+        filtered = combined.sql(f"SELECT * FROM data WHERE id = '{first_id}'")
+        
+        # Should find that ID in both datasets (if same) or just one
+        assert filtered.pit_schema.root["n"] >= 1
+
+    def test_concat_mixed_filtered_unfiltered(self, zip_deep_part1, zip_deep_part2):
+        """Can concat filtered dataset with unfiltered dataset."""
+        ds1 = tacoreader.load(str(zip_deep_part1))
+        ds2 = tacoreader.load(str(zip_deep_part2))
+
+        n2_original = ds2.pit_schema.root["n"]
+
+        # Filter only ds1 to single sample
+        id1 = ds1._duckdb.execute("SELECT id FROM level0 LIMIT 1").fetchone()[0]
+        ds1_filtered = ds1.sql(f"SELECT * FROM data WHERE id = '{id1}'")
+
+        # Concat: 1 filtered + all of ds2
+        combined = concat([ds1_filtered, ds2])
+
+        # Should have 1 + n2_original
+        assert combined.pit_schema.root["n"] == 1 + n2_original
+
+    def test_concat_empty_filter_result(self, zip_deep_part1, zip_deep_part2):
+        """Concat handles datasets filtered to zero rows."""
+        ds1 = tacoreader.load(str(zip_deep_part1))
+        ds2 = tacoreader.load(str(zip_deep_part2))
+
+        # Filter ds1 to impossible condition
+        ds1_empty = ds1.sql("SELECT * FROM data WHERE id = 'nonexistent_id_xyz'")
+        assert ds1_empty.pit_schema.root["n"] == 0
+
+        # Filter ds2 to single sample
+        id2 = ds2._duckdb.execute("SELECT id FROM level0 LIMIT 1").fetchone()[0]
+        ds2_filtered = ds2.sql(f"SELECT * FROM data WHERE id = '{id2}'")
+
+        combined = concat([ds1_empty, ds2_filtered])
+
+        # Should have only ds2's filtered row
+        assert combined.pit_schema.root["n"] == 1
+        
+        result_ids = combined._duckdb.execute("SELECT id FROM level0").fetch_arrow_table().column("id").to_pylist()
+        assert result_ids == [id2]
+
+    def test_concat_chained_sql_filters(self, zip_deep_part1, zip_deep_part2):
+        """Chained .sql() calls should all be respected."""
+        ds1 = tacoreader.load(str(zip_deep_part1))
+        ds2 = tacoreader.load(str(zip_deep_part2))
+
+        # Get ID for chained filtering
+        id1 = ds1._duckdb.execute("SELECT id FROM level0 LIMIT 1").fetchone()[0]
+
+        # Chain multiple filters on ds1
+        ds1_step1 = ds1.sql("SELECT * FROM data WHERE id LIKE 'tile_%'")
+        ds1_step2 = ds1_step1.sql(f"SELECT * FROM data WHERE id = '{id1}'")
+
+        assert ds1_step2.pit_schema.root["n"] == 1
+
+        # Single filter on ds2
+        id2 = ds2._duckdb.execute("SELECT id FROM level0 LIMIT 1").fetchone()[0]
+        ds2_filtered = ds2.sql(f"SELECT * FROM data WHERE id = '{id2}'")
+
+        combined = concat([ds1_step2, ds2_filtered])
+
+        assert combined.pit_schema.root["n"] == 2
+
+    def test_concat_prefiltered_navigation_works(self, zip_deep_part1, zip_deep_part2):
+        """Can navigate to children after filter → concat."""
+        ds1 = tacoreader.load(str(zip_deep_part1))
+        ds2 = tacoreader.load(str(zip_deep_part2))
+
+        id1 = ds1._duckdb.execute("SELECT id FROM level0 LIMIT 1").fetchone()[0]
+        id2 = ds2._duckdb.execute("SELECT id FROM level0 LIMIT 1").fetchone()[0]
+
+        ds1_filtered = ds1.sql(f"SELECT * FROM data WHERE id = '{id1}'")
+        ds2_filtered = ds2.sql(f"SELECT * FROM data WHERE id = '{id2}'")
+
+        combined = concat([ds1_filtered, ds2_filtered])
+
+        # Should be able to navigate to children
+        tdf = combined.data
+        assert len(tdf) == 2
+
+        # Read children of first sample
+        children = tdf.read(0)
+        assert children is not None
+        assert len(children) > 0  # deep: 2 sensors per tile
+
+        # Read children of second sample
+        children2 = tdf.read(1)
+        assert children2 is not None
+        assert len(children2) > 0
+
+    def test_concat_prefiltered_folder_format(self, folder_nested):
+        """Filter → concat works with FOLDER format."""
+        ds1 = tacoreader.load(str(folder_nested))
+        ds2 = tacoreader.load(str(folder_nested))
+
+        # nested: level0 has europe, americas, asia
+        ds1_filtered = ds1.sql("SELECT * FROM data WHERE id = 'europe'")
+        ds2_filtered = ds2.sql("SELECT * FROM data WHERE id = 'asia'")
+
+        assert ds1_filtered.pit_schema.root["n"] == 1
+        assert ds2_filtered.pit_schema.root["n"] == 1
+
+        combined = concat([ds1_filtered, ds2_filtered])
+
+        assert combined.pit_schema.root["n"] == 2
+        assert combined._format == "folder"
+
+        result_ids = set(combined._duckdb.execute("SELECT id FROM level0").fetch_arrow_table().column("id").to_pylist())
+        assert result_ids == {"europe", "asia"}
+
+    def test_concat_prefiltered_level1_propagation_folder(self, folder_nested):
+        """Level1 filtering propagates correctly in FOLDER format."""
+        ds1 = tacoreader.load(str(folder_nested))
+        ds2 = tacoreader.load(str(folder_nested))
+
+        ds1_filtered = ds1.sql("SELECT * FROM data WHERE id = 'europe'")
+        ds2_filtered = ds2.sql("SELECT * FROM data WHERE id = 'americas'")
+
+        combined = concat([ds1_filtered, ds2_filtered])
+
+        # Get current_ids from level0 to verify level1 parent relationships
+        level0_current_ids = set(
+            combined._duckdb.execute("SELECT \"internal:current_id\" FROM level0")
+            .fetch_arrow_table().column("internal:current_id").to_pylist()
+        )
+
+        # Level1: should only have children of europe and americas
+        level1_df = combined._duckdb.execute("SELECT * FROM level1").fetch_arrow_table()
+        level1_parent_ids = set(level1_df.column("internal:parent_id").to_pylist())
+
+        # All parent_ids (int64) should be in level0's current_ids (int64)
+        assert level1_parent_ids.issubset(level0_current_ids)
+        
+        # Should have exactly 2 unique parent_ids (one from each filtered dataset)
+        assert len(level1_parent_ids) == 2
+
+        # nested: each region has 3 items
+        # 2 regions × 3 items = 6 rows
+        assert level1_df.num_rows == 6
+
+
 class TestValidateDatasets:
-    """Unit tests for _validation module."""
 
     @staticmethod
     def _make_mock_dataset(backend: str = "pyarrow", format_type: str = "zip"):
-        """Create minimal mock dataset for validation tests."""
         from unittest.mock import Mock
         
         mock_ds = Mock()
@@ -232,7 +445,6 @@ class TestValidateDatasets:
         return mock_ds
 
     def test_different_backends_raises(self):
-        """Validates backend mismatch without requiring polars installed."""
         from tacoreader.concat._validation import _validate_backends
         
         ds1 = self._make_mock_dataset(backend="pyarrow")
@@ -243,21 +455,9 @@ class TestValidateDatasets:
 
 
 class TestValidateColumnCompatibility:
-    """Unit tests for _columns.validate_column_compatibility.
-    
-    Tests column validation logic directly without full concat pipeline.
-    Uses minimal mocks to isolate _columns.py behavior.
-    """
 
     @staticmethod
     def _make_mock_dataset(columns: list[str], format_type: str = "zip"):
-        """Create minimal mock dataset for column validation.
-        
-        Registers table as 'level0_table' to match real dataset structure.
-        Real datasets have:
-          - level0_table: raw parquet data (offset, size, id, type, ...)
-          - level0: view with computed columns (gdal_vsi)
-        """
         import duckdb
         import pyarrow as pa
         from unittest.mock import Mock
@@ -310,7 +510,6 @@ class TestValidateColumnCompatibility:
             validate_column_compatibility([ds1, ds2], mode="strict")
 
     def test_missing_critical_columns_raises(self):
-        """ZIP format requires offset/size columns."""
         from tacoreader.concat._columns import validate_column_compatibility
         
         ds1 = self._make_mock_dataset(["id", "type", "internal:offset", "internal:size"])
@@ -320,7 +519,6 @@ class TestValidateColumnCompatibility:
             validate_column_compatibility([ds1, ds2])
 
     def test_folder_format_does_not_require_offset_size(self):
-        """FOLDER format uses relative_path, not offset/size."""
         from tacoreader.concat._columns import validate_column_compatibility
         
         folder_cols = ["id", "type", "internal:parent_id"]

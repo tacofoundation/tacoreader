@@ -6,14 +6,18 @@ Uses strategy pattern to handle format-specific view creation (ZIP/FOLDER/TacoCa
 from typing import TYPE_CHECKING
 
 import duckdb
+import pyarrow as pa
+import pyarrow.compute as pc
 
 from tacoreader._constants import (
     COLUMN_ID,
     COLUMN_TYPE,
     LEVEL_TABLE_SUFFIX,
     LEVEL_VIEW_PREFIX,
+    METADATA_CURRENT_ID,
     METADATA_GDAL_VSI,
     METADATA_OFFSET,
+    METADATA_PARENT_ID,
     METADATA_RELATIVE_PATH,
     METADATA_SIZE,
     METADATA_SOURCE_FILE,
@@ -55,6 +59,8 @@ class ViewBuilder:
         self.all_levels = all_levels
         self.target_columns_by_level = target_columns_by_level
         self.format_type = datasets[0]._format
+        # Track valid current_ids (int64) per dataset per level for hierarchical filtering
+        self._valid_ids: dict[int, dict[str, set]] = {i: {} for i in range(len(datasets))}
 
     def build_all_views(self) -> None:
         """Build all views: UNION ALL + format-specific final views."""
@@ -63,9 +69,13 @@ class ViewBuilder:
         logger.debug("Created all DuckDB views")
 
     def _create_union_views(self) -> None:
-        """Create UNION ALL views for each level."""
+        """Create UNION ALL views for each level.
+
+        Level0: Reads from ds._view_name (respects .sql() filters)
+        Level1+: Reads from raw table, filtered by valid parent_ids from previous level
+        """
         for level_key in sorted(self.all_levels):
-            if level_key not in self.target_columns_by_level:  # pragma: no cover
+            if level_key not in self.target_columns_by_level:
                 continue
 
             logger.debug(f"  Consolidating {level_key}...")
@@ -77,11 +87,17 @@ class ViewBuilder:
                 max_depth = ds.pit_schema.max_depth()
                 available_levels = [f"{LEVEL_VIEW_PREFIX}{i}" for i in range(max_depth + 1)]
 
-                if level_key not in available_levels:  # pragma: no cover
+                if level_key not in available_levels:
                     continue
 
-                # Extract PyArrow table from original dataset
-                arrow_table = ds._duckdb.execute(f"SELECT * FROM {level_key}{LEVEL_TABLE_SUFFIX}").fetch_arrow_table()
+                # Get arrow table respecting filters
+                arrow_table = self._get_level_table(ds, ds_idx, level_key)
+
+                if arrow_table.num_rows == 0:
+                    continue  # Skip empty tables
+
+                # Track current_ids for filtering next level
+                self._track_valid_ids(ds_idx, level_key, arrow_table)
 
                 # Register in new connection with unique name
                 table_name = f"ds{ds_idx}_{level_key}{LEVEL_TABLE_SUFFIX}"
@@ -96,7 +112,7 @@ class ViewBuilder:
 
                 union_parts.append(f"SELECT {', '.join(select_parts)} FROM {table_name}")
 
-            if not union_parts:  # pragma: no cover
+            if not union_parts:
                 continue
 
             # Create consolidated view with UNION ALL
@@ -104,6 +120,44 @@ class ViewBuilder:
             self.db.execute(f"CREATE VIEW {level_key}{UNION_VIEW_SUFFIX} AS {union_query}")
 
             logger.debug(f"    {level_key}: {len(union_parts)} dataset(s), {len(target_cols)} columns")
+
+    def _get_level_table(self, ds: "TacoDataset", ds_idx: int, level_key: str) -> pa.Table:
+        """Get arrow table for level, respecting filters.
+
+        Level0: Read from ds._view_name (filtered view)
+        Level1+: Read from raw table, filter by valid parent_ids if tracking available
+        """
+        if level_key == f"{LEVEL_VIEW_PREFIX}0":
+            # Level0: Read from filtered view (respects .sql() filters)
+            return ds._duckdb.execute(f"SELECT * FROM {ds._view_name}").fetch_arrow_table()
+        else:
+            # Level1+: Filter by parent_ids from previous level
+            level_num = int(level_key.replace(LEVEL_VIEW_PREFIX, ""))
+            prev_level = f"{LEVEL_VIEW_PREFIX}{level_num - 1}"
+            parent_ids = self._valid_ids[ds_idx].get(prev_level)
+
+            # If no tracking available, read full table (backward compat)
+            if parent_ids is None:
+                return ds._duckdb.execute(f"SELECT * FROM {level_key}{LEVEL_TABLE_SUFFIX}").fetch_arrow_table()
+
+            return self._get_filtered_children(ds, level_key, parent_ids)
+
+    def _get_filtered_children(self, ds: "TacoDataset", level_key: str, parent_ids: set) -> pa.Table:
+        """Get level table filtered to children of valid parents."""
+        table = ds._duckdb.execute(f"SELECT * FROM {level_key}{LEVEL_TABLE_SUFFIX}").fetch_arrow_table()
+
+        if not parent_ids:
+            # Return empty table with same schema
+            return table.slice(0, 0)
+
+        # Filter rows where parent_id is in valid parent_ids (both int64)
+        mask = pc.is_in(table.column(METADATA_PARENT_ID), value_set=pa.array(list(parent_ids), type=pa.int64()))
+        return table.filter(mask)
+
+    def _track_valid_ids(self, ds_idx: int, level_key: str, table: pa.Table) -> None:
+        """Track valid current_ids (int64) for filtering next level's parent_ids."""
+        if METADATA_CURRENT_ID in table.column_names:
+            self._valid_ids[ds_idx][level_key] = set(table.column(METADATA_CURRENT_ID).to_pylist())
 
     @staticmethod
     def _build_select_parts(target_cols: list[str], current_cols: set[str]) -> list[str]:
@@ -125,41 +179,32 @@ class ViewBuilder:
             self._create_folder_views()
         elif self.format_type == "tacocat":
             self._create_tacocat_views()
-        else:  # pragma: no cover
+        else:
             raise TacoFormatError(f"Unknown format: {self.format_type}")
 
     def _create_zip_views(self) -> None:
-        """Create final views for ZIP format.
-
-        VSI: /vsisubfile/offset_size,source_path
-        """
+        """Create final views for ZIP format."""
         for level_key in sorted(self.all_levels):
-            if not self._view_exists(level_key):  # pragma: no cover
+            if not self._view_exists(level_key):
                 continue
 
-            self.db.execute(
-                f"""
+            self.db.execute(f"""
                 CREATE VIEW {level_key} AS
                 SELECT *,
                   '/vsisubfile/' || "{METADATA_OFFSET}" || '_' ||
                   "{METADATA_SIZE}" || ',' || "{METADATA_SOURCE_PATH}" as "{METADATA_GDAL_VSI}"
                 FROM {level_key}{UNION_VIEW_SUFFIX}
                 WHERE {COLUMN_ID} NOT LIKE '{PADDING_PREFIX}%'
-            """
-            )
+            """)
 
     def _create_folder_views(self) -> None:
-        """Create final views for FOLDER format.
-
-        VSI: source_path/DATA/id (level0) or source_path/DATA/relative_path (level1+)
-        """
+        """Create final views for FOLDER format."""
         for level_key in sorted(self.all_levels):
-            if not self._view_exists(level_key):  # pragma: no cover
+            if not self._view_exists(level_key):
                 continue
 
             if level_key == f"{LEVEL_VIEW_PREFIX}0":
-                self.db.execute(
-                    f"""
+                self.db.execute(f"""
                     CREATE VIEW {level_key} AS
                     SELECT *,
                       CASE
@@ -169,11 +214,9 @@ class ViewBuilder:
                       END as "{METADATA_GDAL_VSI}"
                     FROM {level_key}{UNION_VIEW_SUFFIX}
                     WHERE {COLUMN_ID} NOT LIKE '{PADDING_PREFIX}%'
-                """
-                )
+                """)
             else:
-                self.db.execute(
-                    f"""
+                self.db.execute(f"""
                     CREATE VIEW {level_key} AS
                     SELECT *,
                       CASE
@@ -183,32 +226,22 @@ class ViewBuilder:
                       END as "{METADATA_GDAL_VSI}"
                     FROM {level_key}{UNION_VIEW_SUFFIX}
                     WHERE {COLUMN_ID} NOT LIKE '{PADDING_PREFIX}%'
-                """
-                )
+                """)
 
     def _create_tacocat_views(self) -> None:
-        """Create final views for TacoCat format.
-
-        VSI: /vsisubfile/offset_size,source_path/source_file
-
-        TacoCat stores multiple .tacozip files in one directory.
-        source_path = path to .tacocat directory
-        source_file = individual .tacozip filename (from parquet)
-        """
+        """Create final views for TacoCat format."""
         for level_key in sorted(self.all_levels):
-            if not self._view_exists(level_key):  # pragma: no cover
+            if not self._view_exists(level_key):
                 continue
 
-            self.db.execute(
-                f"""
+            self.db.execute(f"""
                 CREATE VIEW {level_key} AS
                 SELECT *,
                   '/vsisubfile/' || "{METADATA_OFFSET}" || '_' ||
                   "{METADATA_SIZE}" || ',' || "{METADATA_SOURCE_PATH}" || '/' || "{METADATA_SOURCE_FILE}" as "{METADATA_GDAL_VSI}"
                 FROM {level_key}{UNION_VIEW_SUFFIX}
                 WHERE {COLUMN_ID} NOT LIKE '{PADDING_PREFIX}%'
-            """
-            )
+            """)
 
     def _view_exists(self, level_key: str) -> bool:
         """Check if union view exists for given level."""
