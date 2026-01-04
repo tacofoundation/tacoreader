@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 import duckdb
 import pyarrow as pa
 import pyarrow.compute as pc
+from tqdm import tqdm
 
 from tacoreader._constants import (
     COLUMN_ID,
@@ -45,6 +46,7 @@ class ViewBuilder:
         datasets: list["TacoDataset"],
         all_levels: set[str],
         target_columns_by_level: dict[str, list[str]],
+        show_progress: bool = False,
     ):
         """Initialize view builder.
 
@@ -53,12 +55,14 @@ class ViewBuilder:
             datasets: List of datasets to concatenate
             all_levels: Set of all available level views
             target_columns_by_level: Dict mapping level_key -> final column list
+            show_progress: Whether to show tqdm progress bar
         """
         self.db = db
         self.datasets = datasets
         self.all_levels = all_levels
         self.target_columns_by_level = target_columns_by_level
         self.format_type = datasets[0]._format
+        self.show_progress = show_progress
         # Track valid current_ids (int64) per dataset per level for hierarchical filtering
         self._valid_ids: dict[int, dict[str, set]] = {i: {} for i in range(len(datasets))}
 
@@ -83,7 +87,17 @@ class ViewBuilder:
             target_cols = self.target_columns_by_level[level_key]
             union_parts = []
 
-            for ds_idx, ds in enumerate(self.datasets):
+            # Progress bar for datasets (only if show_progress and multiple datasets)
+            dataset_iter = enumerate(self.datasets)
+            if self.show_progress:
+                dataset_iter = tqdm(
+                    list(dataset_iter),
+                    desc=f"  {level_key}",
+                    leave=False,
+                    unit="ds",
+                )
+
+            for ds_idx, ds in dataset_iter:
                 max_depth = ds.pit_schema.max_depth()
                 available_levels = [f"{LEVEL_VIEW_PREFIX}{i}" for i in range(max_depth + 1)]
 
@@ -104,6 +118,7 @@ class ViewBuilder:
                 self.db.register(table_name, arrow_table)
 
                 # Build SELECT with aligned columns + internal:source_path
+                # FIX: Use _root_path (VSI format) instead of _path (raw URL)
                 source_path = ds._root_path.rstrip("/")
                 current_cols = set(arrow_table.column_names)
 

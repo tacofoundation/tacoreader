@@ -6,6 +6,8 @@ Supports single files or lists (automatically concatenated).
 
 from pathlib import Path
 
+from tqdm import tqdm
+
 from tacoreader._constants import DEFAULT_VIEW_NAME, LEVEL_VIEW_PREFIX
 from tacoreader._exceptions import TacoQueryError
 from tacoreader._format import detect_and_resolve_format
@@ -68,8 +70,11 @@ def load(
         if len(path) == 1:
             return load(path[0], base_path, backend)
 
-        # Multiple files - load and concatenate
-        datasets = [load(p, base_path, backend) for p in path]
+        # Multiple files - load with progress bar and concatenate
+        datasets = []
+        path_iter = tqdm(path, desc="Loading datasets", unit="ds") if len(path) >= 3 else path
+        for p in path_iter:
+            datasets.append(load(p, base_path, backend))
 
         from tacoreader.concat import concat
 

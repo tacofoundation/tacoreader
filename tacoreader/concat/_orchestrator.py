@@ -10,6 +10,7 @@ Coordinates the 4-phase concat process:
 from typing import TYPE_CHECKING
 
 import duckdb
+from tqdm import tqdm
 
 from tacoreader._constants import DEFAULT_VIEW_NAME, LEVEL_VIEW_PREFIX
 from tacoreader._exceptions import TacoQueryError
@@ -49,15 +50,17 @@ def concat(datasets: list["TacoDataset"], column_mode: str = "intersection") -> 
     if len(datasets) < 2:
         raise TacoQueryError(f"Need at least 2 datasets to concat, got {len(datasets)}")
 
-    logger.info(f"Concatenating {len(datasets)} datasets...")
+    n_datasets = len(datasets)
+    logger.info(f"Concatenating {n_datasets} datasets...")
 
+    # Phase 1: Validation
     validate_datasets(datasets)
 
     # Use backend from first dataset (all are the same after validation)
     backend = datasets[0]._dataframe_backend
     logger.debug(f"Using DataFrame backend: {backend}")
 
-    # Validate columns and get target columns
+    # Phase 2: Column resolution
     logger.debug(f"Validating columns (mode={column_mode})...")
     from tacoreader.concat._columns import validate_column_compatibility
 
@@ -70,6 +73,7 @@ def concat(datasets: list["TacoDataset"], column_mode: str = "intersection") -> 
     consolidated_schema = _merge_schemas(datasets)
     logger.debug("Merged schemas")
 
+    # Phase 3: Build views
     logger.debug("Building DuckDB views...")
 
     # Create new DuckDB connection with spatial extension
@@ -78,20 +82,22 @@ def concat(datasets: list["TacoDataset"], column_mode: str = "intersection") -> 
     # Get all available levels
     all_levels = _get_all_levels(datasets)
 
-    # Build all views using ViewBuilder
+    # Build all views using ViewBuilder (with progress bar)
     view_builder = ViewBuilder(
         db=db,
         datasets=datasets,
         all_levels=all_levels,
         target_columns_by_level=target_columns_by_level,
+        show_progress=n_datasets >= 3,  # Show progress for 3+ datasets
     )
     view_builder.build_all_views()
 
     # Create 'data' view pointing to level0
     db.execute(f"CREATE VIEW {DEFAULT_VIEW_NAME} AS SELECT * FROM {LEVEL_VIEW_PREFIX}0")
 
+    # Phase 4: Finalization
     total_samples = consolidated_schema.root["n"]
-    logger.info(f"Concatenated {len(datasets)} datasets ({total_samples:,} total samples)")
+    logger.info(f"Concatenated {n_datasets} datasets ({total_samples:,} total samples)")
 
     # Build TacoDataset
     dataset = TacoDataset.model_construct(
