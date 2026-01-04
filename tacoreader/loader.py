@@ -4,6 +4,8 @@ Main entry point. Auto-detects format and dispatches to backend.
 Supports single files or lists (automatically concatenated).
 """
 
+from pathlib import Path
+
 from tacoreader._constants import DEFAULT_VIEW_NAME, LEVEL_VIEW_PREFIX
 from tacoreader._exceptions import TacoQueryError
 from tacoreader._format import detect_and_resolve_format
@@ -14,8 +16,8 @@ from tacoreader.storage import create_backend, load_dataset
 
 
 def load(
-    path: str | list[str],
-    base_path: str | None = None,
+    path: str | Path | list[str | Path],
+    base_path: str | Path | None = None,
     backend: str | None = None,
 ) -> TacoDataset:
     """Load TACO dataset(s) with auto format detection.
@@ -51,6 +53,12 @@ def load(
     from tacoreader import _DATAFRAME_BACKEND
 
     backend = backend or _DATAFRAME_BACKEND
+
+    # Normalize paths to strings
+    path = [str(p) for p in path] if isinstance(path, list) else str(path)
+
+    if base_path is not None:
+        base_path = str(base_path)
 
     # Handle list of paths
     if isinstance(path, list):

@@ -1,5 +1,7 @@
 """Tests for tacoreader.load() function."""
 
+from pathlib import Path
+
 import pytest
 import tacoreader
 from tacoreader._exceptions import TacoQueryError, TacoFormatError, TacoIOError
@@ -37,6 +39,40 @@ class TestLoadFormats:
         data = ds.data
         assert len(data) > 0
         assert "id" in data.columns
+
+
+class TestLoadPathTypes:
+    """Test that load() accepts both str and Path objects."""
+
+    def test_load_path_object(self, zip_flat):
+        path = Path(zip_flat)
+        ds = tacoreader.load(path)
+        assert isinstance(ds, TacoDataset)
+        assert ds._format == "zip"
+
+    def test_load_path_object_folder(self, folder_flat):
+        path = Path(folder_flat)
+        ds = tacoreader.load(path)
+        assert isinstance(ds, TacoDataset)
+        assert ds._format == "folder"
+
+    def test_load_list_of_paths(self, zip_deep_part1, zip_deep_part2):
+        paths = [Path(zip_deep_part1), Path(zip_deep_part2)]
+        ds = tacoreader.load(paths)
+        assert isinstance(ds, TacoDataset)
+
+    def test_load_mixed_str_and_path(self, zip_deep_part1, zip_deep_part2):
+        paths = [str(zip_deep_part1), Path(zip_deep_part2)]
+        ds = tacoreader.load(paths)
+        assert isinstance(ds, TacoDataset)
+
+    def test_load_single_path_in_list(self, zip_flat):
+        ds = tacoreader.load([Path(zip_flat)])
+        assert isinstance(ds, TacoDataset)
+
+    def test_base_path_accepts_path_object(self, tacocat_deep, tmp_path):
+        ds = tacoreader.load(Path(tacocat_deep), base_path=Path(tmp_path))
+        assert str(tmp_path) in ds._root_path
 
 
 class TestLoadBackend:

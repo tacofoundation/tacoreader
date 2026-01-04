@@ -1,3 +1,16 @@
+## [2.4.0] - 2025-01-04
+
+### Added
+- `load()` now accepts `pathlib.Path` objects in addition to strings
+  - Single paths: `tacoreader.load(Path("data.tacozip"))`
+  - Lists: `tacoreader.load([Path("a.tacozip"), Path("b.tacozip")])`
+  - Mixed: `tacoreader.load([str_path, Path_path])`
+  - `base_path` parameter also accepts `Path` objects
+- New test class `TestLoadPathTypes` with full coverage for Path support
+
+### Fixed
+- `AttributeError: 'PosixPath' object has no attribute 'endswith'` when passing Path objects to `load()`
+
 ## [2.3.3] - 2025-01-03
 
 ### Added

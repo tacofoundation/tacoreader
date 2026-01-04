@@ -1,5 +1,0 @@
-coverage:
-  patch:
-    default:
-      target: auto
-      threshold: 50%  
