@@ -9,7 +9,6 @@ without importing specific backend implementations.
 
 import re
 import uuid
-import warnings
 from contextlib import suppress
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -23,12 +22,15 @@ from tacoreader._constants import (
     STATS_WEIGHT_COLUMN,
 )
 from tacoreader._exceptions import TacoQueryError
+from tacoreader._logging import get_logger
 from tacoreader.schema import PITSchema
 
 if TYPE_CHECKING:
     import numpy as np
 
     from tacoreader.dataframe.base import TacoDataFrame
+
+logger = get_logger(__name__)
 
 
 class TacoDataset(BaseModel):
@@ -307,10 +309,7 @@ class TacoDataset(BaseModel):
 
             return apply_cascade_datetime_filter(self, datetime_range, time_col, level)
 
-    # -------------------------------------------------------------------------
     # Statistics API
-    # -------------------------------------------------------------------------
-
     def _get_stats_column(self, level: int) -> str:
         """Find which stats column exists in the given level.
 
@@ -353,13 +352,9 @@ class TacoDataset(BaseModel):
                 f"Specify which sample to aggregate: stats_*(band=..., level={level}, id='...')"
             )
 
-        # Level 0: id is ignored (warn user)
+        # Level 0: id is ignored (log for debugging)
         if level == 0 and id is not None:
-            warnings.warn(
-                f"id='{id}' ignored for level=0. Level 0 aggregates all samples.",
-                UserWarning,
-                stacklevel=3,
-            )
+            logger.debug(f"id='{id}' ignored for level=0 (aggregates all samples)")
 
     def _fetch_stats_table(self, level: int, id: str | None, stats_col: str):
         """Fetch PyArrow table with stats data for aggregation."""
@@ -636,10 +631,7 @@ class TacoDataset(BaseModel):
         result = _aggregate_categorical(table, stats_col)
         return self._extract_band(result, band)
 
-    # -------------------------------------------------------------------------
     # Repr
-    # -------------------------------------------------------------------------
-
     def __repr__(self) -> str:
         """Rich text representation of dataset metadata."""
         lines = [f"<TacoDataset '{self.id}'>"]

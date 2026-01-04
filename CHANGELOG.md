@@ -1,3 +1,16 @@
+## [2.4.1] - 2025-01-04
+
+### Fixed
+
+- **concat: VSI paths for remote datasets** - Fixed `internal:gdal_vsi` construction when concatenating remote datasets (HTTP/S3/GCS). Previously used raw URL (`https://...`) instead of VSI path (`/vsicurl/https://...`), causing GDAL to fail reading concatenated remote data. Changed `ds._path` → `ds._root_path` in `concat/_view_builder.py`.
+
+### Changed
+
+- **Replaced warnings with debug logging** - Removed verbose `warnings.warn()` calls throughout the codebase. Column compatibility messages, stats weight warnings, and parameter validation now use `logger.debug()` for cleaner output. Affected modules:
+  - `concat/_columns.py` - column drop/fill messages
+  - `dataframe/_stats.py` - weight column and percentile approximation messages  
+  - `dataset.py` - stats parameter validation messages
+  
 ## [2.4.0] - 2025-01-04
 
 ### Added

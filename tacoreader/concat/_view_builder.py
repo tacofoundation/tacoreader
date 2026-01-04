@@ -104,7 +104,7 @@ class ViewBuilder:
                 self.db.register(table_name, arrow_table)
 
                 # Build SELECT with aligned columns + internal:source_path
-                source_path = ds._path.rstrip("/")
+                source_path = ds._root_path.rstrip("/")
                 current_cols = set(arrow_table.column_names)
 
                 select_parts = self._build_select_parts(target_cols, current_cols)

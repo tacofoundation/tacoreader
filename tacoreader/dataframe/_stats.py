@@ -9,9 +9,15 @@ Core functions for TacoDataset.stats_*() methods:
 - _aggregate_categorical: weighted class probabilities
 """
 
-import warnings
-
 import pyarrow as pa
+
+from tacoreader._constants import (
+    STATS_CONTINUOUS_INDICES,
+    STATS_CONTINUOUS_LENGTH,
+    STATS_WEIGHT_COLUMN,
+)
+from tacoreader._exceptions import TacoQueryError
+from tacoreader._logging import get_logger
 
 try:
     import numpy as np
@@ -20,12 +26,7 @@ try:
 except ImportError:
     HAS_NUMPY = False
 
-from tacoreader._constants import (
-    STATS_CONTINUOUS_INDICES,
-    STATS_CONTINUOUS_LENGTH,
-    STATS_WEIGHT_COLUMN,
-)
-from tacoreader._exceptions import TacoQueryError
+logger = get_logger(__name__)
 
 
 def _require_numpy(func_name: str) -> None:
@@ -46,12 +47,7 @@ def _extract_weights(table: pa.Table, valid_mask: "np.ndarray | None" = None) ->
     _require_numpy("_extract_weights")
 
     if STATS_WEIGHT_COLUMN not in table.schema.names:
-        warnings.warn(
-            f"Column '{STATS_WEIGHT_COLUMN}' not found. Using equal weights. "
-            f"Results may be inaccurate if files have different sizes.",
-            UserWarning,
-            stacklevel=4,
-        )
+        logger.debug(f"Column '{STATS_WEIGHT_COLUMN}' not found, using equal weights")
         n_rows = valid_mask.sum() if valid_mask is not None else table.num_rows
         return np.ones(n_rows, dtype=np.float64)
 
@@ -64,13 +60,10 @@ def _extract_weights(table: pa.Table, valid_mask: "np.ndarray | None" = None) ->
         dtype=np.float64,
     )
 
-    # Warn if any shapes were invalid
-    if any(not s or len(s) < 2 for s in shapes):
-        warnings.warn(
-            f"Some rows have {STATS_WEIGHT_COLUMN} with <2 dimensions. Using weight=1.",
-            UserWarning,
-            stacklevel=4,
-        )
+    # Log if any shapes were invalid
+    invalid_count = sum(1 for s in shapes if not s or len(s) < 2)
+    if invalid_count > 0:
+        logger.debug(f"{invalid_count} rows have {STATS_WEIGHT_COLUMN} with <2 dimensions, using weight=1")
 
     # Apply mask if provided
     if valid_mask is not None:
@@ -165,11 +158,7 @@ def _aggregate_continuous(
 
     # percentiles: simple average (approximation)
     if stat_name in ("p25", "p50", "p75", "p95"):
-        warnings.warn(
-            f"stats_{stat_name}() uses simple averaging, NOT exact. For critical analysis, recompute from raw data.",
-            UserWarning,
-            stacklevel=4,
-        )
+        logger.debug(f"stats_{stat_name}() uses averaging approximation, not exact percentile")
         return values.mean(axis=0).astype(np.float32)
 
     # This line is unreachable due to the idx check above, but kept for safety

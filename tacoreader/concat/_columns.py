@@ -6,7 +6,6 @@ Handles three column modes:
 - strict: Fail if columns differ
 """
 
-import warnings
 from typing import TYPE_CHECKING
 
 from tacoreader._constants import (
@@ -122,10 +121,10 @@ def validate_column_compatibility(datasets: list["TacoDataset"], mode: str = "in
             final_columns[level_key] = common_cols_list
         elif mode == "intersection":
             final_columns[level_key] = common_cols_list
-            _handle_intersection_mode(level_key, column_sets, common_cols_list, all_cols_list)
+            _log_intersection_mode(level_key, common_cols_list, all_cols_list)
         else:  # fill_missing
             final_columns[level_key] = all_cols_list
-            _handle_fill_missing_mode(level_key, column_sets, common_cols_list, all_cols_list)
+            _log_fill_missing_mode(level_key, common_cols_list, all_cols_list)
 
     return final_columns
 
@@ -242,83 +241,23 @@ def _handle_strict_mode(
         raise TacoSchemaError(error_msg)
 
 
-def _handle_intersection_mode(
+def _log_intersection_mode(
     level_key: str,
-    column_sets: list[set[str]],
     common_cols: list[str],
     all_cols: list[str],
 ) -> None:
-    """Warn about dropped columns in intersection mode."""
-    if set(all_cols) == set(common_cols):
-        return
-
-    dropped_set = set(all_cols) - set(common_cols)
-    column_sources = {}
-    for col in dropped_set:
-        sources = []
-        for i, cols in enumerate(column_sets):
-            if col in cols:
-                sources.append(i)
-        column_sources[col] = sources
-
-    details = []
-    for col, sources in sorted(column_sources.items()):
-        if len(sources) < len(column_sets):
-            details.append(f"  - '{col}' (only in dataset(s) {sources})")
-
-    warnings.warn(
-        f"\n"
-        f"concat() dropped {len(dropped_set)} column(s) from {level_key}\n"
-        f"\n"
-        f"Reason: Using column_mode='intersection' (default behavior)\n"
-        f"        Only columns present in ALL datasets are kept.\n"
-        f"\n"
-        f"Dropped columns:\n" + "\n".join(details) + f"\n"
-        f"\n"
-        f"Kept columns ({len(common_cols)}): {sorted(common_cols)}\n"
-        f"\n"
-        f"To keep all columns (fill missing with NULL):\n"
-        f"   concat([ds1, ds2], column_mode='fill_missing')",
-        UserWarning,
-        stacklevel=5,
-    )
+    """Log dropped columns in intersection mode."""
+    dropped = set(all_cols) - set(common_cols)
+    if dropped:
+        logger.debug(f"{level_key}: dropped {len(dropped)} columns {sorted(dropped)}")
 
 
-def _handle_fill_missing_mode(
+def _log_fill_missing_mode(
     level_key: str,
-    column_sets: list[set[str]],
     common_cols: list[str],
     all_cols: list[str],
 ) -> None:
-    """Warn about filled columns in fill_missing mode."""
-    if set(all_cols) == set(common_cols):
-        return
-
-    missing_set = set(all_cols) - set(common_cols)
-    column_gaps = {}
-    for col in missing_set:
-        gaps = []
-        for i, cols in enumerate(column_sets):
-            if col not in cols:
-                gaps.append(i)
-        column_gaps[col] = gaps
-
-    details = []
-    for col, gaps in sorted(column_gaps.items()):
-        details.append(f"  - '{col}' (missing in dataset(s) {gaps}, will fill with NULL)")
-
-    warnings.warn(
-        f"\n"
-        f"concat() filling missing columns in {level_key} with NULL\n"
-        f"\n"
-        f"Reason: Using column_mode='fill_missing'\n"
-        f"        All columns from all datasets are kept.\n"
-        f"\n"
-        f"Columns being filled:\n" + "\n".join(details) + f"\n"
-        f"\n"
-        f"Total columns: {len(all_cols)} (common: {len(common_cols)}, filled: {len(missing_set)})\n"
-        f"\n"
-        f"To avoid NULLs, use column_mode='intersection' (drops columns not in all datasets)",
-        UserWarning,
-        stacklevel=5,
-    )
+    """Log filled columns in fill_missing mode."""
+    filled = set(all_cols) - set(common_cols)
+    if filled:
+        logger.debug(f"{level_key}: filled {len(filled)} columns with NULL {sorted(filled)}")
