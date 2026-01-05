@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.4] - 2025-01-05
+
+### Fixed
+- **TacoCat concat VSI paths**: Fixed incorrect GDAL VSI path construction when concatenating TacoCat datasets. Previously, `_root_path` included `.tacocat/` folder which caused invalid paths like `/vsisubfile/...,/bucket/.tacocat/file.tacozip`. Now uses `_vsi_base_path` which correctly points to parent directory containing `.tacozip` files.
+
+### Changed
+- **Internal**: Renamed `_root_path` to `_vsi_base_path` across all storage backends. Each backend now calculates the correct VSI base path once during `load()`, eliminating redundant transformations in `setup_duckdb_views()`.
+
+### Technical Details
+- `dataset.py`: `_root_path` → `_vsi_base_path`
+- `storage/base.py`: `_finalize_dataset()` parameter renamed
+- `storage/tacocat.py`: Calls `_extract_base_path()` before `_finalize_dataset()`, not inside `setup_duckdb_views()`
+- `concat/_view_builder.py`: Uses `ds._vsi_base_path` for `METADATA_SOURCE_PATH`
+- `concat/_orchestrator.py`: Updated attribute name
+- `loader.py`: Updated attribute name for `base_path` override
+
 ## [2.4.3] - 2025-01-05
 
 ### Added

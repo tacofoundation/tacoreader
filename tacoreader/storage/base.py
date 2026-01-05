@@ -54,9 +54,17 @@ class TacoBackend(ABC):
         self,
         db: duckdb.DuckDBPyConnection,
         level_ids: list[int],
-        root_path: str,
+        vsi_base_path: str,
     ) -> None:
         """Create DuckDB views with internal:gdal_vsi column for GDAL access.
+
+        Args:
+            db: DuckDB connection
+            level_ids: List of level IDs to create views for
+            vsi_base_path: Base path for constructing GDAL VSI paths
+                - ZIP: path to .tacozip file
+                - FOLDER: path to dataset directory  
+                - TacoCat: path to directory containing .tacozip files (NOT .tacocat/)
 
         VSI path format varies by backend:
         - ZIP: /vsisubfile/{offset}_{size},{zip_path}
@@ -122,16 +130,23 @@ class TacoBackend(ABC):
         self,
         db: duckdb.DuckDBPyConnection,
         path: str,
-        root_path: str,
+        vsi_base_path: str,
         collection: dict[str, Any],
         level_ids: list[int],
     ) -> TacoDataset:
         """Common dataset finalization after metadata loading.
 
         Creates views, data alias, schema, and constructs TacoDataset.
+
+        Args:
+            db: DuckDB connection with registered tables
+            path: Original path (for error messages/logging)
+            vsi_base_path: Base path for GDAL VSI construction
+            collection: Parsed COLLECTION.json
+            level_ids: List of available level IDs
         """
         # Create views with internal:gdal_vsi
-        self.setup_duckdb_views(db, level_ids, root_path)
+        self.setup_duckdb_views(db, level_ids, vsi_base_path)
         logger.debug("Created DuckDB views")
 
         # Create data alias for level0
@@ -160,7 +175,7 @@ class TacoBackend(ABC):
             _collection=collection,
             _duckdb=db,
             _view_name=DEFAULT_VIEW_NAME,
-            _root_path=root_path,
+            _vsi_base_path=vsi_base_path,
             # JOIN tracking (for export validation in tacotoolbox)
             _has_level1_joins=False,
             _joined_levels=set(),

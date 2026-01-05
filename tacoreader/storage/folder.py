@@ -153,9 +153,9 @@ class FolderBackend(TacoBackend):
                 f"No metadata files found in {path}/METADATA/\nExpected at least {LEVEL_VIEW_PREFIX}0.parquet"
             )
 
-        # Finalize dataset using common method
-        root_path = to_vsi_root(path)
-        dataset = self._finalize_dataset(db, path, root_path, collection, level_ids)
+        # For FOLDER: vsi_base_path is the dataset directory itself
+        vsi_base_path = to_vsi_root(path)
+        dataset = self._finalize_dataset(db, path, vsi_base_path, collection, level_ids)
 
         total_time = time.time() - t_start
         logger.info(f"Loaded FOLDER in {total_time:.2f}s")
@@ -173,7 +173,7 @@ class FolderBackend(TacoBackend):
         self,
         db: duckdb.DuckDBPyConnection,
         level_ids: list[int],
-        root_path: str,
+        vsi_base_path: str,
     ) -> None:
         """Create DuckDB views with direct filesystem paths.
 
@@ -184,7 +184,7 @@ class FolderBackend(TacoBackend):
         - Level 1+ FOLDER: {root}DATA/{internal:relative_path}__meta__
         """
         # Ensure trailing slash
-        root = root_path if root_path.endswith("/") else root_path + "/"
+        root = vsi_base_path if vsi_base_path.endswith("/") else vsi_base_path + "/"
 
         # Get filter condition
         filter_clause = self._build_view_filter()

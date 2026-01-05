@@ -101,9 +101,9 @@ class ZipBackend(TacoBackend):
         if not level_ids:  # pragma: no cover - defensive
             raise TacoFormatError(f"No metadata levels found in ZIP: {path}")
 
-        # Finalize dataset
-        root_path = to_vsi_root(path)
-        dataset = self._finalize_dataset(db, path, root_path, collection, level_ids)
+        # For ZIP: vsi_base_path is the path to the ZIP file itself
+        vsi_base_path = to_vsi_root(path)
+        dataset = self._finalize_dataset(db, path, vsi_base_path, collection, level_ids)
 
         total_time = time.time() - t_start
         logger.info(f"Loaded ZIP in {total_time:.2f}s")
@@ -141,7 +141,7 @@ class ZipBackend(TacoBackend):
         self,
         db: duckdb.DuckDBPyConnection,
         level_ids: list[int],
-        root_path: str,
+        vsi_base_path: str,
     ) -> None:
         """Create DuckDB views with GDAL VSI paths.
 
@@ -159,7 +159,7 @@ class ZipBackend(TacoBackend):
                 SELECT
                   *,
                   '/vsisubfile/' || "{METADATA_OFFSET}" || '_' ||
-                  "{METADATA_SIZE}" || ',{root_path}' as "{METADATA_GDAL_VSI}"
+                  "{METADATA_SIZE}" || ',{vsi_base_path}' as "{METADATA_GDAL_VSI}"
                 FROM {table_name}
                 WHERE {filter_clause}
             """

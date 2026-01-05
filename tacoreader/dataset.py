@@ -62,7 +62,7 @@ class TacoDataset(BaseModel):
         title, curators, keywords, pit_schema
 
     Private attributes:
-        _path, _format, _collection, _duckdb, _view_name, _root_path,
+        _path, _format, _collection, _duckdb, _view_name, _vsi_base_path,
         _dataframe_backend, _owns_connection, _has_level1_joins, _joined_levels
 
     Examples:
@@ -100,7 +100,7 @@ class TacoDataset(BaseModel):
     _collection: dict[str, Any] = PrivateAttr()
     _duckdb: Any = PrivateAttr(default=None)
     _view_name: str = PrivateAttr(default=DEFAULT_VIEW_NAME)
-    _root_path: str = PrivateAttr(default="")
+    _vsi_base_path: str = PrivateAttr(default="")
     _dataframe_backend: str = PrivateAttr(default="pyarrow")
     _owns_connection: bool = PrivateAttr(default=True)
 
@@ -228,7 +228,7 @@ class TacoDataset(BaseModel):
             _collection=self._collection,
             _duckdb=self._duckdb,
             _view_name=new_view_name,
-            _root_path=self._root_path,
+            _vsi_base_path=self._vsi_base_path,
             _dataframe_backend=self._dataframe_backend,
             _owns_connection=False,  # Child datasets don't own connection
             _has_level1_joins=final_has_joins,

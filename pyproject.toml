@@ -1,6 +1,6 @@
 [project]
 name = "tacoreader"
-version = "2.4.3"
+version = "2.4.4"
 description = "Query engine for AI-ready datasets."
 readme = "README.md"
 license = "MIT"

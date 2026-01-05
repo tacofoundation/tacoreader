@@ -194,9 +194,12 @@ class TacoCatBackend(TacoBackend):
         # Load COLLECTION.json
         collection = self.read_collection(path)
 
-        # Finalize dataset
+        # For TacoCat: vsi_base_path is the PARENT directory (where .tacozip files are)
+        # NOT the .tacocat folder itself
         root_path = to_vsi_root(path)
-        dataset = self._finalize_dataset(db, path, root_path, collection, level_ids)
+        vsi_base_path = self._extract_base_path(root_path)
+        
+        dataset = self._finalize_dataset(db, path, vsi_base_path, collection, level_ids)
 
         total_time = time.time() - t_start
         logger.info(f"Loaded TacoCat in {total_time:.2f}s")
@@ -311,14 +314,14 @@ class TacoCatBackend(TacoBackend):
         self,
         db: duckdb.DuckDBPyConnection,
         level_ids: list[int],
-        root_path: str,
+        vsi_base_path: str,
     ) -> None:
         """Create DuckDB views with GDAL VSI paths for TacoCat format.
 
-        Path format: /vsisubfile/{offset}_{size},{base_path}{source_file}
+        Path format: /vsisubfile/{offset}_{size},{vsi_base_path}{source_file}
 
-        Allows samples to point back to their specific origin .tacozip file
-        using the internal:source_file column.
+        Note: vsi_base_path is already the parent directory (where .tacozip files are),
+        NOT the .tacocat folder. The _extract_base_path transformation happens in load().
 
         Example VSI path:
             /vsisubfile/2048_6000,/vsis3/bucket/data/part0001.tacozip
@@ -326,9 +329,8 @@ class TacoCatBackend(TacoBackend):
         Args:
             db: DuckDB connection
             level_ids: List of level IDs to create views for
-            root_path: VSI root path (used to extract base directory)
+            vsi_base_path: Base path to directory containing .tacozip files
         """
-        base_path = self._extract_base_path(root_path)
         filter_clause = self._build_view_filter()
 
         for level_id in level_ids:
@@ -339,7 +341,7 @@ class TacoCatBackend(TacoBackend):
                 CREATE VIEW {view_name} AS
                 SELECT *,
                   '/vsisubfile/' || "{METADATA_OFFSET}" || '_' ||
-                  "{METADATA_SIZE}" || ',{base_path}' || "{METADATA_SOURCE_FILE}"
+                  "{METADATA_SIZE}" || ',{vsi_base_path}' || "{METADATA_SOURCE_FILE}"
                   as "{METADATA_GDAL_VSI}"
                 FROM {table_name}
                 WHERE {filter_clause}

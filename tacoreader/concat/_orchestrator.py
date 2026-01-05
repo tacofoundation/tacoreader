@@ -117,7 +117,7 @@ def concat(datasets: list["TacoDataset"], column_mode: str = "intersection") -> 
         _collection=datasets[0]._collection,
         _duckdb=db,
         _view_name=DEFAULT_VIEW_NAME,
-        _root_path=datasets[0]._root_path,
+        _vsi_base_path=datasets[0]._vsi_base_path,
         _dataframe_backend=backend,
     )
 

@@ -103,7 +103,11 @@ def load(
         dataset = backend_obj.load(resolved_path, cache=cache)
         dataset._dataframe_backend = backend
 
+        # Calculate new vsi_base_path from user-provided base_path
         base_vsi = to_vsi_root(base_path)
+        if not base_vsi.endswith("/"):
+            base_vsi += "/"
+        
         max_depth = dataset.pit_schema.max_depth()
 
         # Drop existing views
@@ -111,13 +115,13 @@ def load(
         for i in range(max_depth + 1):
             dataset._duckdb.execute(f"DROP VIEW IF EXISTS {LEVEL_VIEW_PREFIX}{i}")
 
-        # Recreate views with new base_path using backend method
+        # Recreate views with new vsi_base_path using backend method
         level_ids = list(range(max_depth + 1))
         backend_obj.setup_duckdb_views(dataset._duckdb, level_ids, base_vsi)
 
         # Recreate 'data' view
         dataset._duckdb.execute(f"CREATE VIEW {DEFAULT_VIEW_NAME} AS SELECT * FROM {LEVEL_VIEW_PREFIX}0")
-        dataset._root_path = base_vsi
+        dataset._vsi_base_path = base_vsi
 
         return dataset
 
