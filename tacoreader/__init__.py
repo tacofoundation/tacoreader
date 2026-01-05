@@ -135,32 +135,29 @@ def verbose(level=True):
 
 
 def clear_cache():
-    """Clear all metadata caches (headers, COLLECTION.json).
+    """Clear all caches (memory + disk).
 
-    Cached metadata includes:
-    - ZIP headers (256 bytes)
-    - COLLECTION.json files (~10-50 KB)
-    - TacoCat COLLECTION.json
+    Clears:
+    - In-memory LRU caches (ZIP headers, COLLECTION.json)
+    - Disk cache for remote TacoCat datasets
 
     Use this when remote files have changed and you want to force
     re-download on next load().
 
-    Note: This does NOT clear any data caches (Parquet tables, rasters).
-    Only small metadata files are cached.
-
     Examples:
         >>> import tacoreader
         >>>
-        >>> # Load dataset (caches metadata)
-        >>> ds1 = tacoreader.load("s3://bucket/data.tacozip")
+        >>> # Load remote TacoCat (caches to disk)
+        >>> ds1 = tacoreader.load("https://.../.tacocat")
         >>>
-        >>> # Load again - uses cache (fast!)
-        >>> ds2 = tacoreader.load("s3://bucket/data.tacozip")
+        >>> # Load again - uses disk cache (fast!)
+        >>> ds2 = tacoreader.load("https://.../.tacocat")
         >>>
-        >>> # File changed remotely, need fresh data
+        >>> # Remote changed, clear all caches
         >>> tacoreader.clear_cache()
-        >>> ds3 = tacoreader.load("s3://bucket/data.tacozip")  # Re-downloads
+        >>> ds3 = tacoreader.load("https://.../.tacocat")  # Re-downloads
     """
+    # In-memory LRU caches
     from tacoreader.storage.folder import _read_collection_folder_cached
     from tacoreader.storage.tacocat import _read_tacocat_collection_cached
     from tacoreader.storage.zip import _read_taco_header_cached
@@ -168,6 +165,11 @@ def clear_cache():
     _read_taco_header_cached.cache_clear()
     _read_collection_folder_cached.cache_clear()
     _read_tacocat_collection_cached.cache_clear()
+
+    # Disk cache for remote TacoCat
+    from tacoreader._cache import clear_tacocat_cache
+
+    clear_tacocat_cache()
 
 
 __all__ = [

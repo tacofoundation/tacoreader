@@ -1,6 +1,6 @@
 [project]
 name = "tacoreader"
-version = "2.4.0"
+version = "2.4.3"
 description = "Query engine for AI-ready datasets."
 readme = "README.md"
 license = "MIT"
@@ -37,6 +37,7 @@ dependencies = [
     "obstore>=0.8.1",
     "tacozip>=0.11.4",
     "tqdm>=4.67.1",
+    "platformdirs (>=4.5.1,<5.0.0)",
 ]
 
 [project.optional-dependencies]

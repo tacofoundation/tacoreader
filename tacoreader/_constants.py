@@ -319,3 +319,25 @@ Priority order for auto-detecting time columns.
 When time_col='auto', search columns in this order.
 Always use time_start (not middle/end) for temporal filtering.
 """
+
+# Cache Configuration
+CACHE_DIR_NAME = "tacoreader"
+"""Root cache directory name under user's cache folder."""
+
+CACHE_TACOCAT_SUBDIR = "tacocat"
+"""Subdirectory for TacoCat cached datasets."""
+
+CACHE_ENV_VAR = "TACOREADER_CACHE_DIR"
+"""Environment variable to override default cache location."""
+
+CACHE_META_FILENAME = ".meta.json"
+"""Metadata file storing cache validation info (etag, size, timestamp)."""
+
+CACHE_HASH_LENGTH = 16
+"""Length of URL hash for cache directory names. 16 hex chars = 64 bits."""
+
+CACHE_DEFAULT_EXPIRY_DAYS = 0
+"""Default cache expiry in days. Set to 0 to disable expiry."""
+
+CACHE_VALIDATION_TIMEOUT = 5
+"""Timeout in seconds for HEAD request during cache validation."""

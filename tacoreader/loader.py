@@ -21,6 +21,7 @@ def load(
     path: str | Path | list[str | Path],
     base_path: str | Path | None = None,
     backend: str | None = None,
+    cache: bool = True,
 ) -> TacoDataset:
     """Load TACO dataset(s) with auto format detection.
 
@@ -36,6 +37,9 @@ def load(
         backend: DataFrame backend to use ('pyarrow', 'polars', 'pandas')
             If None, uses global backend set by tacoreader.use()
             Default: 'pyarrow'
+        cache: Use disk cache for remote TacoCat datasets (default True)
+            Cache location: ~/.cache/tacoreader/tacocat/ (platform-specific)
+            Set to False to force fresh download
 
     Returns:
         TacoDataset with lazy SQL interface
@@ -46,6 +50,12 @@ def load(
 
         # Override backend for this load
         reader = tacoreader.load('data.taco', backend='polars')
+
+        # Remote TacoCat with cache (default)
+        ds = tacoreader.load('https://.../.tacocat')
+
+        # Force fresh download (no cache)
+        ds = tacoreader.load('https://.../.tacocat', cache=False)
 
         # Set global backend
         tacoreader.use('polars')
@@ -68,13 +78,13 @@ def load(
             raise TacoQueryError("Cannot load empty list of paths")
 
         if len(path) == 1:
-            return load(path[0], base_path, backend)
+            return load(path[0], base_path, backend, cache)
 
         # Multiple files - load with progress bar and concatenate
         datasets = []
         path_iter = tqdm(path, desc="Loading datasets", unit="ds") if len(path) >= 3 else path
         for p in path_iter:
-            datasets.append(load(p, base_path, backend))
+            datasets.append(load(p, base_path, backend, cache))
 
         from tacoreader.concat import concat
 
@@ -90,7 +100,7 @@ def load(
     # TacoCat with base_path override: rebuild views with new base
     if format_type == "tacocat" and base_path is not None:
         backend_obj = create_backend("tacocat")
-        dataset = backend_obj.load(resolved_path)
+        dataset = backend_obj.load(resolved_path, cache=cache)
         dataset._dataframe_backend = backend
 
         base_vsi = to_vsi_root(base_path)
@@ -112,11 +122,9 @@ def load(
         return dataset
 
     # Standard loading with resolved path
-    backend_obj = create_backend(format_type)
-
-    # Load dataset and set backend
     if format_type == "tacocat":
-        dataset = backend_obj.load(resolved_path)
+        backend_obj = create_backend("tacocat")
+        dataset = backend_obj.load(resolved_path, cache=cache)
         dataset._dataframe_backend = backend
         return dataset
     else:

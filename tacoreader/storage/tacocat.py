@@ -21,6 +21,12 @@ import duckdb
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from tacoreader._cache import (
+    get_remote_metadata,
+    is_cache_valid,
+    load_from_cache,
+    save_to_cache,
+)
 from tacoreader._constants import (
     COLLECTION_JSON,
     LEVEL_TABLE_SUFFIX,
@@ -126,7 +132,7 @@ class TacoCatBackend(TacoBackend):
     def format_name(self) -> str:
         return "tacocat"
 
-    def load(self, path: str) -> TacoDataset:
+    def load(self, path: str, cache: bool = True) -> TacoDataset:
         """Load TacoCat dataset (.tacocat folder).
 
         Strategy:
@@ -139,6 +145,7 @@ class TacoCatBackend(TacoBackend):
 
         Args:
             path: Path to .tacocat folder (local or remote)
+            cache: Use disk cache for remote datasets (default True)
 
         Returns:
             Fully loaded TacoDataset instance
@@ -152,7 +159,10 @@ class TacoCatBackend(TacoBackend):
 
         # Parallel fetch all level files
         t_fetch = time.time()
-        levels_bytes = self._fetch_all_levels(path)
+        if is_local(path):
+            levels_bytes = self._fetch_all_levels(path)
+        else:
+            levels_bytes = self._fetch_remote_with_cache(path, cache)
         fetch_time = time.time() - t_fetch
 
         total_mb = sum(len(b) for b in levels_bytes.values()) / (1024 * 1024)
@@ -192,6 +202,56 @@ class TacoCatBackend(TacoBackend):
         logger.info(f"Loaded TacoCat in {total_time:.2f}s")
 
         return dataset
+
+    def _fetch_remote_with_cache(self, path: str, cache: bool) -> dict[int, bytes]:  # pragma: no cover
+        """Fetch remote TacoCat with optional disk cache.
+
+        Args:
+            path: Remote path to .tacocat folder
+            cache: Whether to use disk cache
+
+        Returns:
+            Dict of {level_id: parquet_bytes}
+        """
+        if not cache:
+            return self._fetch_all_levels(path)
+
+        # Get remote metadata (HEAD request for ETag/size)
+        remote_meta = get_remote_metadata(path)
+        remote_etag = remote_meta.get("etag") if remote_meta else None
+        remote_size = remote_meta.get("size") if remote_meta else None
+
+        # Check cache validity
+        if is_cache_valid(path, remote_etag, remote_size):
+            cached = load_from_cache(path)
+            if cached:
+                logger.info(f"Using cached TacoCat: {path}")
+                return self._cached_files_to_levels(cached)
+
+        # Cache miss or invalid - download fresh
+        logger.debug(f"Cache miss, downloading: {path}")
+        levels_bytes = self._fetch_all_levels(path)
+
+        # Save to cache
+        files_to_cache = {f"level{k}.parquet": v for k, v in levels_bytes.items()}
+        try:
+            collection_bytes = download_bytes(path, COLLECTION_JSON)
+            files_to_cache[COLLECTION_JSON] = collection_bytes
+        except Exception:
+            pass  # COLLECTION.json optional in cache
+
+        save_to_cache(path, files_to_cache, remote_etag, remote_size)
+
+        return levels_bytes
+
+    def _cached_files_to_levels(self, cached: dict[str, bytes]) -> dict[int, bytes]:  # pragma: no cover
+        """Convert cache dict {filename: bytes} to {level_id: bytes}."""
+        levels = {}
+        for filename, data in cached.items():
+            if filename.startswith("level") and filename.endswith(".parquet"):
+                level_id = int(filename[5:-8])  # "level0.parquet" -> 0
+                levels[level_id] = data
+        return levels
 
     def _fetch_all_levels(self, base_path: str) -> dict[int, bytes]:
         """Fetch all level*.parquet files in parallel using ThreadPoolExecutor.

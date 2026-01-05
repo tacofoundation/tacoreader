@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.3] - 2025-01-05
+
+### Added
+
+- **Disk cache for remote TacoCat datasets**: Remote `.tacocat` metadata is now cached locally for faster subsequent loads. Cache uses ETag validation to detect remote changes.
+  - Cache location: `~/.cache/tacoreader/tacocat/` (Linux), `~/Library/Caches/tacoreader/tacocat/` (macOS), `%LOCALAPPDATA%\tacoreader\Cache\tacocat\` (Windows)
+  - Override with `TACOREADER_CACHE_DIR` environment variable
+  - Disable per-load with `tacoreader.load(url, cache=False)`
+
+- New `_cache.py` module with cache management functions:
+  - `get_cache_dir()` / `get_tacocat_cache_dir()` - platform-specific cache paths
+  - `load_from_cache()` / `save_to_cache()` - cache I/O
+  - `is_cache_valid()` - ETag/size validation
+  - `clear_tacocat_cache()` - clear disk cache
+  - `get_cache_stats()` - cache statistics
+
+### Changed
+
+- `tacoreader.load()` now accepts `cache: bool = True` parameter for TacoCat datasets
+- `tacoreader.clear_cache()` now clears both in-memory LRU caches and disk cache
+
+### Dependencies
+
+- Added `platformdirs>=3.0` for cross-platform cache directory resolution
+
 ## [2.4.2] - 2025-01-04
 
 ### Added
