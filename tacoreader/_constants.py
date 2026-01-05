@@ -341,3 +341,48 @@ CACHE_DEFAULT_EXPIRY_DAYS = 0
 
 CACHE_VALIDATION_TIMEOUT = 5
 """Timeout in seconds for HEAD request during cache validation."""
+
+# Navigation Columns (for .sql() column selection)
+# These columns are required for hierarchical navigation and concat operations
+NAVIGATION_COLUMNS_ZIP = frozenset({
+    COLUMN_ID,
+    COLUMN_TYPE,
+    METADATA_CURRENT_ID,
+    METADATA_OFFSET,
+    METADATA_SIZE,
+})
+"""Columns required for ZIP format navigation."""
+
+NAVIGATION_COLUMNS_FOLDER = frozenset({
+    COLUMN_ID,
+    COLUMN_TYPE,
+    METADATA_CURRENT_ID,
+})
+"""Columns required for FOLDER format navigation."""
+
+NAVIGATION_COLUMNS_TACOCAT = frozenset({
+    COLUMN_ID,
+    COLUMN_TYPE,
+    METADATA_CURRENT_ID,
+    METADATA_OFFSET,
+    METADATA_SIZE,
+    METADATA_SOURCE_FILE,
+})
+"""Columns required for TacoCat format navigation."""
+
+NAVIGATION_COLUMNS_BY_FORMAT = {
+    "zip": NAVIGATION_COLUMNS_ZIP,
+    "folder": NAVIGATION_COLUMNS_FOLDER,
+    "tacocat": NAVIGATION_COLUMNS_TACOCAT,
+}
+"""Mapping of format type to required navigation columns."""
+
+NAVIGATION_COLUMN_DESCRIPTIONS = {
+    COLUMN_ID: "Unique sample identifier",
+    COLUMN_TYPE: "Sample type (FILE or FOLDER)",
+    METADATA_CURRENT_ID: "Row position (int64) for parent-child JOIN relationships",
+    METADATA_OFFSET: "Byte offset in archive file",
+    METADATA_SIZE: "Byte size of sample data",
+    METADATA_SOURCE_FILE: "Source ZIP filename within TacoCat",
+}
+"""Human-readable descriptions for navigation columns."""

@@ -172,6 +172,47 @@ class TacoDataset(BaseModel):
         """Complete COLLECTION.json content with all metadata."""
         return self._collection.copy()
 
+    def navigation_columns(self, describe: bool = False) -> list[str] | dict[str, str]:
+        """Get columns required for navigation and concat operations.
+
+        When using .sql() with specific column selection (not SELECT *),
+        include these columns to preserve .read() navigation and concat()
+        compatibility.
+
+        Args:
+            describe: If True, return dict with column descriptions.
+                      If False, return list of column names (default).
+
+        Returns:
+            list[str]: Column names if describe=False
+            dict[str, str]: {column: description} if describe=True
+
+        Example:
+            >>> ds = tacoreader.load("data.tacozip")
+            >>> ds.navigation_columns()
+            ['id', 'type', 'internal:current_id', 'internal:offset', 'internal:size']
+
+            >>> # Use with .sql() for specific column selection
+            >>> user_cols = ['satellite', 'cloud_cover', 'date']
+            >>> all_cols = user_cols + ds.navigation_columns()
+            >>> filtered = ds.sql(f"SELECT {', '.join(all_cols)} FROM data WHERE cloud_cover < 10")
+
+            >>> # View descriptions
+            >>> ds.navigation_columns(describe=True)
+            {'id': 'Unique sample identifier', 'type': 'Sample type (FILE or FOLDER)', ...}
+        """
+        from tacoreader._constants import (
+            NAVIGATION_COLUMNS_BY_FORMAT,
+            NAVIGATION_COLUMN_DESCRIPTIONS,
+        )
+
+        columns = NAVIGATION_COLUMNS_BY_FORMAT.get(self._format, frozenset())
+
+        if describe:
+            return {col: NAVIGATION_COLUMN_DESCRIPTIONS.get(col, "") for col in sorted(columns)}
+
+        return sorted(columns)
+
     def sql(self, query: str) -> "TacoDataset":
         """Execute SQL query and return new TacoDataset with lazy view.
 

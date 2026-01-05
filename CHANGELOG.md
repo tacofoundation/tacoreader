@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.5] - 2025-01-05
+
+### Added
+
+- `TacoDataset.navigation_columns(describe=False)` method to retrieve columns required for `.read()` navigation and `concat()` operations.
+- RSUT compliance validation in `concat()` rejects datasets with level1+ JOINs that break Structural Homogeneity.
+
+### Changed
+
+- `concat/_validation.py` now validates RSUT compliance before concatenation.
+
 ## [2.4.4] - 2025-01-05
 
 ### Fixed
