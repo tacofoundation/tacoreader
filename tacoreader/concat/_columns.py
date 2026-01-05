@@ -156,8 +156,10 @@ def _collect_level_columns(datasets: list["TacoDataset"], all_levels: set[str]) 
                     # Level1+: Read from raw table
                     # .sql() on level0 doesn't affect level1+ column selection
                     # Tables have actual columns (offset, size) needed for VSI construction
-                    arrow_table = ds._duckdb.execute(f"SELECT * FROM {level_key}{LEVEL_TABLE_SUFFIX}").fetch_arrow_table()
-                
+                    arrow_table = ds._duckdb.execute(
+                        f"SELECT * FROM {level_key}{LEVEL_TABLE_SUFFIX}"
+                    ).fetch_arrow_table()
+
                 level_columns[level_key].append(set(arrow_table.column_names))
 
     return level_columns
@@ -191,7 +193,7 @@ def _validate_critical_columns(
     format_type: str,
 ) -> None:
     """Validate that critical columns are present in all datasets.
-    
+
     This catches cases where .sql() removed columns needed for navigation.
     """
     critical_cols = _get_critical_columns(format_type, level_key)

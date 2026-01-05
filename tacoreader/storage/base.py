@@ -63,7 +63,7 @@ class TacoBackend(ABC):
             level_ids: List of level IDs to create views for
             vsi_base_path: Base path for constructing GDAL VSI paths
                 - ZIP: path to .tacozip file
-                - FOLDER: path to dataset directory  
+                - FOLDER: path to dataset directory
                 - TacoCat: path to directory containing .tacozip files (NOT .tacocat/)
 
         VSI path format varies by backend:
@@ -82,7 +82,7 @@ class TacoBackend(ABC):
         pass  # pragma: no cover
 
     @abstractmethod
-    def load(self, path: str) -> TacoDataset:
+    def load(self, path: str, cache: bool = True) -> TacoDataset:
         """Load dataset from path.
 
         Each backend implements format-specific loading:
@@ -92,6 +92,8 @@ class TacoBackend(ABC):
 
         Args:
             path: Dataset path (local filesystem or cloud URL)
+            cache: Use disk cache for remote datasets (default True)
+                Only applicable for TacoCat backend; ignored by others.
 
         Returns:
             Fully loaded TacoDataset instance

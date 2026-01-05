@@ -87,11 +87,15 @@ class FolderBackend(TacoBackend):
     def format_name(self) -> str:
         return "folder"
 
-    def load(self, path: str) -> TacoDataset:
+    def load(self, path: str, cache: bool = True) -> TacoDataset:
         """Load FOLDER dataset.
 
         Local: lazy access from disk
         Remote: downloads all metadata to memory
+
+        Args:
+            path: Path to FOLDER dataset (local or remote)
+            cache: Ignored for FOLDER backend (included for interface compatibility)
         """
         t_start = time.time()
         logger.debug(f"Loading FOLDER from {path}")

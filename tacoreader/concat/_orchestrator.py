@@ -10,7 +10,6 @@ Coordinates the 4-phase concat process:
 from typing import TYPE_CHECKING
 
 import duckdb
-from tqdm import tqdm
 
 from tacoreader._constants import DEFAULT_VIEW_NAME, LEVEL_VIEW_PREFIX
 from tacoreader._exceptions import TacoQueryError

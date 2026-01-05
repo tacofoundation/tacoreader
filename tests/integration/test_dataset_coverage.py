@@ -102,9 +102,10 @@ class TestStatsWithLevel:
         ds.close()
 
     def test_level0_ignores_id(self, zip_flat):
+        """id parameter is ignored at level 0 (logged as debug)."""
         ds = tacoreader.load(str(zip_flat))
-        with pytest.warns(UserWarning, match="ignored for level=0"):
-            result = ds.stats_mean(band=0, level=0, id="sample_0")
+        # id is ignored at level=0, just verify it doesn't error
+        result = ds.stats_mean(band=0, level=0, id="sample_0")
         assert result is not None
         ds.close()
 

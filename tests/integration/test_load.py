@@ -1,4 +1,3 @@
-# tests/integration/test_load.py
 """Integration tests for loading TACO datasets."""
 
 import pytest
@@ -67,8 +66,9 @@ class TestLoadTacoCat:
         assert ds._format == "tacocat"
 
     def test_has_source_file(self, ds_tacocat):
-        """TacoCat data has internal:source_file column."""
-        tdf = ds_tacocat.data
+        """TacoCat data has internal:source_file column (hidden from .data)."""
+        # Use .data_raw since .data filters internal:* columns
+        tdf = ds_tacocat.data_raw
         assert "internal:source_file" in tdf.columns
 
 

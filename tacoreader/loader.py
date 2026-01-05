@@ -107,7 +107,7 @@ def load(
         base_vsi = to_vsi_root(base_path)
         if not base_vsi.endswith("/"):
             base_vsi += "/"
-        
+
         max_depth = dataset.pit_schema.max_depth()
 
         # Drop existing views

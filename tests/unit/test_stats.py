@@ -113,24 +113,24 @@ class TestExtractWeights:
         assert weights[1] == 90000
 
     def test_weights_missing_column(self):
-        """Missing tensor_shape uses equal weights with warning."""
+        """Missing tensor_shape uses equal weights (logged as debug)."""
         table = pa.table({
             "id": ["A", "B"],
         })
 
-        with pytest.warns(UserWarning, match="stac:tensor_shape.*not found"):
-            weights = _extract_weights(table)
+        # No warning expected, just debug logging
+        weights = _extract_weights(table)
 
         assert np.all(weights == 1)
 
     def test_weights_invalid_shape(self):
-        """1D tensor_shape uses weight=1 with warning."""
+        """1D tensor_shape uses weight=1 (logged as debug)."""
         table = pa.table({
             "stac:tensor_shape": [[100], [1, 200, 200]],
         })
 
-        with pytest.warns(UserWarning, match="<2 dimensions"):
-            weights = _extract_weights(table)
+        # No warning expected, just debug logging
+        weights = _extract_weights(table)
 
         assert weights[0] == 1
         assert weights[1] == 40000
@@ -364,10 +364,10 @@ class TestAggregateStd:
 
 
 class TestAggregateContinuousPercentiles:
-    """Percentile aggregation with warnings."""
+    """Percentile aggregation (uses averaging approximation, logged as debug)."""
 
-    def test_p25_with_warning(self):
-        """p25 shows approximation warning."""
+    def test_p25_returns_value(self):
+        """p25 returns expected value."""
         table = pa.table({
             "geotiff:stats": [
                 [[0.0, 100.0, 50.0, 10.0, 98.0, 40.0, 50.0, 60.0, 80.0]],
@@ -375,14 +375,13 @@ class TestAggregateContinuousPercentiles:
             "stac:tensor_shape": [[1, 100, 100]],
         })
 
-        with pytest.warns(UserWarning, match="simple averaging.*NOT exact"):
-            result = _aggregate_continuous(table, "geotiff:stats", "p25")
+        result = _aggregate_continuous(table, "geotiff:stats", "p25")
 
         assert result.shape == (1,)
         assert result[0] == 40.0
 
-    def test_p50_with_warning(self):
-        """p50 shows approximation warning."""
+    def test_p50_returns_value(self):
+        """p50 returns expected value."""
         table = pa.table({
             "geotiff:stats": [
                 [[0.0, 100.0, 50.0, 10.0, 98.0, 40.0, 50.0, 60.0, 80.0]],
@@ -390,8 +389,7 @@ class TestAggregateContinuousPercentiles:
             "stac:tensor_shape": [[1, 100, 100]],
         })
 
-        with pytest.warns(UserWarning, match="simple averaging"):
-            result = _aggregate_continuous(table, "geotiff:stats", "p50")
+        result = _aggregate_continuous(table, "geotiff:stats", "p50")
 
         assert result.shape == (1,)
         assert result[0] == 50.0
@@ -406,8 +404,7 @@ class TestAggregateContinuousPercentiles:
             "stac:tensor_shape": [[1, 100, 100], [1, 100, 100]],
         })
 
-        with pytest.warns(UserWarning):
-            result = _aggregate_continuous(table, "geotiff:stats", "p25")
+        result = _aggregate_continuous(table, "geotiff:stats", "p25")
 
         expected = (30.0 + 40.0) / 2
         assert result.shape == (1,)

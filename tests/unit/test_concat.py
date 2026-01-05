@@ -458,6 +458,7 @@ class TestValidateColumnCompatibility:
 
     @staticmethod
     def _make_mock_dataset(columns: list[str], format_type: str = "zip"):
+        """Create mock dataset with proper DuckDB setup for column validation."""
         import duckdb
         import pyarrow as pa
         from unittest.mock import Mock
@@ -466,36 +467,40 @@ class TestValidateColumnCompatibility:
         arrow_table = pa.table(data)
         
         db = duckdb.connect(":memory:")
-        db.register("level0_table", arrow_table)
+        # Register as 'level0' - this is the view name used by _collect_level_columns
+        db.register("level0", arrow_table)
         
         mock_ds = Mock()
         mock_ds._format = format_type
         mock_ds._duckdb = db
+        mock_ds._view_name = "level0"  # Required for _collect_level_columns
         mock_ds.pit_schema.max_depth.return_value = 0
         
         return mock_ds
 
     def test_intersection_drops_extra_columns(self):
+        """Extra columns are dropped in intersection mode (logged as debug)."""
         from tacoreader.concat._columns import validate_column_compatibility
         
         base_cols = ["id", "type", "internal:parent_id", "internal:offset", "internal:size"]
         ds1 = self._make_mock_dataset(base_cols + ["extra_col"])
         ds2 = self._make_mock_dataset(base_cols)
 
-        with pytest.warns(UserWarning, match="dropped.*column"):
-            result = validate_column_compatibility([ds1, ds2], mode="intersection")
+        # No warning expected, just debug logging
+        result = validate_column_compatibility([ds1, ds2], mode="intersection")
 
         assert "extra_col" not in result["level0"]
 
     def test_fill_missing_keeps_all_columns(self):
+        """Missing columns are filled with NULL in fill_missing mode (logged as debug)."""
         from tacoreader.concat._columns import validate_column_compatibility
         
         base_cols = ["id", "type", "internal:parent_id", "internal:offset", "internal:size"]
         ds1 = self._make_mock_dataset(base_cols + ["extra_col"])
         ds2 = self._make_mock_dataset(base_cols)
 
-        with pytest.warns(UserWarning, match="filling missing columns"):
-            result = validate_column_compatibility([ds1, ds2], mode="fill_missing")
+        # No warning expected, just debug logging
+        result = validate_column_compatibility([ds1, ds2], mode="fill_missing")
 
         assert "extra_col" in result["level0"]
 

@@ -159,8 +159,7 @@ class TacoDataset(BaseModel):
 
         # Remove internal:* columns except gdal_vsi
         columns_to_keep = [
-            col for col in arrow_table.column_names
-            if not col.startswith("internal:") or col == "internal:gdal_vsi"
+            col for col in arrow_table.column_names if not col.startswith("internal:") or col == "internal:gdal_vsi"
         ]
         arrow_table = arrow_table.select(columns_to_keep)
 
@@ -230,8 +229,8 @@ class TacoDataset(BaseModel):
             {'id': 'Unique sample identifier', 'type': 'Sample type (FILE or FOLDER)', ...}
         """
         from tacoreader._constants import (
-            NAVIGATION_COLUMNS_BY_FORMAT,
             NAVIGATION_COLUMN_DESCRIPTIONS,
+            NAVIGATION_COLUMNS_BY_FORMAT,
         )
 
         columns = NAVIGATION_COLUMNS_BY_FORMAT.get(self._format, frozenset())

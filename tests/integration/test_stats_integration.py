@@ -48,14 +48,13 @@ class TestStatsLevel0:
         assert min_val <= max_val
 
     def test_percentiles_level0(self, zip_flat):
-        """Percentiles at level 0."""
+        """Percentiles at level 0 (uses averaging approximation, logged as debug)."""
         ds = tacoreader.load(str(zip_flat))
 
-        with pytest.warns(UserWarning, match="simple averaging"):
-            p25 = ds.stats_p25(band=0)
-            p50 = ds.stats_p50(band=0)
-            p75 = ds.stats_p75(band=0)
-            p95 = ds.stats_p95(band=0)
+        p25 = ds.stats_p25(band=0)
+        p50 = ds.stats_p50(band=0)
+        p75 = ds.stats_p75(band=0)
+        p95 = ds.stats_p95(band=0)
 
         assert p25 <= p50 <= p75 <= p95
 
@@ -63,18 +62,17 @@ class TestStatsLevel0:
         """stats_median is alias for stats_p50."""
         ds = tacoreader.load(str(zip_flat))
 
-        with pytest.warns(UserWarning):
-            median = ds.stats_median(band=0)
-            p50 = ds.stats_p50(band=0)
+        median = ds.stats_median(band=0)
+        p50 = ds.stats_p50(band=0)
 
         assert median == p50
 
     def test_id_ignored_at_level0(self, zip_flat):
-        """id parameter is ignored at level 0 with warning."""
+        """id parameter is ignored at level 0 (logged as debug)."""
         ds = tacoreader.load(str(zip_flat))
 
-        with pytest.warns(UserWarning, match="ignored for level=0"):
-            result = ds.stats_mean(band=0, id="ignored")
+        # id is ignored at level=0, just verify it works
+        result = ds.stats_mean(band=0, id="ignored")
 
         assert isinstance(result, np.floating)
 

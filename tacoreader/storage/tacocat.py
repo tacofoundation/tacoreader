@@ -159,10 +159,7 @@ class TacoCatBackend(TacoBackend):
 
         # Parallel fetch all level files
         t_fetch = time.time()
-        if is_local(path):
-            levels_bytes = self._fetch_all_levels(path)
-        else:
-            levels_bytes = self._fetch_remote_with_cache(path, cache)
+        levels_bytes = self._fetch_all_levels(path) if is_local(path) else self._fetch_remote_with_cache(path, cache)
         fetch_time = time.time() - t_fetch
 
         total_mb = sum(len(b) for b in levels_bytes.values()) / (1024 * 1024)
@@ -198,7 +195,7 @@ class TacoCatBackend(TacoBackend):
         # NOT the .tacocat folder itself
         root_path = to_vsi_root(path)
         vsi_base_path = self._extract_base_path(root_path)
-        
+
         dataset = self._finalize_dataset(db, path, vsi_base_path, collection, level_ids)
 
         total_time = time.time() - t_start
@@ -240,8 +237,8 @@ class TacoCatBackend(TacoBackend):
         try:
             collection_bytes = download_bytes(path, COLLECTION_JSON)
             files_to_cache[COLLECTION_JSON] = collection_bytes
-        except Exception:
-            pass  # COLLECTION.json optional in cache
+        except Exception as e:
+            logger.debug(f"COLLECTION.json not cached: {e}")
 
         save_to_cache(path, files_to_cache, remote_etag, remote_size)
 

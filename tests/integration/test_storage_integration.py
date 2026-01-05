@@ -74,7 +74,8 @@ class TestTacoCatBackend:
 
     def test_source_file_column_present(self, tacocat_deep):
         ds = tacoreader.load(str(tacocat_deep))
-        assert "internal:source_file" in ds.data.columns
+        # Use .data_raw since .data filters internal:* columns
+        assert "internal:source_file" in ds.data_raw.columns
 
 
 class TestBackendConsistency:

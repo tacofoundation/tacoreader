@@ -3,6 +3,7 @@
 Uses strategy pattern to handle format-specific view creation (ZIP/FOLDER/TacoCat).
 """
 
+from collections.abc import Iterable
 from typing import TYPE_CHECKING
 
 import duckdb
@@ -88,14 +89,16 @@ class ViewBuilder:
             union_parts = []
 
             # Progress bar for datasets (only if show_progress and multiple datasets)
-            dataset_iter = enumerate(self.datasets)
+            dataset_iter: Iterable[tuple[int, TacoDataset]]
             if self.show_progress:
                 dataset_iter = tqdm(
-                    list(dataset_iter),
+                    list(enumerate(self.datasets)),
                     desc=f"  {level_key}",
                     leave=False,
                     unit="ds",
                 )
+            else:
+                dataset_iter = enumerate(self.datasets)
 
             for ds_idx, ds in dataset_iter:
                 max_depth = ds.pit_schema.max_depth()

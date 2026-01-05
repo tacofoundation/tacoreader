@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.7] - 2025-01-05
+
+### Added
+
+- **Test coverage for `_cache.py`**: Unit tests for TacoCat remote cache management.
+
+### Fixed
+
+- **Type annotations**: Fixed mypy errors across multiple modules:
+  - `concat/_view_builder.py`: Changed `Iterator` to `Iterable` for tqdm compatibility
+  - `storage/base.py`: Added `cache: bool = True` parameter to abstract `load()` method
+  - `storage/zip.py`: Added `cache` parameter to `load()` signature (ignored internally)
+  - `storage/folder.py`: Added `cache` parameter to `load()` signature (ignored internally)
+
+- **Ruff S110**: Replaced bare `except: pass` with `logger.debug()` in `storage/tacocat.py` for cache error handling
+
+- **Test alignment**: Updated tests to match API changes from previous versions:
+  - `test_dataset_coverage.py`: Removed `pytest.warns()` from `test_level0_ignores_id` (v2.4.1 warnings → debug)
+  - `test_stats_integration.py`: Removed `pytest.warns()` from percentile and id-ignored tests (v2.4.1)
+  - `test_concat.py`: Removed `pytest.warns()` from column compatibility tests (v2.4.1)
+  - `test_stats.py`: Removed `pytest.warns()` from weight extraction and percentile tests (v2.4.1)
+  - `test_load.py`, `test_storage_integration.py`: Changed `.data` → `.data_raw` for `internal:source_file` assertions (v2.4.6 filters `internal:*` from `.data`)
+  - `test_loader.py`: Changed `_root_path` → `_vsi_base_path` (v2.4.4 rename)
+  - `test_concat.py`: Fixed `_make_mock_dataset` to define `_view_name` and register table as `level0` (was causing DuckDB syntax errors)
+
 ## [2.4.6] - 2025-01-05
 
 ### Changed

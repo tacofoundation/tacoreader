@@ -71,11 +71,15 @@ class ZipBackend(TacoBackend):
     def format_name(self) -> str:
         return "zip"
 
-    def load(self, path: str) -> TacoDataset:
+    def load(self, path: str, cache: bool = True) -> TacoDataset:
         """Load ZIP dataset with grouped requests.
 
         Remote optimization: groups files with gaps <4MB to minimize HTTP requests.
         Local: reads individually with mmap.
+
+        Args:
+            path: Path to .tacozip file (local or remote)
+            cache: Ignored for ZIP backend (included for interface compatibility)
         """
         t_start = time.time()
         logger.debug(f"Loading ZIP from {path}")

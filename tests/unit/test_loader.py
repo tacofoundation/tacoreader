@@ -72,7 +72,7 @@ class TestLoadPathTypes:
 
     def test_base_path_accepts_path_object(self, tacocat_deep, tmp_path):
         ds = tacoreader.load(Path(tacocat_deep), base_path=Path(tmp_path))
-        assert str(tmp_path) in ds._root_path
+        assert str(tmp_path) in ds._vsi_base_path
 
 
 class TestLoadBackend:
@@ -119,9 +119,9 @@ class TestLoadTacoCatBasePath:
         # base_path permite que el tacocat apunte a ZIPs en otra ubicación
         ds_default = tacoreader.load(str(tacocat_deep))
         ds_custom = tacoreader.load(str(tacocat_deep), base_path=str(tmp_path))
-
-        assert ds_custom._root_path != ds_default._root_path
-        assert str(tmp_path) in ds_custom._root_path
+        
+        assert ds_custom._vsi_base_path != ds_default._vsi_base_path
+        assert str(tmp_path) in ds_custom._vsi_base_path
 
 
 class TestLoadLegacy:

@@ -60,8 +60,7 @@ def _validate_rsut_compliance(datasets: list["TacoDataset"]) -> None:
         raise TacoSchemaError(
             "Cannot concat: Some datasets are not RSUT compliant.\n"
             "\n"
-            "The following datasets have queries involving level1+ tables:\n"
-            + "\n".join(details) + "\n"
+            "The following datasets have queries involving level1+ tables:\n" + "\n".join(details) + "\n"
             "\n"
             "RSUT Invariant 3 (Structural Homogeneity) requires all level0 FOLDERs\n"
             "to have identical children. Queries on level1+ break this invariant.\n"
@@ -117,6 +116,7 @@ def _validate_formats(datasets: list["TacoDataset"]) -> None:
         "All datasets must use the same format (zip/folder/tacocat).\n"
         "Mixing formats breaks GDAL VSI path construction and navigation."
     )
+
 
 def _validate_schemas(datasets: list["TacoDataset"]) -> None:
     """Ensure all datasets have compatible PIT schemas."""

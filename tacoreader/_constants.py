@@ -344,30 +344,36 @@ CACHE_VALIDATION_TIMEOUT = 5
 
 # Navigation Columns (for .sql() column selection)
 # These columns are required for hierarchical navigation and concat operations
-NAVIGATION_COLUMNS_ZIP = frozenset({
-    COLUMN_ID,
-    COLUMN_TYPE,
-    METADATA_CURRENT_ID,
-    METADATA_OFFSET,
-    METADATA_SIZE,
-})
+NAVIGATION_COLUMNS_ZIP = frozenset(
+    {
+        COLUMN_ID,
+        COLUMN_TYPE,
+        METADATA_CURRENT_ID,
+        METADATA_OFFSET,
+        METADATA_SIZE,
+    }
+)
 """Columns required for ZIP format navigation."""
 
-NAVIGATION_COLUMNS_FOLDER = frozenset({
-    COLUMN_ID,
-    COLUMN_TYPE,
-    METADATA_CURRENT_ID,
-})
+NAVIGATION_COLUMNS_FOLDER = frozenset(
+    {
+        COLUMN_ID,
+        COLUMN_TYPE,
+        METADATA_CURRENT_ID,
+    }
+)
 """Columns required for FOLDER format navigation."""
 
-NAVIGATION_COLUMNS_TACOCAT = frozenset({
-    COLUMN_ID,
-    COLUMN_TYPE,
-    METADATA_CURRENT_ID,
-    METADATA_OFFSET,
-    METADATA_SIZE,
-    METADATA_SOURCE_FILE,
-})
+NAVIGATION_COLUMNS_TACOCAT = frozenset(
+    {
+        COLUMN_ID,
+        COLUMN_TYPE,
+        METADATA_CURRENT_ID,
+        METADATA_OFFSET,
+        METADATA_SIZE,
+        METADATA_SOURCE_FILE,
+    }
+)
 """Columns required for TacoCat format navigation."""
 
 NAVIGATION_COLUMNS_BY_FORMAT = {
