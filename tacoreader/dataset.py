@@ -143,12 +143,40 @@ class TacoDataset(BaseModel):
 
     @property
     def data(self) -> "TacoDataFrame":
-        """Materialize current view to TacoDataFrame.
+        """Materialize current view to TacoDataFrame (clean output).
 
         Executes DuckDB query, loads data into memory.
-        This is where lazy evaluation ends.
+        Removes internal:* columns except internal:gdal_vsi for clean output.
+
+        Use .data_raw if you need all internal columns for debugging.
 
         Uses backend factory to create appropriate TacoDataFrame instance.
+        """
+        from tacoreader.dataframe import create_dataframe
+
+        # DuckDB always returns PyArrow Table
+        arrow_table = self._duckdb.execute(f"SELECT * FROM {self._view_name}").fetch_arrow_table()
+
+        # Remove internal:* columns except gdal_vsi
+        columns_to_keep = [
+            col for col in arrow_table.column_names
+            if not col.startswith("internal:") or col == "internal:gdal_vsi"
+        ]
+        arrow_table = arrow_table.select(columns_to_keep)
+
+        # Factory creates backend-specific TacoDataFrame
+        return create_dataframe(
+            backend=self._dataframe_backend,
+            arrow_table=arrow_table,
+            format_type=self._format,
+        )
+
+    @property
+    def data_raw(self) -> "TacoDataFrame":
+        """Materialize current view to TacoDataFrame (all columns).
+
+        Like .data but keeps all internal:* columns for debugging
+        and advanced use cases.
         """
         from tacoreader.dataframe import create_dataframe
 
