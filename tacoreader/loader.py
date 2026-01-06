@@ -8,13 +8,10 @@ from pathlib import Path
 
 from tqdm import tqdm
 
-from tacoreader._constants import DEFAULT_VIEW_NAME, LEVEL_VIEW_PREFIX
 from tacoreader._exceptions import TacoQueryError
-from tacoreader._format import detect_and_resolve_format
 from tacoreader._legacy import is_legacy_format, raise_legacy_error
-from tacoreader._vsi import to_vsi_root
+from tacoreader._path import TacoPath
 from tacoreader.dataset import TacoDataset
-from tacoreader.storage import create_backend, load_dataset
 
 
 def load(
@@ -30,45 +27,30 @@ def load(
 
     Args:
         path: Single path or list of paths to load
-            Formats: .tacozip (ZIP), directory (FOLDER), __TACOCAT__
+            Formats: .tacozip (ZIP), directory (FOLDER), .tacocat
             Examples: "data.tacozip", ["part1.tacozip", "part2.tacozip"]
         base_path: Override base path for TacoCat ZIP files (TacoCat only)
-            Use when __TACOCAT__ and .tacozip files are in different locations
+            Use when .tacocat and .tacozip files are in different locations
         backend: DataFrame backend to use ('pyarrow', 'polars', 'pandas')
             If None, uses global backend set by tacoreader.use()
             Default: 'pyarrow'
         cache: Use disk cache for remote TacoCat datasets (default True)
-            Cache location: ~/.cache/tacoreader/tacocat/ (platform-specific)
-            Set to False to force fresh download
 
     Returns:
         TacoDataset with lazy SQL interface
 
     Examples:
-        # Use default backend (pyarrow)
         reader = tacoreader.load('data.taco')
-
-        # Override backend for this load
         reader = tacoreader.load('data.taco', backend='polars')
-
-        # Remote TacoCat with cache (default)
         ds = tacoreader.load('https://.../.tacocat')
-
-        # Force fresh download (no cache)
         ds = tacoreader.load('https://.../.tacocat', cache=False)
-
-        # Set global backend
-        tacoreader.use('polars')
-        reader = tacoreader.load('data.taco')  # Uses polars
     """
-    # Resolve backend: use specified or fall back to global
     from tacoreader import _DATAFRAME_BACKEND
 
     backend = backend or _DATAFRAME_BACKEND
 
-    # Normalize paths to strings
+    # Normalize to strings
     path = [str(p) for p in path] if isinstance(path, list) else str(path)
-
     if base_path is not None:
         base_path = str(base_path)
 
@@ -80,7 +62,6 @@ def load(
         if len(path) == 1:
             return load(path[0], base_path, backend, cache)
 
-        # Multiple files - load with progress bar and concatenate
         datasets = []
         path_iter = tqdm(path, desc="Loading datasets", unit="ds") if len(path) >= 3 else path
         for p in path_iter:
@@ -90,48 +71,13 @@ def load(
 
         return concat(datasets)
 
-    # Check for legacy format (fail fast with helpful message)
+    # Check for legacy format
     if is_legacy_format(path):
         raise_legacy_error(path)
 
-    # Detect and resolve format (handles TacoCat fallback)
-    format_type, resolved_path = detect_and_resolve_format(path)
+    # Load dataset
+    tp = TacoPath(path, base_path)
+    dataset = tp.load(cache=cache)
+    dataset._dataframe_backend = backend
 
-    # TacoCat with base_path override: rebuild views with new base
-    if format_type == "tacocat" and base_path is not None:
-        backend_obj = create_backend("tacocat")
-        dataset = backend_obj.load(resolved_path, cache=cache)
-        dataset._dataframe_backend = backend
-
-        # Calculate new vsi_base_path from user-provided base_path
-        base_vsi = to_vsi_root(base_path)
-        if not base_vsi.endswith("/"):
-            base_vsi += "/"
-
-        max_depth = dataset.pit_schema.max_depth()
-
-        # Drop existing views
-        dataset._duckdb.execute(f"DROP VIEW IF EXISTS {DEFAULT_VIEW_NAME}")
-        for i in range(max_depth + 1):
-            dataset._duckdb.execute(f"DROP VIEW IF EXISTS {LEVEL_VIEW_PREFIX}{i}")
-
-        # Recreate views with new vsi_base_path using backend method
-        level_ids = list(range(max_depth + 1))
-        backend_obj.setup_duckdb_views(dataset._duckdb, level_ids, base_vsi)
-
-        # Recreate 'data' view
-        dataset._duckdb.execute(f"CREATE VIEW {DEFAULT_VIEW_NAME} AS SELECT * FROM {LEVEL_VIEW_PREFIX}0")
-        dataset._vsi_base_path = base_vsi
-
-        return dataset
-
-    # Standard loading with resolved path
-    if format_type == "tacocat":
-        backend_obj = create_backend("tacocat")
-        dataset = backend_obj.load(resolved_path, cache=cache)
-        dataset._dataframe_backend = backend
-        return dataset
-    else:
-        dataset = load_dataset(resolved_path, format_type)
-        dataset._dataframe_backend = backend
-        return dataset
+    return dataset
