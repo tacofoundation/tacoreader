@@ -6,7 +6,7 @@ Requires pandas package: pip install pandas
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from tacoreader._constants import (
     DATAFRAME_DEFAULT_HEAD_ROWS,
@@ -60,11 +60,35 @@ class TacoDataFramePandas(TacoDataFrame):
     """
 
     @classmethod
-    def from_arrow(cls, arrow_table: pa.Table, format_type: str) -> TacoDataFramePandas:
-        """Convert PyArrow Table to Pandas. Called by factory when backend='pandas'."""
+    def from_arrow(
+        cls,
+        arrow_table: pa.Table,
+        format_type: str,
+        duckdb: Any = None,
+        filtered_level_views: dict[int, str] | None = None,
+        current_level: int = 0,
+    ) -> TacoDataFramePandas:
+        """Convert PyArrow Table to Pandas. Called by factory when backend='pandas'.
+
+        Args:
+            arrow_table: PyArrow Table from DuckDB query
+            format_type: "zip", "folder", or "tacocat"
+            duckdb: DuckDB connection for filtered view queries (optional)
+            filtered_level_views: Dict mapping level -> filtered view name (optional)
+            current_level: Current hierarchy level for navigation (default 0)
+
+        Returns:
+            TacoDataFramePandas instance with cascade navigation support
+        """
         _require_pandas()
         pandas_df = arrow_table.to_pandas()
-        return cls(pandas_df, format_type)
+        return cls(
+            data=pandas_df,
+            format_type=format_type,
+            duckdb=duckdb,
+            filtered_level_views=filtered_level_views,
+            current_level=current_level,
+        )
 
     def __len__(self) -> int:
         """Number of rows."""
@@ -101,7 +125,13 @@ class TacoDataFramePandas(TacoDataFrame):
 
         # Wrap DataFrames, return Series/scalars as-is
         if isinstance(result, pd.DataFrame):
-            return TacoDataFramePandas(result, self._format_type)
+            return TacoDataFramePandas(
+                data=result,
+                format_type=self._format_type,
+                duckdb=self._duckdb,
+                filtered_level_views=self._filtered_level_views,
+                current_level=self._current_level,
+            )
 
         return result
 
@@ -165,12 +195,24 @@ class TacoDataFramePandas(TacoDataFrame):
     def query(self, expr: str, **kwargs) -> TacoDataFramePandas:
         """Filter with Pandas query string. Returns new TacoDataFramePandas."""
         filtered_df = self._data.query(expr, **kwargs)
-        return TacoDataFramePandas(filtered_df, self._format_type)
+        return TacoDataFramePandas(
+            data=filtered_df,
+            format_type=self._format_type,
+            duckdb=self._duckdb,
+            filtered_level_views=self._filtered_level_views,
+            current_level=self._current_level,
+        )
 
     def sort_values(self, by, ascending=True, **kwargs) -> TacoDataFramePandas:
         """Sort by column(s). Returns new TacoDataFramePandas."""
         sorted_df = self._data.sort_values(by=by, ascending=ascending, **kwargs)
-        return TacoDataFramePandas(sorted_df, self._format_type)
+        return TacoDataFramePandas(
+            data=sorted_df,
+            format_type=self._format_type,
+            duckdb=self._duckdb,
+            filtered_level_views=self._filtered_level_views,
+            current_level=self._current_level,
+        )
 
     def assign(self, **kwargs) -> TacoDataFramePandas:
         """Add/replace columns immutably. Returns new TacoDataFramePandas.
@@ -185,7 +227,13 @@ class TacoDataFramePandas(TacoDataFrame):
                 )
 
         new_data = self._data.assign(**kwargs)
-        return TacoDataFramePandas(new_data, self._format_type)
+        return TacoDataFramePandas(
+            data=new_data,
+            format_type=self._format_type,
+            duckdb=self._duckdb,
+            filtered_level_views=self._filtered_level_views,
+            current_level=self._current_level,
+        )
 
     def groupby(self, by, **kwargs):
         """Group by column(s). Returns Pandas GroupBy (NOT TacoDataFrame).

@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, PrivateAttr
 from tacoreader._constants import (
     DEFAULT_VIEW_NAME,
     LEVEL_VIEW_PREFIX,
+    NAVIGATION_COLUMNS_BY_FORMAT,
     SQL_JOIN_PATTERN,
     STATS_SUPPORTED_COLUMNS,
     STATS_WEIGHT_COLUMN,
@@ -63,7 +64,8 @@ class TacoDataset(BaseModel):
 
     Private attributes:
         _path, _format, _collection, _duckdb, _view_name, _vsi_base_path,
-        _dataframe_backend, _owns_connection, _has_level1_joins, _joined_levels
+        _dataframe_backend, _owns_connection, __joined_levels,
+        _rsut_compliant, _filtered_level_views, _extent_modified
 
     Examples:
         ds = load("data.tacozip")
@@ -79,6 +81,9 @@ class TacoDataset(BaseModel):
         # Statistics
         mean_band2 = ds.stats_mean(band=2)
         std_bands = ds.stats_std(band=[0, 1, 2])
+
+        # RSUT compliance check
+        ds.is_rsut()  # True if structurally homogeneous
     """
 
     # Public metadata (STAC-like)
@@ -94,21 +99,111 @@ class TacoDataset(BaseModel):
     keywords: list[str] | None = None
     pit_schema: PITSchema
 
-    # Private attributes
+    # Original path to dataset (local or cloud URL). Used for path reconstruction.
     _path: str = PrivateAttr()
+
+    # Storage format. Determines VSI path construction and navigation behavior.
     _format: Literal["zip", "folder", "tacocat"] = PrivateAttr()
+
+    # Complete parsed COLLECTION.json. Contains field_schema, pit_schema, extent, STAC metadata.
     _collection: dict[str, Any] = PrivateAttr()
+
+    # In-memory DuckDB connection with metadata tables (level0_table, level1_table, ...)
+    # and views (level0, level1, ..., data). Views include internal:gdal_vsi column.
     _duckdb: Any = PrivateAttr(default=None)
+
+    # Current view name for SQL queries. Starts as "data", changes to "view_<uuid>" after .sql() calls.
+    # Enables query chaining: ds.sql(...).sql(...) creates nested temp views.
     _view_name: str = PrivateAttr(default=DEFAULT_VIEW_NAME)
+
+    # Base path for GDAL VSI construction. Format-specific:
+    # - ZIP: path to .tacozip file :: /vsisubfile/{offset}_{size},{vsi_base_path}
+    # - FOLDER: path to dataset dir :: {vsi_base_path}/DATA/{id}
+    # - TacoCat: path to parent dir :: /vsisubfile/...{vsi_base_path}{source_file}
     _vsi_base_path: str = PrivateAttr(default="")
+
+    # DataFrame backend for .data property. One of: "pyarrow", "polars", "pandas".
     _dataframe_backend: str = PrivateAttr(default="pyarrow")
+
+    # True if this dataset owns the DuckDB connection and should close it on cleanup.
+    # False for child datasets created via .sql() (share parent's connection).
     _owns_connection: bool = PrivateAttr(default=True)
 
-    # JOIN tracking (for export validation in tacotoolbox)
-    _has_level1_joins: bool = PrivateAttr(default=False)
+    # Set of level table names joined in query chain (e.g., {"level1", "level2"}).
+    # Tracks which levels were touched for debugging. Not used for validation.
     _joined_levels: set[str] = PrivateAttr(default_factory=set)
 
+    # True if dataset maintains RSUT Invariant 3 (structural homogeneity).
+    # False after: cascade filters that modify internal structure or sql() that removes
+    # navigation columns. Checked by concat() and export operations.
+    _rsut_compliant: bool = PrivateAttr(default=True)
+
+    # Dict of filtered views by level from cascade filters.
+    # When cascade filtering at level>0, child views are stored here so
+    # TacoDataFrame.read() can query DuckDB instead of physical __meta__.
+    # Example: {1: "filtered_1_abc123", 2: "filtered_2_abc123"}
+    # Empty dict means no cascade filtering applied (use physical __meta__).
+    _filtered_level_views: dict[int, str] = PrivateAttr(default_factory=dict)
+
+    # True if extent from COLLECTION.json no longer reflects current data.
+    # Set to True after any filtering operation (sql, filter_bbox, filter_datetime).
+    # Used by __repr__ to indicate extent is approximate.
+    _extent_modified: bool = PrivateAttr(default=False)
+
     model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    def _check_rsut_compliance(self) -> bool:
+        """Verify Invariant 3: structural homogeneity at level-1.
+
+        Executes query to verify if all level-0 FOLDERs have the same
+        child signature (same ids in same order).
+
+        Returns:
+            True if RSUT compliant, False otherwise
+        """
+        if self.pit_schema.root["type"] == "FILE":
+            return True
+        if self.pit_schema.max_depth() == 0:
+            return True
+
+        query = """
+            WITH parent_children AS (
+                SELECT
+                    l0."internal:current_id" as parent_id,
+                    STRING_AGG(l1.id, '|' ORDER BY l1.id) as children_sig
+                FROM level0 l0
+                LEFT JOIN level1 l1 ON l1."internal:parent_id" = l0."internal:current_id"
+                GROUP BY l0."internal:current_id"
+            )
+            SELECT COUNT(DISTINCT children_sig) <= 1 as is_homogeneous
+            FROM parent_children
+        """
+        try:
+            result = self._duckdb.execute(query).fetchone()
+            return bool(result[0]) if result else True
+        except Exception:
+            return True
+
+    def is_rsut(self) -> bool:
+        """Check if dataset is RSUT compliant.
+
+        Returns:
+            True if dataset maintains structural homogeneity,
+            False if structure is heterogeneous across samples.
+        """
+        return self._rsut_compliant
+
+    def verify_rsut(self) -> bool:
+        """Re-verify RSUT compliance.
+
+        Useful after complex operations where you want to confirm current state.
+
+        Returns:
+            True if RSUT compliant, False otherwise.
+            Also updates internal state.
+        """
+        self._rsut_compliant = self._check_rsut_compliance()
+        return self._rsut_compliant
 
     def close(self):
         """Close DuckDB connection and cleanup views.
@@ -146,28 +241,48 @@ class TacoDataset(BaseModel):
         """Materialize current view to TacoDataFrame (clean output).
 
         Executes DuckDB query, loads data into memory.
-        Removes internal:* columns except internal:gdal_vsi for clean output.
+        Removes internal:* columns except those needed for navigation.
 
         Use .data_raw if you need all internal columns for debugging.
 
         Uses backend factory to create appropriate TacoDataFrame instance.
+        Passes DuckDB connection and filtered views for cascade navigation.
         """
+        from tacoreader._constants import (
+            METADATA_CURRENT_ID,
+            METADATA_PARENT_ID,
+            METADATA_SOURCE_FILE,
+        )
         from tacoreader.dataframe import create_dataframe
 
         # DuckDB always returns PyArrow Table
         arrow_table = self._duckdb.execute(f"SELECT * FROM {self._view_name}").fetch_arrow_table()
 
-        # Remove internal:* columns except gdal_vsi
+        # Columns always needed for navigation
+        navigation_internals = {"internal:gdal_vsi"}
+
+        # When cascade filters are active, we need additional columns for .read()
+        if self._filtered_level_views:
+            navigation_internals.add(METADATA_CURRENT_ID)  # internal:current_id
+            navigation_internals.add(METADATA_PARENT_ID)  # internal:parent_id
+            if self._format == "tacocat":
+                navigation_internals.add(METADATA_SOURCE_FILE)  # internal:source_file
+
+        # Remove internal:* columns except those needed for navigation
         columns_to_keep = [
-            col for col in arrow_table.column_names if not col.startswith("internal:") or col == "internal:gdal_vsi"
+            col for col in arrow_table.column_names if not col.startswith("internal:") or col in navigation_internals
         ]
         arrow_table = arrow_table.select(columns_to_keep)
 
         # Factory creates backend-specific TacoDataFrame
+        # Pass duckdb and filtered_views for cascade filter navigation
         return create_dataframe(
             backend=self._dataframe_backend,
             arrow_table=arrow_table,
             format_type=self._format,
+            duckdb=self._duckdb,
+            filtered_level_views=self._filtered_level_views,
+            current_level=0,
         )
 
     @property
@@ -176,6 +291,8 @@ class TacoDataset(BaseModel):
 
         Like .data but keeps all internal:* columns for debugging
         and advanced use cases.
+
+        Passes DuckDB connection and filtered views for cascade navigation.
         """
         from tacoreader.dataframe import create_dataframe
 
@@ -183,10 +300,14 @@ class TacoDataset(BaseModel):
         arrow_table = self._duckdb.execute(f"SELECT * FROM {self._view_name}").fetch_arrow_table()
 
         # Factory creates backend-specific TacoDataFrame
+        # Pass duckdb and filtered_views for cascade filter navigation
         return create_dataframe(
             backend=self._dataframe_backend,
             arrow_table=arrow_table,
             format_type=self._format,
+            duckdb=self._duckdb,
+            filtered_level_views=self._filtered_level_views,
+            current_level=0,
         )
 
     @property
@@ -245,6 +366,14 @@ class TacoDataset(BaseModel):
 
         Query NOT executed immediately - creates temp view.
         Always use 'data' as table name, auto-replaced with current view.
+
+        RSUT compliance is evaluated based on:
+        - Missing navigation columns → _rsut_compliant = False
+        - JOINs with level1+ tables → _rsut_compliant = False
+        - Otherwise → inherits from parent
+
+        Note: sql() clears _filtered_level_views since custom SQL may
+        invalidate the cascade filter structure.
         """
         new_view_name = f"view_{uuid.uuid4().hex[:8]}"
 
@@ -259,25 +388,32 @@ class TacoDataset(BaseModel):
         """
         )
 
+        # Evaluate RSUT compliance with DESCRIBE (O(columns), not O(rows))
+        result_cols = {row[0] for row in self._duckdb.execute(f"DESCRIBE {new_view_name}").fetchall()}
+        required = NAVIGATION_COLUMNS_BY_FORMAT.get(self._format, frozenset())
+        missing = required - result_cols
+
+        # Detect JOINs with level1+ tables (case insensitive)
+        matches = re.findall(SQL_JOIN_PATTERN, query, re.IGNORECASE)
+        has_new_joins = len(matches) > 0
+
+        # Evaluate RSUT compliance - NO ERROR, just evaluate
+        if missing:
+            new_rsut_compliant = False
+            logger.debug(f"Missing navigation columns {sorted(missing)}. Result is not RSUT compliant.")
+        elif has_new_joins:
+            new_rsut_compliant = False
+            logger.debug(f"Query references {matches}. Result is not RSUT compliant.")
+        else:
+            new_rsut_compliant = self._rsut_compliant
+
         # Count rows for schema update
         new_n = self._duckdb.execute(f"SELECT COUNT(*) FROM {new_view_name}").fetchone()[0]
 
         new_schema = self.pit_schema.with_n(new_n)
 
-        # Detect JOINs with level1+ tables (case insensitive)
-        matches = re.findall(SQL_JOIN_PATTERN, query, re.IGNORECASE)
-
-        # Track if this query introduces level1+ JOINs
-        has_new_joins = len(matches) > 0
-        new_joined_levels = set(matches) if has_new_joins else set()
-
-        # Inherit tracking from parent dataset
-        inherited_has_joins = self._has_level1_joins
-        inherited_joined_levels = self._joined_levels.copy()
-
-        # Merge with current query's JOINs
-        final_has_joins = inherited_has_joins or has_new_joins
-        final_joined_levels = inherited_joined_levels.union(new_joined_levels)
+        # Track joined levels for debugging
+        final_joined_levels = self._joined_levels.union(set(matches))
 
         return TacoDataset.model_construct(
             id=self.id,
@@ -299,8 +435,10 @@ class TacoDataset(BaseModel):
             _vsi_base_path=self._vsi_base_path,
             _dataframe_backend=self._dataframe_backend,
             _owns_connection=False,  # Child datasets don't own connection
-            _has_level1_joins=final_has_joins,
             _joined_levels=final_joined_levels,
+            _rsut_compliant=new_rsut_compliant,
+            _filtered_level_views={},  # Clear: custom SQL invalidates cascade structure
+            _extent_modified=True,  # Any filter invalidates extent
         )
 
     def filter_bbox(
@@ -709,24 +847,27 @@ class TacoDataset(BaseModel):
         lines.append(f"├── Description: {desc_short}")
         lines.append(f"├── Tasks: {', '.join(self.tasks)}")
 
-        # Spatial extent (always defined by auto_calculate_extent)
-        spatial = self.extent["spatial"]
-        lines.append(
-            f"├── Spatial Extent: [{spatial[0]:.2f}°, {spatial[1]:.2f}°, {spatial[2]:.2f}°, {spatial[3]:.2f}°]"
-        )
+        # Spatial extent (only if defined)
+        spatial = self.extent.get("spatial")
+        if spatial:
+            extent_str = f"[{spatial[0]:.2f}°, {spatial[1]:.2f}°, {spatial[2]:.2f}°, {spatial[3]:.2f}°]"
+            if self._extent_modified:
+                extent_str += " (filtered)"
+            lines.append(f"├── Spatial Extent: {extent_str}")
 
-        # Temporal extent (can be None for atemporal datasets)
-        if not self.extent.get("temporal"):
-            lines.append("├── Temporal Extent: Not defined (atemporal dataset)")
-        else:
-            temporal = self.extent["temporal"]
-            # Format dates nicely (remove time if it's midnight)
+        # Temporal extent (only if defined)
+        temporal = self.extent.get("temporal")
+        if temporal:
             start_str = self._format_temporal_string(temporal[0])
             end_str = self._format_temporal_string(temporal[1])
-            lines.append(f"├── Temporal Extent: {start_str} → {end_str}")
+            extent_str = f"{start_str} → {end_str}"
+            if self._extent_modified:
+                extent_str += " (filtered)"
+            lines.append(f"├── Temporal Extent: {extent_str}")
 
         lines.append("│")
-        lines.append(f"└── Level 0: {self.pit_schema.root['n']} rows")
+        rsut_status = "True" if self._rsut_compliant else "False"
+        lines.append(f"└── Level 0: {self.pit_schema.root['n']} rows (RSUT: {rsut_status})")
 
         return "\n".join(lines)
 

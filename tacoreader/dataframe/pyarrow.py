@@ -5,6 +5,8 @@ Default backend, no extra dependencies. Wraps PyArrow Table with TACO navigation
 
 from __future__ import annotations
 
+from typing import Any
+
 import pyarrow as pa
 import pyarrow.compute as pc
 
@@ -30,9 +32,33 @@ class TacoDataFrameArrow(TacoDataFrame):
     """
 
     @classmethod
-    def from_arrow(cls, arrow_table: pa.Table, format_type: str) -> TacoDataFrameArrow:
-        """Create from PyArrow Table (no-op, already correct type)."""
-        return cls(arrow_table, format_type)
+    def from_arrow(
+        cls,
+        arrow_table: pa.Table,
+        format_type: str,
+        duckdb: Any = None,
+        filtered_level_views: dict[int, str] | None = None,
+        current_level: int = 0,
+    ) -> TacoDataFrameArrow:
+        """Create from PyArrow Table.
+
+        Args:
+            arrow_table: PyArrow Table from DuckDB query
+            format_type: "zip", "folder", or "tacocat"
+            duckdb: DuckDB connection for filtered view queries (optional)
+            filtered_level_views: Dict mapping level -> filtered view name (optional)
+            current_level: Current hierarchy level for navigation (default 0)
+
+        Returns:
+            TacoDataFrameArrow instance with cascade navigation support
+        """
+        return cls(
+            data=arrow_table,
+            format_type=format_type,
+            duckdb=duckdb,
+            filtered_level_views=filtered_level_views,
+            current_level=current_level,
+        )
 
     def __len__(self) -> int:
         return self._data.num_rows

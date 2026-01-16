@@ -36,7 +36,6 @@ from tacoreader._constants import (
     METADATA_SIZE,
     METADATA_SOURCE_FILE,
     TACOCAT_FOLDER_NAME,
-    TACOCAT_MAX_LEVELS,
 )
 from tacoreader._exceptions import TacoFormatError, TacoIOError
 from tacoreader._format import is_local
@@ -47,6 +46,9 @@ from tacoreader.dataset import TacoDataset
 from tacoreader.storage.base import TacoBackend
 
 logger = get_logger(__name__)
+
+TACOCAT_MAX_LEVELS = 6
+"""Maximum number of hierarchy levels in TacoCat (level0-5)."""
 
 
 @lru_cache(maxsize=32)

@@ -6,7 +6,7 @@ Requires polars package: pip install polars
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from tacoreader._constants import (
     DATAFRAME_DEFAULT_HEAD_ROWS,
@@ -59,11 +59,35 @@ class TacoDataFramePolars(TacoDataFrame):
     """
 
     @classmethod
-    def from_arrow(cls, arrow_table: pa.Table, format_type: str) -> TacoDataFramePolars:
-        """Convert PyArrow Table to Polars. Called by factory when backend='polars'."""
+    def from_arrow(
+        cls,
+        arrow_table: pa.Table,
+        format_type: str,
+        duckdb: Any = None,
+        filtered_level_views: dict[int, str] | None = None,
+        current_level: int = 0,
+    ) -> TacoDataFramePolars:
+        """Convert PyArrow Table to Polars. Called by factory when backend='polars'.
+
+        Args:
+            arrow_table: PyArrow Table from DuckDB query
+            format_type: "zip", "folder", or "tacocat"
+            duckdb: DuckDB connection for filtered view queries (optional)
+            filtered_level_views: Dict mapping level -> filtered view name (optional)
+            current_level: Current hierarchy level for navigation (default 0)
+
+        Returns:
+            TacoDataFramePolars instance with cascade navigation support
+        """
         _require_polars()
         polars_df = pl.from_arrow(arrow_table)
-        return cls(polars_df, format_type)
+        return cls(
+            data=polars_df,
+            format_type=format_type,
+            duckdb=duckdb,
+            filtered_level_views=filtered_level_views,
+            current_level=current_level,
+        )
 
     def __len__(self) -> int:
         return len(self._data)
@@ -147,7 +171,13 @@ class TacoDataFramePolars(TacoDataFrame):
     def filter(self, *args, **kwargs) -> TacoDataFramePolars:
         """Filter with Polars expressions. Returns new TacoDataFramePolars."""
         filtered_df = self._data.filter(*args, **kwargs)
-        return TacoDataFramePolars(filtered_df, self._format_type)
+        return TacoDataFramePolars(
+            data=filtered_df,
+            format_type=self._format_type,
+            duckdb=self._duckdb,
+            filtered_level_views=self._filtered_level_views,
+            current_level=self._current_level,
+        )
 
     def select(self, *args, **kwargs) -> TacoDataFramePolars:
         """Select columns with Polars expressions. Returns new TacoDataFramePolars.
@@ -155,22 +185,46 @@ class TacoDataFramePolars(TacoDataFrame):
         Note: Navigation requires id, type, internal:gdal_vsi columns.
         """
         selected_df = self._data.select(*args, **kwargs)
-        return TacoDataFramePolars(selected_df, self._format_type)
+        return TacoDataFramePolars(
+            data=selected_df,
+            format_type=self._format_type,
+            duckdb=self._duckdb,
+            filtered_level_views=self._filtered_level_views,
+            current_level=self._current_level,
+        )
 
     def with_columns(self, *args, **kwargs) -> TacoDataFramePolars:
         """Add/replace columns with Polars expressions. Returns new TacoDataFramePolars."""
         new_data = self._data.with_columns(*args, **kwargs)
-        return TacoDataFramePolars(new_data, self._format_type)
+        return TacoDataFramePolars(
+            data=new_data,
+            format_type=self._format_type,
+            duckdb=self._duckdb,
+            filtered_level_views=self._filtered_level_views,
+            current_level=self._current_level,
+        )
 
     def sort(self, by, *args, **kwargs) -> TacoDataFramePolars:
         """Sort by column(s). Returns new TacoDataFramePolars."""
         sorted_df = self._data.sort(by, *args, **kwargs)
-        return TacoDataFramePolars(sorted_df, self._format_type)
+        return TacoDataFramePolars(
+            data=sorted_df,
+            format_type=self._format_type,
+            duckdb=self._duckdb,
+            filtered_level_views=self._filtered_level_views,
+            current_level=self._current_level,
+        )
 
     def limit(self, n: int) -> TacoDataFramePolars:
         """Limit to first n rows. Returns new TacoDataFramePolars."""
         limited_df = self._data.limit(n)
-        return TacoDataFramePolars(limited_df, self._format_type)
+        return TacoDataFramePolars(
+            data=limited_df,
+            format_type=self._format_type,
+            duckdb=self._duckdb,
+            filtered_level_views=self._filtered_level_views,
+            current_level=self._current_level,
+        )
 
     def group_by(self, *args, **kwargs):
         """Group by column(s). Returns Polars GroupBy (NOT TacoDataFrame).

@@ -7,6 +7,9 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from tacoreader._cache import (
+    CACHE_DIR_NAME,
+    CACHE_ENV_VAR,
+    CACHE_META_FILENAME,
     clear_tacocat_cache,
     get_cache_dir,
     get_cache_stats,
@@ -21,7 +24,6 @@ from tacoreader._cache import (
     url_to_cache_key,
     write_cache_meta,
 )
-from tacoreader._constants import CACHE_DIR_NAME, CACHE_ENV_VAR, CACHE_META_FILENAME
 
 
 class TestGetCacheDir:
@@ -260,7 +262,6 @@ class TestGetRemoteMetadata:
         """Falls back to 'etag' attribute if 'e_tag' not present."""
         monkeypatch.setenv(CACHE_ENV_VAR, str(tmp_path))
 
-        # Simple class without e_tag, only etag
         class HeadResponse:
             etag = "fallback_etag"
             size = 3000
@@ -372,7 +373,7 @@ class TestInvalidateCache:
     def test_noop_when_not_exists(self, tmp_path, monkeypatch):
         """Does nothing when cache doesn't exist."""
         monkeypatch.setenv(CACHE_ENV_VAR, str(tmp_path))
-        invalidate_cache("https://nonexistent.com/data")  # Should not raise
+        invalidate_cache("https://nonexistent.com/data")
 
 
 class TestClearTacocatCache:
@@ -394,7 +395,7 @@ class TestClearTacocatCache:
     def test_noop_when_cache_empty(self, tmp_path, monkeypatch):
         """Does nothing when cache directory doesn't exist."""
         monkeypatch.setenv(CACHE_ENV_VAR, str(tmp_path))
-        clear_tacocat_cache()  # Should not raise
+        clear_tacocat_cache()
 
 
 class TestGetCacheStats:
@@ -410,7 +411,6 @@ class TestGetCacheStats:
     def test_with_cached_entries(self, tmp_path, monkeypatch):
         """Returns correct stats with cached data."""
         monkeypatch.setenv(CACHE_ENV_VAR, str(tmp_path))
-        # Use larger files so size_mb > 0 after rounding (need > 5KB for 0.01 MB)
         save_to_cache("https://example.com/a", {"f.txt": b"a" * 100_000}, "e1", 10)
         save_to_cache("https://example.com/b", {"f.txt": b"b" * 200_000}, "e2", 20)
 

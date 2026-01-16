@@ -3,23 +3,30 @@
 Enables filtering level0 samples based on children's metadata at deeper levels.
 Example: Find all dates (level0) with files (level2) in a specific region.
 
+When filtering at level>0, children that don't match are EXCLUDED from results,
+which may break RSUT compliance (structural homogeneity).
+
 Uses internal:current_id column for hierarchical JOINs. The internal:current_id
 column contains 0-indexed row positions enabling correct parent-child
 relationships via internal:parent_id.
 
+The filtered views are stored in _filtered_level_views dict and propagated
+to TacoDataFrame so .read() can query DuckDB instead of physical __meta__ files.
+
 Functions:
     - apply_cascade_bbox_filter: Spatial filtering with hierarchical JOINs
     - apply_cascade_datetime_filter: Temporal filtering with hierarchical JOINs
-    - build_cascade_join_sql: Generate multi-level JOIN queries
     - validate_level_exists: Validate level exists in dataset
     - get_columns_for_level: Get columns for specific level
 """
 
+import uuid
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from tacoreader._constants import (
     LEVEL_VIEW_PREFIX,
+    METADATA_CURRENT_ID,
     METADATA_PARENT_ID,
     METADATA_SOURCE_FILE,
 )
@@ -70,7 +77,6 @@ def get_columns_for_level(dataset: "TacoDataset", level: int) -> list[str]:
     level_view = f"{LEVEL_VIEW_PREFIX}{level}"
     result = dataset._duckdb.execute(f"DESCRIBE {level_view}").fetchall()
 
-    # Result format: [(column_name, column_type, null, key, default, extra), ...]
     return [row[0] for row in result]
 
 
@@ -87,6 +93,13 @@ def apply_cascade_bbox_filter(
 
     Uses hierarchical JOINs to find level0 samples whose descendants
     at the target level intersect with the bounding box.
+
+    Children that don't match the bbox are EXCLUDED from results.
+    This may break RSUT compliance if different parents end up with
+    different surviving children.
+
+    The filtered views are stored in _filtered_level_views so
+    TacoDataFrame.read() can query DuckDB instead of physical __meta__.
 
     Example:
         Find all dates (level0) that have files (level2) in Pacific region:
@@ -107,40 +120,23 @@ def apply_cascade_bbox_filter(
         level: Target level for filtering (must be > 0)
 
     Returns:
-        Filtered TacoDataset with level0 samples
+        Filtered TacoDataset with level0 samples and _filtered_level_views
     """
     validate_level_exists(dataset, level)
 
-    # Get columns for target level
     target_cols = get_columns_for_level(dataset, level)
 
-    # Auto-detect or validate geometry column
     if geometry_col == "auto":
         geometry_col = detect_geometry_column(target_cols)
-    else:
-        if geometry_col not in target_cols:
-            raise TacoQueryError(
-                f"Column '{geometry_col}' not found in level {level}.\nAvailable columns: {target_cols}"
-            )
+    elif geometry_col not in target_cols:
+        raise TacoQueryError(f"Column '{geometry_col}' not found in level {level}.\nAvailable columns: {target_cols}")
 
-    # Build spatial WHERE clause for target level
-    # Prefixed with level alias (e.g., l2."istac:geometry")
     where_clause = (
-        f"ST_Intersects("
-        f'ST_GeomFromWKB(l{level}."{geometry_col}"), '
-        f"ST_MakeEnvelope({float(minx)}, {float(miny)}, {float(maxx)}, {float(maxy)})"
-        f")"
+        f'ST_Intersects(ST_GeomFromWKB("{geometry_col}"), '
+        f"ST_MakeEnvelope({float(minx)}, {float(miny)}, {float(maxx)}, {float(maxy)}))"
     )
 
-    # Build full query with cascading JOINs
-    full_query = build_cascade_join_sql(
-        current_view=dataset._view_name,
-        target_level=level,
-        where_clause=where_clause,
-        format_type=dataset._format,
-    )
-
-    return dataset.sql(full_query)
+    return _apply_cascade_filter(dataset, level, where_clause)
 
 
 def apply_cascade_datetime_filter(
@@ -153,6 +149,13 @@ def apply_cascade_datetime_filter(
 
     Uses hierarchical JOINs to find level0 samples whose descendants
     at the target level fall within the datetime range.
+
+    Children that don't match the datetime range are EXCLUDED from results.
+    This may break RSUT compliance if different parents end up with
+    different surviving children.
+
+    The filtered views are stored in _filtered_level_views so
+    TacoDataFrame.read() can query DuckDB instead of physical __meta__.
 
     Example:
         Find all regions (level0) with files (level2) from April 2023:
@@ -170,119 +173,210 @@ def apply_cascade_datetime_filter(
         level: Target level for filtering (must be > 0)
 
     Returns:
-        Filtered TacoDataset with level0 samples
+        Filtered TacoDataset with level0 samples and _filtered_level_views
     """
     validate_level_exists(dataset, level)
 
-    # Get columns for target level
     target_cols = get_columns_for_level(dataset, level)
 
-    # Auto-detect or validate time column
     if time_col == "auto":
         time_col = detect_time_column(target_cols)
-    else:
-        if time_col not in target_cols:
-            raise TacoQueryError(f"Column '{time_col}' not found in level {level}.\nAvailable columns: {target_cols}")
+    elif time_col not in target_cols:
+        raise TacoQueryError(f"Column '{time_col}' not found in level {level}.\nAvailable columns: {target_cols}")
 
-    # Parse datetime range
     start, end = parse_datetime(datetime_range)
 
-    # Build temporal WHERE clause with TRY_CAST
-    # Prefixed with level alias (e.g., l2."istac:time_start")
-    col_cast = f'TRY_CAST(l{level}."{time_col}" AS DATE)'
+    col_cast = f'TRY_CAST("{time_col}" AS DATE)'
 
     start_dt = datetime.fromtimestamp(start, tz=timezone.utc)
     start_str = start_dt.strftime("%Y-%m-%d")
 
     if end is None:
-        # Point-in-time query
         where_clause = f"({col_cast} = DATE '{start_str}')"
     else:
-        # Range query
         end_dt = datetime.fromtimestamp(end, tz=timezone.utc)
         end_str = end_dt.strftime("%Y-%m-%d")
         where_clause = f"({col_cast} BETWEEN DATE '{start_str}' AND DATE '{end_str}')"
 
-    # Build full query with cascading JOINs
-    full_query = build_cascade_join_sql(
-        current_view=dataset._view_name,
-        target_level=level,
-        where_clause=where_clause,
-        format_type=dataset._format,
-    )
-
-    return dataset.sql(full_query)
+    return _apply_cascade_filter(dataset, level, where_clause)
 
 
-def build_cascade_join_sql(
-    current_view: str,
+def _apply_cascade_filter(
+    dataset: "TacoDataset",
     target_level: int,
     where_clause: str,
-    format_type: str,
-) -> str:
-    """Build SQL with cascading JOINs from level0 to target level.
+) -> "TacoDataset":
+    """Apply filter at target level and propagate upward.
 
-    Creates INNER JOINs: level0 → level1 → level2 → ... → target_level
-    Returns DISTINCT level0 samples that match the WHERE clause at target level.
+    Filters children at target level, then propagates upward keeping only
+    parents that have surviving children. This excludes non-matching children
+    from the result.
 
-    Uses internal:current_id for JOIN relationships:
-        l1."internal:parent_id" = l0."internal:current_id"
-        ^^^^^^^^^^^^^^^^^^^^^^     ^^^^^^^^^^^^^^^^^^^^^^^
-        INT64 (0, 1, 2...)         INT64 (0, 1, 2...)
+    The filtered views dict is propagated to the resulting TacoDataset so
+    TacoDataFrame.read() can query DuckDB instead of physical __meta__ files.
 
-    The internal:current_id column is stored in parquets (TACO v2.1.0+) during
-    dataset creation by tacotoolbox, eliminating need for runtime calculations.
-
-    Format-Specific Behavior:
-        - ZIP: parent_id references parent internal:current_id
-        - FOLDER: parent_id references parent internal:current_id
-        - TacoCat: parent_id + source_file for disambiguation
+    Strategy:
+        1. Filter target level by where_clause → filtered_level{N}
+        2. For each level from target-1 down to 0:
+           - Keep only rows whose children exist in filtered level below
+           - For level0, intersect with dataset._view_name to respect prior filters
+        3. Create new level0 view as the final result
+        4. Check RSUT compliance
+        5. Store all filtered_views in _filtered_level_views
 
     Args:
-        current_view: Name of level0 view (may be temp view from prior query)
-        target_level: Level to filter on (must be > 0)
-        where_clause: SQL WHERE condition for target level
-        format_type: Dataset format ("zip", "folder", or "tacocat")
+        dataset: TacoDataset to filter
+        target_level: Level to apply where_clause
+        where_clause: SQL WHERE condition
 
     Returns:
-        Complete SQL query with JOINs
-
-    Example Generated SQL:
-        SELECT DISTINCT l0.*
-        FROM data l0
-        INNER JOIN level1 l1 ON l1."internal:parent_id" = l0."internal:current_id"
-        INNER JOIN level2 l2 ON l2."internal:parent_id" = l1."internal:current_id"
-        WHERE ST_Within(l2."istac:geometry", ST_MakeEnvelope(...))
+        Filtered TacoDataset with _filtered_level_views for navigation
     """
-    # Build cascading JOINs using internal:current_id
-    joins = []
+    db = dataset._duckdb
+    suffix = uuid.uuid4().hex[:8]
+    is_tacocat = dataset._format == "tacocat"
 
-    # First JOIN: level0 → level1
-    if format_type == "tacocat":
-        # TacoCat: Uses parent_id + source_file for disambiguation
-        joins.append(
-            f"INNER JOIN {LEVEL_VIEW_PREFIX}1 l1 "
-            f'ON l1."{METADATA_PARENT_ID}" = l0."internal:current_id" '
+    # Dict to store all filtered views by level
+    filtered_views: dict[int, str] = {}
+
+    # Step 1: Filter target level
+    target_view = f"{LEVEL_VIEW_PREFIX}{target_level}"
+    filtered_target = f"filtered_{target_level}_{suffix}"
+
+    db.execute(
+        f"""
+        CREATE TEMP VIEW {filtered_target} AS
+        SELECT * FROM {target_view}
+        WHERE {where_clause}
+    """
+    )
+    filtered_views[target_level] = filtered_target
+
+    # Step 2: Propagate upward from target-1 to 0
+    for lvl in range(target_level - 1, -1, -1):
+        child_filtered = filtered_views[lvl + 1]
+        filtered_current = f"filtered_{lvl}_{suffix}"
+
+        # Level 0 uses dataset._view_name to respect prior filters
+        current_view = dataset._view_name if lvl == 0 else f"{LEVEL_VIEW_PREFIX}{lvl}"
+
+        # TacoCat needs source_file in JOIN condition
+        if is_tacocat:
+            join_condition = (
+                f'child."{METADATA_PARENT_ID}" = parent."{METADATA_CURRENT_ID}" '
+                f'AND child."{METADATA_SOURCE_FILE}" = parent."{METADATA_SOURCE_FILE}"'
+            )
+        else:
+            join_condition = f'child."{METADATA_PARENT_ID}" = parent."{METADATA_CURRENT_ID}"'
+
+        db.execute(
+            f"""
+            CREATE TEMP VIEW {filtered_current} AS
+            SELECT DISTINCT parent.*
+            FROM {current_view} parent
+            INNER JOIN {child_filtered} child ON {join_condition}
+        """
+        )
+        filtered_views[lvl] = filtered_current
+
+    # Step 3: Create final view for level0
+    final_view = f"view_{suffix}"
+    db.execute(
+        f"""
+        CREATE TEMP VIEW {final_view} AS
+        SELECT * FROM {filtered_views[0]}
+    """
+    )
+
+    # Count rows and update schema
+    new_n = db.execute(f"SELECT COUNT(*) FROM {final_view}").fetchone()[0]
+    new_schema = dataset.pit_schema.with_n(new_n)
+
+    # Step 4: Check RSUT compliance using filtered views
+    new_rsut_compliant = _check_cascade_rsut(db, filtered_views, is_tacocat)
+
+    # Track joined levels for debugging
+    joined_levels = dataset._joined_levels.copy()
+    for lvl in range(1, target_level + 1):
+        joined_levels.add(f"{LEVEL_VIEW_PREFIX}{lvl}")
+
+    from tacoreader.dataset import TacoDataset as TDS
+
+    return TDS.model_construct(
+        id=dataset.id,
+        version=dataset.version,
+        description=dataset.description,
+        tasks=dataset.tasks,
+        extent=dataset.extent,
+        providers=dataset.providers,
+        licenses=dataset.licenses,
+        title=dataset.title,
+        curators=dataset.curators,
+        keywords=dataset.keywords,
+        pit_schema=new_schema,
+        _path=dataset._path,
+        _format=dataset._format,
+        _collection=dataset._collection,
+        _duckdb=db,
+        _view_name=final_view,
+        _vsi_base_path=dataset._vsi_base_path,
+        _dataframe_backend=dataset._dataframe_backend,
+        _owns_connection=False,
+        _joined_levels=joined_levels,
+        _rsut_compliant=new_rsut_compliant,
+        _filtered_level_views=filtered_views,
+        _extent_modified=True,
+    )
+
+
+def _check_cascade_rsut(
+    db,
+    filtered_views: dict[int, str],
+    is_tacocat: bool,
+) -> bool:
+    """Check if filtered result maintains RSUT (structural homogeneity).
+
+    RSUT Invariant 3: All level0 FOLDERs must have identical child signatures.
+    After cascade filtering, different parents may have different surviving children.
+
+    Args:
+        db: DuckDB connection
+        filtered_views: Dict mapping level -> filtered view name
+        is_tacocat: True if TacoCat format (needs source_file in JOIN)
+
+    Returns:
+        True if all level0 samples have same child signature, False otherwise
+    """
+    if 0 not in filtered_views or 1 not in filtered_views:
+        return True
+
+    level0_view = filtered_views[0]
+    level1_view = filtered_views[1]
+
+    # TacoCat needs source_file in JOIN condition
+    if is_tacocat:
+        join_condition = (
+            f'l1."{METADATA_PARENT_ID}" = l0."{METADATA_CURRENT_ID}" '
             f'AND l1."{METADATA_SOURCE_FILE}" = l0."{METADATA_SOURCE_FILE}"'
         )
     else:
-        # ZIP/FOLDER: Use internal:current_id column
-        joins.append(f'INNER JOIN {LEVEL_VIEW_PREFIX}1 l1 ON l1."{METADATA_PARENT_ID}" = l0."internal:current_id"')
+        join_condition = f'l1."{METADATA_PARENT_ID}" = l0."{METADATA_CURRENT_ID}"'
 
-    # Subsequent JOINs: level1 → level2 → level3 ...
-    # All levelN parquets have internal:current_id
-    for level in range(2, target_level + 1):
-        prev_level = level - 1
-        joins.append(
-            f"INNER JOIN {LEVEL_VIEW_PREFIX}{level} l{level} "
-            f'ON l{level}."{METADATA_PARENT_ID}" = l{prev_level}."internal:current_id"'
+    query = f"""
+        WITH parent_children AS (
+            SELECT
+                l0."{METADATA_CURRENT_ID}" as parent_id,
+                COALESCE(STRING_AGG(l1.id, '|' ORDER BY l1.id), '') as children_sig
+            FROM {level0_view} l0
+            LEFT JOIN {level1_view} l1 ON {join_condition}
+            GROUP BY l0."{METADATA_CURRENT_ID}"
         )
-
-    join_clause = "\n        ".join(joins)
-
-    return f"""
-        SELECT DISTINCT l0.*
-        FROM {current_view} l0
-        {join_clause}
-        WHERE {where_clause}
+        SELECT COUNT(DISTINCT children_sig) = 1 as is_homogeneous
+        FROM parent_children
     """
+
+    try:
+        result = db.execute(query).fetchone()
+        return bool(result[0]) if result else True
+    except Exception:
+        return False

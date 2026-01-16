@@ -24,7 +24,6 @@ from tacoreader._constants import (
     METADATA_GDAL_VSI,
     METADATA_OFFSET,
     METADATA_SIZE,
-    ZIP_MAX_GAP_SIZE,
 )
 from tacoreader._exceptions import TacoFormatError
 from tacoreader._logging import get_logger
@@ -34,6 +33,15 @@ from tacoreader.dataset import TacoDataset
 from tacoreader.storage.base import TacoBackend
 
 logger = get_logger(__name__)
+
+ZIP_MAX_GAP_SIZE = 4 * 1024 * 1024  # 4 MB
+"""
+Maximum gap between files in ZIP before splitting into separate requests.
+
+When downloading multiple files from remote ZIP, files separated by less
+than this amount are fetched in a single HTTP range request to minimize
+request count while avoiding excessive unused data transfer.
+"""
 
 
 @lru_cache(maxsize=64)

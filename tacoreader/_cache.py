@@ -20,16 +20,24 @@ from pathlib import Path
 
 from platformdirs import user_cache_path
 
-from tacoreader._constants import (
-    CACHE_DIR_NAME,
-    CACHE_ENV_VAR,
-    CACHE_HASH_LENGTH,
-    CACHE_META_FILENAME,
-    CACHE_TACOCAT_SUBDIR,
-)
 from tacoreader._logging import get_logger
 
 logger = get_logger(__name__)
+
+CACHE_DIR_NAME = "tacoreader"
+"""Root cache directory name under user's cache folder."""
+
+CACHE_TACOCAT_SUBDIR = "tacocat"
+"""Subdirectory for TacoCat cached datasets."""
+
+CACHE_ENV_VAR = "TACOREADER_CACHE_DIR"
+"""Environment variable to override default cache location."""
+
+CACHE_META_FILENAME = ".meta.json"
+"""Metadata file storing cache validation info (etag, size, timestamp)."""
+
+CACHE_HASH_LENGTH = 16
+"""Length of URL hash for cache directory names. 16 hex chars = 64 bits."""
 
 
 def get_cache_dir() -> Path:

@@ -1,7 +1,7 @@
 """Dataset validation for concatenation.
 
 Validates:
-- RSUT compliance (no level1+ JOINs that break structural homogeneity)
+- RSUT compliance (structural homogeneity required for concat)
 - Backend compatibility (all must use same DataFrame backend)
 - Format compatibility (all must use same storage format)
 - Schema compatibility (all must have compatible PIT structure)
@@ -22,7 +22,7 @@ def validate_datasets(datasets: list["TacoDataset"]) -> None:
     """Run all validations on datasets before concatenation.
 
     Raises:
-        TacoSchemaError: If any dataset is not RSUT compliant (has level1+ JOINs)
+        TacoSchemaError: If any dataset is not RSUT compliant
         TacoBackendError: If backends are incompatible
         TacoSchemaError: If formats or schemas are incompatible
     """
@@ -34,36 +34,41 @@ def validate_datasets(datasets: list["TacoDataset"]) -> None:
 
 
 def _validate_rsut_compliance(datasets: list["TacoDataset"]) -> None:
-    """Ensure no dataset has level1+ JOINs that break RSUT.
+    """Ensure all datasets are RSUT compliant.
 
     RSUT Invariant 3 (Structural Homogeneity): All level0 FOLDERs must be
     structurally equivalent - same children, same IDs, same types.
 
-    Queries involving level1+ (JOINs, filters on children) break this invariant
-    because they can cause different level0 samples to have different effective
-    children, violating structural equivalence.
+    Datasets become non-RSUT compliant when:
+    - Queries involving level1+ JOINs are executed
+    - Cascade filters exclude some children but not others
+    - SQL removes required navigation columns
 
-    Only level0-only queries preserve RSUT compliance.
+    Only RSUT compliant datasets can be concatenated.
     """
     non_compliant = []
 
     for i, ds in enumerate(datasets):
-        if ds._has_level1_joins:
+        if not ds._rsut_compliant:
             non_compliant.append((i, ds._path, ds._joined_levels))
 
     if non_compliant:
         details = []
         for idx, path, levels in non_compliant:
             details.append(f"  Dataset {idx}: {path}")
-            details.append(f"    Joined levels: {sorted(levels)}")
+            if levels:
+                details.append(f"    Joined levels: {sorted(levels)}")
 
         raise TacoSchemaError(
             "Cannot concat: Some datasets are not RSUT compliant.\n"
             "\n"
-            "The following datasets have queries involving level1+ tables:\n" + "\n".join(details) + "\n"
+            "The following datasets have broken structural homogeneity:\n" + "\n".join(details) + "\n"
             "\n"
             "RSUT Invariant 3 (Structural Homogeneity) requires all level0 FOLDERs\n"
-            "to have identical children. Queries on level1+ break this invariant.\n"
+            "to have identical children. Operations that break this:\n"
+            "  - Cascade filters (level>0) that exclude some children\n"
+            "  - SQL queries with JOINs on level1+ tables\n"
+            "  - SQL queries that remove navigation columns\n"
             "\n"
             "Only level0 queries are allowed before concat.\n"
             "Filter by child properties after concat if needed."

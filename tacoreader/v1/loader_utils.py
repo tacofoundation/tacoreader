@@ -29,7 +29,9 @@ def transform_to_gdal_vfs(path) -> str:
             if protocol == "hf://datasets/":
                 parts = path[len(protocol) :].split("/")
                 if len(parts) < 3:
-                    raise ValueError("Hugging Face path must include namespace, dataset, and file.")
+                    raise ValueError(
+                        "Hugging Face path must include namespace, dataset, and file."
+                    )
                 namespace, dataset, file = parts[0], parts[1], "/".join(parts[2:])
                 return f"https://huggingface.co/datasets/{namespace}/{dataset}/resolve/main/{file}"
             return path.replace(protocol, vfs)

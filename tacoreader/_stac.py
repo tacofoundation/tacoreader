@@ -14,15 +14,35 @@ Functions:
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
-from tacoreader._constants import (
-    DEFAULT_VIEW_NAME,
-    STAC_GEOMETRY_COLUMN_PRIORITY,
-    STAC_TIME_COLUMN_PRIORITY,
-)
+from tacoreader._constants import DEFAULT_VIEW_NAME
 from tacoreader._exceptions import TacoQueryError
 
 if TYPE_CHECKING:
     from tacoreader.dataset import TacoDataset
+
+
+STAC_GEOMETRY_COLUMN_PRIORITY = [
+    "istac:geometry",
+    "stac:centroid",
+    "istac:centroid",
+]
+"""
+Priority order for auto-detecting geometry columns.
+
+When geometry_col='auto', search columns in this order.
+First match is used for spatial filtering.
+"""
+
+STAC_TIME_COLUMN_PRIORITY = [
+    "istac:time_start",
+    "stac:time_start",
+]
+"""
+Priority order for auto-detecting time columns.
+
+When time_col='auto', search columns in this order.
+Always use time_start (not middle/end) for temporal filtering.
+"""
 
 
 def apply_simple_bbox_filter(

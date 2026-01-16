@@ -42,7 +42,9 @@ def human2bytes(size_str: str) -> int:
                 return int(value * multiplier)
             except ValueError:
                 raise ValueError(f"Invalid size value in '{size_str}'.")
-    raise ValueError(f"Unsupported unit in '{size_str}'. Supported units are: {', '.join(units.keys())}.")
+    raise ValueError(
+        f"Unsupported unit in '{size_str}'. Supported units are: {', '.join(units.keys())}."
+    )
 
 
 def transform_from_gdal_vfs(vfs_path: str) -> str:
@@ -72,4 +74,6 @@ def transform_from_gdal_vfs(vfs_path: str) -> str:
     if Path(vfs_path).exists():
         return vfs_path
 
-    raise ValueError(f"Unsupported GDAL VFS path: {vfs_path}. Ensure the VFS path corresponds to a known protocol.")
+    raise ValueError(
+        f"Unsupported GDAL VFS path: {vfs_path}. Ensure the VFS path corresponds to a known protocol."
+    )

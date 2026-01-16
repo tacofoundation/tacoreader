@@ -5,7 +5,9 @@ from typing import List, Union
 import fsspec
 
 
-def load_metadata(file: Union[str, Path, List[Path], List[str]], **storage_options) -> dict:
+def load_metadata(
+    file: Union[str, Path, List[Path], List[str]], **storage_options
+) -> dict:
     """Load the metadata of a tortilla or taco file.
 
     Args:

@@ -14,10 +14,29 @@ from tacoreader.dataframe.base import TacoDataFrame
 
 
 class BackendFactory(Protocol):
-    """Protocol for backend factory functions."""
+    """Protocol for backend factory functions.
 
-    def __call__(self, arrow_table: Any, format_type: str) -> Any:
-        """Create TacoDataFrame from PyArrow Table."""
+    Factory functions receive PyArrow Table and optional cascade navigation
+    parameters to create backend-specific TacoDataFrame instances.
+    """
+
+    def __call__(
+        self,
+        arrow_table: Any,
+        format_type: str,
+        duckdb: Any = None,
+        filtered_level_views: dict[int, str] | None = None,
+        current_level: int = 0,
+    ) -> Any:
+        """Create TacoDataFrame from PyArrow Table.
+
+        Args:
+            arrow_table: PyArrow Table from DuckDB query
+            format_type: Storage format ("zip", "folder", "tacocat")
+            duckdb: DuckDB connection for filtered view queries (optional)
+            filtered_level_views: Dict of filtered views by level (optional)
+            current_level: Current hierarchy level (default 0)
+        """
         ...
 
 
@@ -30,7 +49,7 @@ def register_backend(name: DataFrameBackend, factory_fn: BackendFactory) -> None
 
     Args:
         name: Backend name from DataFrameBackend literal
-        factory_fn: Factory function that takes (arrow_table, format_type) -> TacoDataFrame
+        factory_fn: Factory function that takes (arrow_table, format_type, ...) -> TacoDataFrame
 
     Example:
         from .pyarrow import TacoDataFrameArrow
@@ -39,17 +58,31 @@ def register_backend(name: DataFrameBackend, factory_fn: BackendFactory) -> None
     _BACKENDS[name] = factory_fn
 
 
-def create_dataframe(backend: str, arrow_table: Any, format_type: str):
+def create_dataframe(
+    backend: str,
+    arrow_table: Any,
+    format_type: str,
+    duckdb: Any = None,
+    filtered_level_views: dict[int, str] | None = None,
+    current_level: int = 0,
+):
     """Factory function to create TacoDataFrame from PyArrow Table.
 
     This is the main entry point used by TacoDataset.data property
     to convert DuckDB results (PyArrow Tables) into backend-specific
     TacoDataFrame instances.
 
+    When cascade filters have been applied (level>0), the duckdb connection
+    and filtered_level_views are passed so TacoDataFrame.read() can query
+    DuckDB instead of physical __meta__ files.
+
     Args:
         backend: Backend name ("pyarrow", "polars", "pandas")
         arrow_table: PyArrow Table from DuckDB query
         format_type: Storage format ("zip", "folder", "tacocat")
+        duckdb: DuckDB connection for filtered view queries (optional)
+        filtered_level_views: Dict mapping level -> filtered view name (optional)
+        current_level: Current hierarchy level for navigation (default 0)
 
     Returns:
         Backend-specific TacoDataFrame instance
@@ -62,7 +95,14 @@ def create_dataframe(backend: str, arrow_table: Any, format_type: str):
         from tacoreader.dataframe import create_dataframe
 
         arrow_table = self._duckdb.execute(query).fetch_arrow_table()
-        return create_dataframe('pyarrow', arrow_table, self._format)
+        return create_dataframe(
+            backend='pyarrow',
+            arrow_table=arrow_table,
+            format_type=self._format,
+            duckdb=self._duckdb,
+            filtered_level_views=self._filtered_level_views,
+            current_level=0,
+        )
     """
     # Validate backend type first
     if backend not in AVAILABLE_BACKENDS:
@@ -86,7 +126,13 @@ def create_dataframe(backend: str, arrow_table: Any, format_type: str):
         )
 
     factory = _BACKENDS[backend]  # type: ignore[index]
-    return factory(arrow_table, format_type)
+    return factory(
+        arrow_table,
+        format_type,
+        duckdb=duckdb,
+        filtered_level_views=filtered_level_views,
+        current_level=current_level,
+    )
 
 
 def get_available_backends() -> list[DataFrameBackend]:

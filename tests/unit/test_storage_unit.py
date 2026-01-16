@@ -4,12 +4,12 @@ import json
 
 import pytest
 
-from tacoreader._constants import COLUMN_ID, PADDING_PREFIX, ZIP_MAX_GAP_SIZE
+from tacoreader._constants import COLUMN_ID, PADDING_PREFIX
 from tacoreader._exceptions import TacoFormatError
 from tacoreader.storage import create_backend
 from tacoreader.storage.folder import FolderBackend
 from tacoreader.storage.tacocat import TacoCatBackend
-from tacoreader.storage.zip import ZipBackend
+from tacoreader.storage.zip import ZIP_MAX_GAP_SIZE, ZipBackend
 
 
 @pytest.mark.parametrize(
@@ -54,10 +54,7 @@ class TestParseCollectionJson:
 
 
 class TestZipFileGrouping:
-    """
-    ZIP backend groups nearby files into single HTTP requests.
-    Threshold: gap < 4MB AND gap < 50% of useful data.
-    """
+    """ZIP backend groups nearby files into single HTTP requests."""
 
     @pytest.fixture
     def backend(self):
@@ -69,13 +66,11 @@ class TestZipFileGrouping:
         assert backend._should_group(file1, file2) is True
 
     def test_small_gap_large_files_grouped(self, backend):
-        # 2MB gap, 5MB files → 20% ratio
         file1 = (0, 0, 5 * 1024 * 1024)
         file2 = (1, 7 * 1024 * 1024, 5 * 1024 * 1024)
         assert backend._should_group(file1, file2) is True
 
     def test_large_gap_small_files_not_grouped(self, backend):
-        # 3.9MB gap, 1KB files → ~1950% ratio, wastes bandwidth
         file1 = (0, 0, 1024)
         file2 = (1, int(3.9 * 1024 * 1024), 1024)
         assert backend._should_group(file1, file2) is False
@@ -101,7 +96,6 @@ class TestZipFileGrouping:
         assert all(size > 0 for _, _, size in files_in_groups)
 
     def test_distant_files_split_into_separate_groups(self, backend):
-        # Files 100MB apart
         header = [(0, 1000), (100 * 1024 * 1024, 1000)]
         groups = backend._group_files_by_proximity(header)
         assert len(groups) == 2

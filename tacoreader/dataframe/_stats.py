@@ -12,8 +12,6 @@ Core functions for TacoDataset.stats_*() methods:
 import pyarrow as pa
 
 from tacoreader._constants import (
-    STATS_CONTINUOUS_INDICES,
-    STATS_CONTINUOUS_LENGTH,
     STATS_WEIGHT_COLUMN,
 )
 from tacoreader._exceptions import TacoQueryError
@@ -27,6 +25,22 @@ except ImportError:
     HAS_NUMPY = False
 
 logger = get_logger(__name__)
+
+STATS_CONTINUOUS_LENGTH = 9
+"""Expected length for continuous stats: [min, max, mean, std, valid%, p25, p50, p75, p95]."""
+
+STATS_CONTINUOUS_INDICES = {
+    "min": 0,
+    "max": 1,
+    "mean": 2,
+    "std": 3,
+    "valid_pct": 4,
+    "p25": 5,
+    "p50": 6,
+    "p75": 7,
+    "p95": 8,
+}
+"""Index mapping for continuous stats array fields."""
 
 
 def _require_numpy(func_name: str) -> None:

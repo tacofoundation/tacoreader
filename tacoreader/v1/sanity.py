@@ -6,7 +6,9 @@ import pandas as pd
 
 from tacoreader.v1.loader_dataframe import TortillaDataFrame
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
+)
 
 
 def sanity_check(
@@ -35,7 +37,8 @@ def sanity_check(
 
     # Split every 200 entries
     sample_metadata_batches = [
-        sample_metadata.iloc[i : i + batch_size] for i in range(0, len(sample_metadata), batch_size)
+        sample_metadata.iloc[i : i + batch_size]
+        for i in range(0, len(sample_metadata), batch_size)
     ]
 
     failed_ids = []
@@ -87,7 +90,9 @@ def sanity_check_batch(
     else:
         with ProcessPoolExecutor(max_workers=max_workers) as executor:
             tasks = [
-                executor.submit(process_entry, idx, sample_metadata, read_function, super_name)
+                executor.submit(
+                    process_entry, idx, sample_metadata, read_function, super_name
+                )
                 for idx in range(len(sample_metadata))
             ]
             for future in as_completed(tasks):
@@ -106,7 +111,9 @@ def process_entry(idx, sample_metadata, read_function, super_name):
         if isinstance(result, str) or isinstance(result, bytes):
             read_function(result)
         elif isinstance(result, pd.DataFrame):
-            return sanity_check(result, read_function, max_workers=None, super_name=sample_id)
+            return sanity_check(
+                result, read_function, max_workers=None, super_name=sample_id
+            )
         else:
             raise ValueError(f"Unsupported return type for entry {sample_id}.")
     except Exception:

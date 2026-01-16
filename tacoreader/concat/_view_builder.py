@@ -168,7 +168,10 @@ class ViewBuilder:
             return table.slice(0, 0)
 
         # Filter rows where parent_id is in valid parent_ids (both int64)
-        mask = pc.is_in(table.column(METADATA_PARENT_ID), value_set=pa.array(list(parent_ids), type=pa.int64()))
+        mask = pc.is_in(
+            table.column(METADATA_PARENT_ID),
+            value_set=pa.array(list(parent_ids), type=pa.int64()),
+        )
         return table.filter(mask)
 
     def _track_valid_ids(self, ds_idx: int, level_key: str, table: pa.Table) -> None:
@@ -205,14 +208,16 @@ class ViewBuilder:
             if not self._view_exists(level_key):
                 continue
 
-            self.db.execute(f"""
+            self.db.execute(
+                f"""
                 CREATE VIEW {level_key} AS
                 SELECT *,
                   '/vsisubfile/' || "{METADATA_OFFSET}" || '_' ||
                   "{METADATA_SIZE}" || ',' || "{METADATA_SOURCE_PATH}" as "{METADATA_GDAL_VSI}"
                 FROM {level_key}{UNION_VIEW_SUFFIX}
                 WHERE {COLUMN_ID} NOT LIKE '{PADDING_PREFIX}%'
-            """)
+            """
+            )
 
     def _create_folder_views(self) -> None:
         """Create final views for FOLDER format."""
@@ -221,7 +226,8 @@ class ViewBuilder:
                 continue
 
             if level_key == f"{LEVEL_VIEW_PREFIX}0":
-                self.db.execute(f"""
+                self.db.execute(
+                    f"""
                     CREATE VIEW {level_key} AS
                     SELECT *,
                       CASE
@@ -231,9 +237,11 @@ class ViewBuilder:
                       END as "{METADATA_GDAL_VSI}"
                     FROM {level_key}{UNION_VIEW_SUFFIX}
                     WHERE {COLUMN_ID} NOT LIKE '{PADDING_PREFIX}%'
-                """)
+                """
+                )
             else:
-                self.db.execute(f"""
+                self.db.execute(
+                    f"""
                     CREATE VIEW {level_key} AS
                     SELECT *,
                       CASE
@@ -243,7 +251,8 @@ class ViewBuilder:
                       END as "{METADATA_GDAL_VSI}"
                     FROM {level_key}{UNION_VIEW_SUFFIX}
                     WHERE {COLUMN_ID} NOT LIKE '{PADDING_PREFIX}%'
-                """)
+                """
+                )
 
     def _create_tacocat_views(self) -> None:
         """Create final views for TacoCat format."""
@@ -251,14 +260,16 @@ class ViewBuilder:
             if not self._view_exists(level_key):
                 continue
 
-            self.db.execute(f"""
+            self.db.execute(
+                f"""
                 CREATE VIEW {level_key} AS
                 SELECT *,
                   '/vsisubfile/' || "{METADATA_OFFSET}" || '_' ||
                   "{METADATA_SIZE}" || ',' || "{METADATA_SOURCE_PATH}" || '/' || "{METADATA_SOURCE_FILE}" as "{METADATA_GDAL_VSI}"
                 FROM {level_key}{UNION_VIEW_SUFFIX}
                 WHERE {COLUMN_ID} NOT LIKE '{PADDING_PREFIX}%'
-            """)
+            """
+            )
 
     def _view_exists(self, level_key: str) -> bool:
         """Check if union view exists for given level."""

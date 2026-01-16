@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.12] - 2025-01-17
+
+### Fixed
+- **Cascade filter navigation**: `.read()` now respects `_filtered_level_views` instead of reading physical `__meta__` files containing all children
+- **tacobridge export with cascade filters**: Fixed ID collision in `build_local_metadata()` using composite keys `(level_idx, current_id)`
+- **tacobridge validation**: Distinguish safe cascade filters from unsafe manual JOINs in `_joined_levels` check
+
+### Changed
+- Moved cache constants (`CACHE_DIR_NAME`, `CACHE_ENV_VAR`, `CACHE_META_FILENAME`, `CACHE_HASH_LENGTH`) from `_constants.py` to `_cache.py`
+- Moved `ZIP_MAX_GAP_SIZE` from `_constants.py` to `storage/zip.py`
+
+### Added
+- `_filtered_level_views` attribute in `TacoDataset` for cascade filter state
+- `_read_from_filtered_view()` method in `dataframe/base.py`
+
 ## [2.4.8] - 2025-01-06
 
 ### Fixed

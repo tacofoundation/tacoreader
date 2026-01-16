@@ -2,6 +2,12 @@
 
 Each backend (PyArrow, Polars, Pandas) implements this interface
 with their native DataFrame APIs.
+
+Cascade Filter Navigation:
+    When cascade filters are applied (level>0), filtered views are stored
+    in _filtered_level_views. The read() method checks this dict and queries
+    DuckDB instead of reading physical __meta__ files, ensuring only filtered
+    children are returned.
 """
 
 from __future__ import annotations
@@ -22,27 +28,48 @@ class TacoDataFrame(ABC):
     - Factory method (from_arrow classmethod)
 
     Shared across all backends:
-    - read() navigation logic
+    - read() navigation logic (with cascade filter support)
     - _read_meta() parquet reading
+    - _read_from_filtered_view() DuckDB query for filtered children
     - _get_position() key resolution
 
     Statistics:
         Use TacoDataset.stats_*(band=...) for statistics aggregation.
     """
 
-    def __init__(self, data: Any, format_type: str):
+    def __init__(
+        self,
+        data: Any,
+        format_type: str,
+        duckdb: Any = None,
+        filtered_level_views: dict[int, str] | None = None,
+        current_level: int = 0,
+    ):
         """Initialize with backend-specific data structure.
 
         Args:
             data: PyArrow Table, Polars DataFrame, or Pandas DataFrame
             format_type: "zip", "folder", or "tacocat"
+            duckdb: DuckDB connection for filtered view queries (optional)
+            filtered_level_views: Dict mapping level -> filtered view name (optional)
+            current_level: Current hierarchy level for navigation (default 0)
         """
         self._data = data
         self._format_type = format_type
+        self._duckdb = duckdb
+        self._filtered_level_views = filtered_level_views or {}
+        self._current_level = current_level
 
     @classmethod
     @abstractmethod
-    def from_arrow(cls, arrow_table, format_type: str) -> TacoDataFrame:
+    def from_arrow(
+        cls,
+        arrow_table,
+        format_type: str,
+        duckdb: Any = None,
+        filtered_level_views: dict[int, str] | None = None,
+        current_level: int = 0,
+    ) -> TacoDataFrame:
         """Convert PyArrow Table to backend-specific TacoDataFrame.
 
         This is the main entry point for creating TacoDataFrame instances
@@ -51,6 +78,9 @@ class TacoDataFrame(ABC):
         Args:
             arrow_table: PyArrow Table from DuckDB
             format_type: "zip", "folder", or "tacocat"
+            duckdb: DuckDB connection for filtered view queries (optional)
+            filtered_level_views: Dict mapping level -> filtered view name (optional)
+            current_level: Current hierarchy level for navigation (default 0)
 
         Returns:
             Backend-specific TacoDataFrame instance
@@ -146,9 +176,13 @@ class TacoDataFrame(ABC):
         """Navigate to child level by position or ID.
 
         FILE samples: returns GDAL VSI path as string
-        FOLDER samples: reads __meta__ and returns TacoDataFrame with children
+        FOLDER samples:
+          - If filtered views exist for child level -> query DuckDB
+          - Otherwise -> read physical __meta__ file (original behavior)
 
         This method is SHARED - same logic for all backends.
+        The cascade filter fix routes to _read_from_filtered_view() when
+        _filtered_level_views contains the child level.
         """
         position = self._get_position(key)
         row = self._get_row(position)
@@ -156,13 +190,73 @@ class TacoDataFrame(ABC):
         if row["type"] == "FILE":
             return row["internal:gdal_vsi"]
 
+        # Check if we have a filtered view for child level
+        child_level = self._current_level + 1
+        if child_level in self._filtered_level_views and self._duckdb is not None:
+            return self._read_from_filtered_view(row, child_level)
+
+        # Fallback: read physical __meta__ file (original behavior)
         return self._read_meta(row)
 
+    def _read_from_filtered_view(self, row: dict, child_level: int) -> TacoDataFrame:
+        """Read children from DuckDB filtered view instead of physical __meta__.
+
+        This is KEY for the cascade filter. When cascade filtering
+        has created filtered views, we query DuckDB to get only the children
+        that matched the filter, instead of reading the physical __meta__ which
+        contains ALL children.
+
+        Args:
+            row: Parent row dict with internal:current_id (and source_file for tacocat)
+            child_level: Level of children to read
+
+        Returns:
+            TacoDataFrame with filtered children only
+        """
+        from tacoreader._constants import (
+            METADATA_CURRENT_ID,
+            METADATA_PARENT_ID,
+            METADATA_SOURCE_FILE,
+        )
+
+        parent_id = row[METADATA_CURRENT_ID]
+        filtered_view = self._filtered_level_views[child_level]
+
+        # Build query - TacoCat needs source_file in WHERE condition
+        if self._format_type == "tacocat":
+            source_file = row[METADATA_SOURCE_FILE]
+            # Escape single quotes in source_file path
+            source_file_escaped = source_file.replace("'", "''")
+            query = f"""
+                SELECT * FROM {filtered_view}
+                WHERE "{METADATA_PARENT_ID}" = {parent_id}
+                AND "{METADATA_SOURCE_FILE}" = '{source_file_escaped}'
+            """
+        else:
+            query = f"""
+                SELECT * FROM {filtered_view}
+                WHERE "{METADATA_PARENT_ID}" = {parent_id}
+            """
+
+        children_table = self._duckdb.execute(query).fetch_arrow_table()
+
+        # Return new TacoDataFrame with same filtered views for deeper navigation
+        return self.__class__.from_arrow(
+            children_table,
+            self._format_type,
+            duckdb=self._duckdb,
+            filtered_level_views=self._filtered_level_views,
+            current_level=child_level,
+        )
+
     def _read_meta(self, row: dict) -> TacoDataFrame:
-        """Read __meta__ file for FOLDER sample.
+        """Read __meta__ file for FOLDER sample (original behavior).
 
         This method is SHARED but uses backend-specific from_arrow()
         to create the resulting TacoDataFrame.
+
+        Used when no filtered views exist for child level (level=0 filters
+        or no cascade filtering applied).
 
         Handles:
         - /vsisubfile/ paths (ZIP, TacoCat): Read Parquet from offset
@@ -179,7 +273,14 @@ class TacoDataFrame(ABC):
             children_table = self._read_meta_from_folder(vsi_path)
 
         # Convert PyArrow Table to current backend using factory method
-        return self.__class__.from_arrow(children_table, self._format_type)
+        # Propagate duckdb and filtered_views for potential deeper navigation
+        return self.__class__.from_arrow(
+            children_table,
+            self._format_type,
+            duckdb=self._duckdb,
+            filtered_level_views=self._filtered_level_views,
+            current_level=self._current_level + 1,
+        )
 
     def _read_meta_from_archive(self, vsi_path: str):
         """Read __meta__ from ZIP or TacoCat archive.
@@ -248,6 +349,7 @@ class TacoDataFrame(ABC):
 
         Args:
             vsi_path: Direct path to folder (may end with /__meta__)
+                      May contain VSI prefix like /vsicurl/ for remote paths.
 
         Returns:
             PyArrow Table with children + internal:gdal_vsi column
@@ -263,21 +365,26 @@ class TacoDataFrame(ABC):
 
         from tacoreader._format import is_remote
         from tacoreader._remote_io import download_bytes
+        from tacoreader._vsi import strip_vsi_prefix
+
+        # Strip VSI prefix for I/O operations
+        io_path = strip_vsi_prefix(vsi_path)
 
         # Read Parquet from __meta__
-        if is_remote(vsi_path):  # pragma: no cover
-            if vsi_path.endswith("/__meta__"):
-                meta_bytes = download_bytes(vsi_path)
+        if is_remote(io_path):
+            if io_path.endswith("/__meta__"):
+                meta_bytes = download_bytes(io_path)
             else:
-                meta_bytes = download_bytes(vsi_path, "__meta__")
+                meta_bytes = download_bytes(io_path, "__meta__")
 
             children_table = pq.read_table(BytesIO(meta_bytes))
         else:
-            meta_path = vsi_path if vsi_path.endswith("/__meta__") else str(Path(vsi_path) / "__meta__")
+            meta_path = io_path if io_path.endswith("/__meta__") else str(Path(io_path) / "__meta__")
 
             children_table = pq.read_table(meta_path)
 
         # Strip /__meta__ suffix for path construction
+        # Keep original vsi_path for children (GDAL needs /vsicurl/ prefix)
         parent_path = vsi_path
         if parent_path.endswith("/__meta__"):
             parent_path = parent_path[:-9]
